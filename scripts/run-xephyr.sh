@@ -9,29 +9,29 @@ SCREEN_SIZE="1280x720"
 BUILD_MODE="debug"
 SPAWN_CLIENTS=0
 LAYOUT_DEMO=0
+TEST_MODE=0
 XEPHYR_BIN="$(command -v Xephyr || true)"
-
-if [[ -z "${XEPHYR_BIN}" ]]; then
-    echo "Error: Xephyr is not installed on this system." >&2
-    echo "Install it via your package manager (e.g. apt install xserver-xephyr)." >&2
-    exit 1
-fi
 
 usage() {
     echo "Usage: $0 [options]"
     echo ""
     echo "Options:"
-    echo "  --layout-demo      Spawn demo windows (xclock, xcalc, xeyes) to visually test layout"
-    echo "  --release          Run release build of tilo instead of debug"
-    echo "  --screen <WxH>     Set Xephyr screen resolution (default: 1280x720)"
-    echo "  --with-clients     Launch sample X11 apps inside Xephyr"
-    echo "  -h, --help         Show this help message"
+    echo "  --test, --test-layout  Run automated integration tests for implemented layouts (Master/Stack & Floating)"
+    echo "  --layout-demo          Spawn demo windows (xclock, xcalc, xeyes) in Xephyr to visually test layout"
+    echo "  --release              Run release build of tilo instead of debug"
+    echo "  --screen <WxH>         Set Xephyr screen resolution (default: 1280x720)"
+    echo "  --with-clients         Launch sample X11 apps inside Xephyr"
+    echo "  -h, --help             Show this help message"
     exit 0
 }
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --layout-demo|--layout)
+        --test|--test-layout|--test-layouts)
+            TEST_MODE=1
+            shift
+            ;;
+        --layout-demo|--layout|--demo)
             LAYOUT_DEMO=1
             shift
             ;;
@@ -56,6 +56,25 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+# If automated test mode requested, run cargo layout integration tests
+if [[ ${TEST_MODE} -eq 1 ]]; then
+    echo "============================================================"
+    echo " Running Layout Integration Tests in Xephyr"
+    echo " Implemented Layouts: Master/Stack Layout & Floating Layout"
+    echo "============================================================"
+    cd "${ROOT_DIR}"
+    cargo test --test layout --test floating -- --nocapture
+    echo ""
+    echo "==> All implemented layout tests passed successfully!"
+    exit 0
+fi
+
+if [[ -z "${XEPHYR_BIN}" ]]; then
+    echo "Error: Xephyr is not installed on this system." >&2
+    echo "Install it via your package manager (e.g. apt install xserver-xephyr)." >&2
+    exit 1
+fi
 
 # Find available X display
 XEPHYR_DISPLAY=""
@@ -137,10 +156,10 @@ if [[ ${LAYOUT_DEMO} -eq 1 ]]; then
     # Give tilo a moment to initialize and claim WM ownership
     sleep 0.4
 
-    echo "Spawning sample windows to demonstrate tiling layout..."
+    echo "Spawning sample windows to test implemented layouts..."
     # Window 1 (Master)
     if command -v xclock >/dev/null 2>&1; then
-        echo " -> Spawning Window 1: xclock (Master pane)"
+        echo " -> Spawning Window 1: xclock (Master pane: left 55%)"
         DISPLAY="${XEPHYR_DISPLAY}" xclock &
         CLIENT_PIDS+=($!)
         sleep 0.6
@@ -148,7 +167,7 @@ if [[ ${LAYOUT_DEMO} -eq 1 ]]; then
 
     # Window 2 (Stack top)
     if command -v xcalc >/dev/null 2>&1; then
-        echo " -> Spawning Window 2: xcalc (Stack pane)"
+        echo " -> Spawning Window 2: xcalc (Stack pane: top right)"
         DISPLAY="${XEPHYR_DISPLAY}" xcalc &
         CLIENT_PIDS+=($!)
         sleep 0.6
@@ -156,7 +175,7 @@ if [[ ${LAYOUT_DEMO} -eq 1 ]]; then
 
     # Window 3 (Stack bottom)
     if command -v xeyes >/dev/null 2>&1; then
-        echo " -> Spawning Window 3: xeyes (Stack pane)"
+        echo " -> Spawning Window 3: xeyes (Stack pane: bottom right)"
         DISPLAY="${XEPHYR_DISPLAY}" xeyes &
         CLIENT_PIDS+=($!)
         sleep 0.6
@@ -164,8 +183,31 @@ if [[ ${LAYOUT_DEMO} -eq 1 ]]; then
 
     echo ""
     echo "============================================================"
-    echo " Xephyr Tiling Layout active on display ${XEPHYR_DISPLAY}"
-    echo " Layout: Master pane (left) + Vertical Stack (right)"
+    echo " Xephyr Layout Test active on display ${XEPHYR_DISPLAY}"
+    echo "============================================================"
+    echo " Implemented Layouts under test:"
+    echo "  1. Master/Stack Tiling Layout:"
+    echo "     - Master window: left 55% of screen width"
+    echo "     - Stack column : right 45% divided equally across windows"
+    echo "     - Dynamic retiling: close any window to see remaining expand"
+    echo "  2. Single-Window Full Tiling:"
+    echo "     - When 1 window is open, it occupies full screen minus gaps"
+    echo "  3. Floating Layout / Floating Mode:"
+    echo "     - Press Mod4 + Space to toggle floating state on active window"
+    echo "     - Floating windows stay centered and raised above tiled windows"
+    echo "     - Move floating: Mod4 + Left Click drag"
+    echo "     - Resize floating: Mod4 + Right Click drag"
+    echo ""
+    echo " Test Keybindings inside Xephyr:"
+    echo "  Mod4 + Space            : Toggle Tiled <-> Floating layout"
+    echo "  Mod4 + j / k            : Focus Down / Up (cycle panes)"
+    echo "  Mod4 + h / l            : Focus Left (Master) / Right (Stack)"
+    echo "  Mod4 + Shift + j / k    : Swap window Down / Up in stack"
+    echo "  Mod4 + Shift + h / l    : Swap window Left / Right (Master <-> Stack)"
+    echo "  Mod4 + 1 .. 9           : Switch workspace layout"
+    echo "  Mod4 + Shift + 1 .. 9   : Move window to workspace"
+    echo "  Mod4 + Shift + q        : Close window (graceful ICCCM WM_DELETE_WINDOW)"
+    echo ""
     echo " Press Ctrl+C in this terminal to exit."
     echo "============================================================"
 

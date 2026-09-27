@@ -9,7 +9,7 @@ CARGO ?= cargo
 TARGET_DIR := target
 SCRIPTS_DIR := scripts
 
-.PHONY: all debug release build test test-xephyr test-xephyr-release test-xephyr-layout test-layout clean install uninstall version version-check bump-patch bump-minor bump-major set-version help
+.PHONY: all debug release build test test-xephyr test-xephyr-release test-xephyr-layout test-layout test-layouts clean install uninstall version version-check bump-patch bump-minor bump-major set-version help
 
 # Default target: build debug binary
 all: debug
@@ -51,6 +51,11 @@ test-xephyr-layout: debug
 
 # Alias for test-xephyr-layout
 test-layout: test-xephyr-layout
+
+# Run automated integration tests for implemented layouts (master/stack and floating)
+test-layouts:
+	@echo "==> Running automated layout integration tests..."
+	$(SCRIPTS_DIR)/run-xephyr.sh --test-layout
 
 # Clean build artifacts
 clean:
