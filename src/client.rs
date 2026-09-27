@@ -47,6 +47,8 @@ pub struct ClientState {
     pub clients: HashMap<Window, Client>,
     /// An ordered list of Window IDs for focus history/stacking.
     pub focus_stack: Vec<Window>,
+    /// Insertion order of clients (useful for master/stack tiling).
+    pub client_order: Vec<Window>,
 }
 
 impl ClientState {
@@ -65,6 +67,9 @@ impl ClientState {
         if !self.focus_stack.contains(&window) {
             self.focus_stack.push(window);
         }
+        if !self.client_order.contains(&window) {
+            self.client_order.push(window);
+        }
     }
 
     /// Deregisters and removes a window from the window manager's state.
@@ -76,7 +81,23 @@ impl ClientState {
     /// The removed `Client` instance, or `None` if it was not tracked.
     pub fn remove_client(&mut self, window: Window) -> Option<Client> {
         self.focus_stack.retain(|&w| w != window);
+        self.client_order.retain(|&w| w != window);
         self.clients.remove(&window)
+    }
+
+    /// Returns the window IDs of all mapped, non-floating, non-fullscreen clients
+    /// in the order they were managed (master first, then stack windows).
+    pub fn visible_tiled_clients(&self) -> Vec<Window> {
+        self.client_order
+            .iter()
+            .copied()
+            .filter(|&w| {
+                self.clients
+                    .get(&w)
+                    .map(|c| c.mapped && !c.floating && !c.fullscreen)
+                    .unwrap_or(false)
+            })
+            .collect()
     }
 
     /// Retrieves a reference to a tracked client.

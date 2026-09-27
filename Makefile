@@ -9,7 +9,7 @@ CARGO ?= cargo
 TARGET_DIR := target
 SCRIPTS_DIR := scripts
 
-.PHONY: all debug release build test test-xephyr clean install uninstall version version-check bump-patch bump-minor bump-major set-version help
+.PHONY: all debug release build test test-xephyr test-xephyr-release test-xephyr-layout test-layout clean install uninstall version version-check bump-patch bump-minor bump-major set-version help
 
 # Default target: build debug binary
 all: debug
@@ -43,6 +43,14 @@ test-xephyr: debug
 test-xephyr-release: release
 	@echo "==> Starting nested Xephyr X11 test session (release)..."
 	$(SCRIPTS_DIR)/run-xephyr.sh --release
+
+# Run tilo inside Xephyr with demo windows (xclock, xcalc, xeyes) to test tiling layouts visually
+test-xephyr-layout: debug
+	@echo "==> Starting Xephyr layout test with sample windows..."
+	$(SCRIPTS_DIR)/run-xephyr.sh --layout-demo
+
+# Alias for test-xephyr-layout
+test-layout: test-xephyr-layout
 
 # Clean build artifacts
 clean:
@@ -94,6 +102,8 @@ help:
 	@echo "  make release      - Build optimized release executable (target/release/tilo)"
 	@echo "  make test         - Run cargo unit and integration tests"
 	@echo "  make test-xephyr  - Run debug build inside a nested Xephyr X11 display"
+	@echo "  make test-xephyr-layout - Run tilo in Xephyr with demo windows to visually test tiling"
+	@echo "  make test-layout  - Alias for test-xephyr-layout"
 	@echo "  make clean        - Remove target/ directory"
 	@echo "  make install      - Install release binary to \$$PREFIX/bin (default: /usr/local/bin)"
 	@echo "  make uninstall    - Remove binary from \$$PREFIX/bin"

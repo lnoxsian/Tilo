@@ -8,6 +8,7 @@ ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 SCREEN_SIZE="1280x720"
 BUILD_MODE="debug"
 SPAWN_CLIENTS=0
+LAYOUT_DEMO=0
 XEPHYR_BIN="$(command -v Xephyr || true)"
 
 if [[ -z "${XEPHYR_BIN}" ]]; then
@@ -20,15 +21,20 @@ usage() {
     echo "Usage: $0 [options]"
     echo ""
     echo "Options:"
+    echo "  --layout-demo      Spawn demo windows (xclock, xcalc, xeyes) to visually test layout"
     echo "  --release          Run release build of tilo instead of debug"
-    echo "  --screen <WIDTHxHEIGHT>  Set Xephyr screen resolution (default: 1280x720)"
-    echo "  --with-clients     Launch sample X11 apps (xclock, xeyes) inside Xephyr"
+    echo "  --screen <WxH>     Set Xephyr screen resolution (default: 1280x720)"
+    echo "  --with-clients     Launch sample X11 apps inside Xephyr"
     echo "  -h, --help         Show this help message"
     exit 0
 }
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
+        --layout-demo|--layout)
+            LAYOUT_DEMO=1
+            shift
+            ;;
         --release)
             BUILD_MODE="release"
             shift
@@ -102,19 +108,18 @@ trap cleanup EXIT INT TERM
     -ac \
     -screen "${SCREEN_SIZE}" \
     -br \
-    -reset \
-    -terminate &
+    -noreset &
 XEPHYR_PID=$!
 
-# Wait for Xephyr display to be ready
+# Wait for Xephyr display socket to become ready
 echo "Waiting for Xephyr X server to become ready..."
 READY=0
-for _ in {1..30}; do
-    if DISPLAY="${XEPHYR_DISPLAY}" xset q >/dev/null 2>&1 || [[ -e "/tmp/.X11-unix/X${XEPHYR_DISPLAY#:}" ]]; then
+for _ in {1..50}; do
+    if [[ -S "/tmp/.X11-unix/X${XEPHYR_DISPLAY#:}" ]] || [[ -e "/tmp/.X11-unix/X${XEPHYR_DISPLAY#:}" ]]; then
         READY=1
         break
     fi
-    sleep 0.1
+    sleep 0.05
 done
 
 if [[ ${READY} -eq 0 ]]; then
@@ -123,21 +128,63 @@ else
     echo "Xephyr is ready."
 fi
 
-# Optionally launch sample X11 clients
-if [[ ${SPAWN_CLIENTS} -eq 1 ]]; then
+if [[ ${LAYOUT_DEMO} -eq 1 ]]; then
+    echo "Launching tilo on ${XEPHYR_DISPLAY}..."
+    DISPLAY="${XEPHYR_DISPLAY}" "${TILO_BIN}" &
+    TILO_PID=$!
+    CLIENT_PIDS+=("${TILO_PID}")
+
+    # Give tilo a moment to initialize and claim WM ownership
+    sleep 0.4
+
+    echo "Spawning sample windows to demonstrate tiling layout..."
+    # Window 1 (Master)
     if command -v xclock >/dev/null 2>&1; then
+        echo " -> Spawning Window 1: xclock (Master pane)"
         DISPLAY="${XEPHYR_DISPLAY}" xclock &
         CLIENT_PIDS+=($!)
+        sleep 0.6
     fi
+
+    # Window 2 (Stack top)
+    if command -v xcalc >/dev/null 2>&1; then
+        echo " -> Spawning Window 2: xcalc (Stack pane)"
+        DISPLAY="${XEPHYR_DISPLAY}" xcalc &
+        CLIENT_PIDS+=($!)
+        sleep 0.6
+    fi
+
+    # Window 3 (Stack bottom)
     if command -v xeyes >/dev/null 2>&1; then
+        echo " -> Spawning Window 3: xeyes (Stack pane)"
         DISPLAY="${XEPHYR_DISPLAY}" xeyes &
         CLIENT_PIDS+=($!)
+        sleep 0.6
     fi
+
+    echo ""
+    echo "============================================================"
+    echo " Xephyr Tiling Layout active on display ${XEPHYR_DISPLAY}"
+    echo " Layout: Master pane (left) + Vertical Stack (right)"
+    echo " Press Ctrl+C in this terminal to exit."
+    echo "============================================================"
+
+    # Wait for tilo process
+    wait "${TILO_PID}" 2>/dev/null || true
+else
+    # Optionally launch sample X11 clients
+    if [[ ${SPAWN_CLIENTS} -eq 1 ]]; then
+        if command -v xclock >/dev/null 2>&1; then
+            DISPLAY="${XEPHYR_DISPLAY}" xclock &
+            CLIENT_PIDS+=($!)
+        fi
+        if command -v xeyes >/dev/null 2>&1; then
+            DISPLAY="${XEPHYR_DISPLAY}" xeyes &
+            CLIENT_PIDS+=($!)
+        fi
+    fi
+
+    # Run tilo on the Xephyr display
+    echo "Launching tilo on ${XEPHYR_DISPLAY}..."
+    DISPLAY="${XEPHYR_DISPLAY}" "${TILO_BIN}" || true
 fi
-
-# Run tilo on the Xephyr display
-echo "Launching tilo on ${XEPHYR_DISPLAY}..."
-DISPLAY="${XEPHYR_DISPLAY}" "${TILO_BIN}" || true
-
-# Wait for Xephyr process if tilo exited immediately
-wait "${XEPHYR_PID}" 2>/dev/null || true

@@ -6,6 +6,7 @@
 
 use crate::atoms::Atoms;
 use crate::client::{Client, ClientState};
+use crate::layout::{apply_layout_with_border, calculate_master_stack, LayoutConfig, Rect};
 use crate::x11::{X11Context, X11Error};
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::{
@@ -50,6 +51,8 @@ pub struct WindowManager {
     pub stats: EventStats,
     /// Cached interned X11 atoms for ICCCM and EWMH.
     pub atoms: Atoms,
+    /// Active tiling layout configuration (ratios, gaps, borders).
+    pub layout_config: LayoutConfig,
 }
 
 impl WindowManager {
@@ -62,6 +65,7 @@ impl WindowManager {
             running: true,
             stats: EventStats::default(),
             atoms,
+            layout_config: LayoutConfig::default(),
         })
     }
 
@@ -197,8 +201,9 @@ impl WindowManager {
         client.mapped = true;
         self.client_state.add_client(window, client);
 
-        // Map and focus client window
+        // Map, retile, and focus client window
         self.map_client(window)?;
+        self.retile()?;
         self.focus_client(window)?;
 
         Ok(true)
@@ -211,6 +216,7 @@ impl WindowManager {
     pub fn unmanage_window(&mut self, window: Window) -> Option<Client> {
         let removed = self.client_state.remove_client(window);
         if removed.is_some() {
+            let _ = self.retile();
             // Restore focus to previous client or root
             if let Some(next_window) = self.client_state.focused_window() {
                 let _ = self.focus_client(next_window);
@@ -223,6 +229,32 @@ impl WindowManager {
             }
         }
         removed
+    }
+
+    /// Recalculates and applies the tiling layout to all visible managed clients.
+    pub fn retile(&mut self) -> Result<(), X11Error> {
+        let visible_tiled = self.client_state.visible_tiled_clients();
+        if visible_tiled.is_empty() {
+            return Ok(());
+        }
+
+        let screen_rect = Rect::new(
+            0,
+            0,
+            self.context.screen_width as u32,
+            self.context.screen_height as u32,
+        );
+
+        let rects = calculate_master_stack(&visible_tiled, &screen_rect, &self.layout_config);
+        apply_layout_with_border(
+            &self.context.connection,
+            &visible_tiled,
+            &rects,
+            self.layout_config.border_width,
+        )?;
+
+        self.context.flush()?;
+        Ok(())
     }
 
     /// Sets input focus to a specific client window and raises it.
