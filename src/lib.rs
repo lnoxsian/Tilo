@@ -3,7 +3,10 @@
 pub mod atoms;
 pub mod client;
 pub mod focus;
+pub mod input;
+pub mod keybind;
 pub mod layout;
 pub mod wm;
 pub mod x11;
+
 

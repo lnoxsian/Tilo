@@ -10,6 +10,8 @@ use crate::focus::{
     find_neighbor, set_window_border_color, set_window_border_width, BorderConfig, Direction,
     WorkspaceFocus,
 };
+use crate::input::InputManager;
+use crate::keybind::{default_keybindings, Action};
 use crate::layout::{apply_layout_with_border, calculate_master_stack, LayoutConfig, Rect};
 use crate::x11::{X11Context, X11Error};
 use x11rb::connection::Connection;
@@ -63,6 +65,8 @@ pub struct WindowManager {
     pub workspace_focus: WorkspaceFocus,
     /// Currently active workspace ID.
     pub current_workspace: u32,
+    /// Keyboard input manager handling global key grabs and actions.
+    pub input_manager: InputManager,
 }
 
 impl WindowManager {
@@ -72,6 +76,9 @@ impl WindowManager {
         let border_config = BorderConfig::default();
         let mut layout_config = LayoutConfig::default();
         layout_config.border_width = border_config.width;
+        let mut input_manager = InputManager::new(default_keybindings());
+        let _ = input_manager.setup(&context.connection, context.root_window);
+
         Ok(Self {
             context,
             client_state: ClientState::new(),
@@ -82,6 +89,7 @@ impl WindowManager {
             border_config,
             workspace_focus: WorkspaceFocus::new(),
             current_workspace: 1,
+            input_manager,
         })
     }
 
@@ -151,7 +159,6 @@ impl WindowManager {
                 self.handle_property_notify(&ev)?;
             }
             Event::KeyPress(ev) => {
-                self.stats.key_presses += 1;
                 self.handle_key_press(&ev)?;
             }
             Event::ButtonPress(ev) => {
@@ -584,9 +591,107 @@ impl WindowManager {
         Ok(())
     }
 
-    /// Handles keyboard input.
-    pub fn handle_key_press(&mut self, _event: &KeyPressEvent) -> Result<(), X11Error> {
+    /// Handles keyboard input events and executes matching keybinding actions.
+    pub fn handle_key_press(&mut self, event: &KeyPressEvent) -> Result<(), X11Error> {
+        self.stats.key_presses += 1;
+        if let Some(action) = self.input_manager.handle_event(event) {
+            self.execute_action(action)?;
+        }
         Ok(())
+    }
+
+    /// Executes an [`Action`] triggered by a keybinding.
+    pub fn execute_action(&mut self, action: Action) -> Result<(), X11Error> {
+        match action {
+            Action::Spawn(cmd) => {
+                let _ = std::process::Command::new("sh")
+                    .arg("-c")
+                    .arg(&cmd)
+                    .spawn();
+            }
+            Action::Close => {
+                if let Some(win) = self.client_state.focused_window() {
+                    let _ = self.kill_client(win);
+                }
+            }
+            Action::Focus(dir) => {
+                let _ = self.focus_in_direction(dir, false)?;
+            }
+            Action::Move(dir) => {
+                let _ = self.swap_in_direction(dir)?;
+            }
+            Action::Workspace(ws) => {
+                let _ = self.set_current_workspace(ws)?;
+            }
+            Action::MoveToWorkspace(ws) => {
+                if let Some(win) = self.client_state.focused_window() {
+                    if let Some(client) = self.client_state.get_client_mut(win) {
+                        client.workspace = ws;
+                    }
+                    let _ = self.retile();
+                }
+            }
+            Action::ToggleFloating => {
+                if let Some(win) = self.client_state.focused_window() {
+                    if let Some(client) = self.client_state.get_client_mut(win) {
+                        client.floating = !client.floating;
+                    }
+                    let _ = self.retile();
+                }
+            }
+            Action::ToggleFullscreen => {
+                if let Some(win) = self.client_state.focused_window() {
+                    if let Some(client) = self.client_state.get_client_mut(win) {
+                        client.fullscreen = !client.fullscreen;
+                    }
+                    let _ = self.retile();
+                }
+            }
+            Action::Reload => {
+                let _ = self.input_manager.setup(&self.context.connection, self.context.root_window);
+                let _ = self.retile();
+            }
+            Action::Exit => {
+                self.stop();
+            }
+        }
+        Ok(())
+    }
+
+    /// Swaps the currently focused window with its spatial neighbor in the given direction.
+    pub fn swap_in_direction(&mut self, direction: Direction) -> Result<Option<Window>, X11Error> {
+        let current = match self.client_state.focused_window() {
+            Some(w) => w,
+            None => return Ok(None),
+        };
+        let visible_tiled = self.client_state.visible_tiled_clients();
+        if visible_tiled.len() < 2 {
+            return Ok(None);
+        }
+
+        let screen_rect = Rect::new(
+            0,
+            0,
+            self.context.screen_width as u32,
+            self.context.screen_height as u32,
+        );
+        let rects = calculate_master_stack(&visible_tiled, &screen_rect, &self.layout_config);
+        let pairs: Vec<(Window, Rect)> = visible_tiled
+            .into_iter()
+            .zip(rects.into_iter())
+            .collect();
+
+        if let Some(target) = find_neighbor(direction, Some(current), &pairs, false) {
+            let idx_a = self.client_state.client_order.iter().position(|&w| w == current);
+            let idx_b = self.client_state.client_order.iter().position(|&w| w == target);
+            if let (Some(a), Some(b)) = (idx_a, idx_b) {
+                self.client_state.client_order.swap(a, b);
+                self.retile()?;
+                self.focus_client(current)?;
+                return Ok(Some(target));
+            }
+        }
+        Ok(None)
     }
 
     /// Handles mouse button press.
