@@ -1,3 +1,4 @@
+use tilo::wm::WindowManager;
 use tilo::x11::{X11Context, X11Error};
 
 fn main() {
@@ -17,17 +18,33 @@ fn main() {
         }
     };
 
-    match ctx.become_wm() {
-        Ok(()) => {
-            println!("[INFO  tilo::wm] Successfully became the window manager.");
+    if let Err(err) = ctx.become_wm() {
+        match err {
+            X11Error::AnotherWmRunning => {
+                eprintln!("[ERROR tilo::wm] Another window manager is already running on this display.");
+            }
+            _ => {
+                eprintln!("[ERROR tilo::wm] Failed to initialize window manager: {}", err);
+            }
         }
-        Err(X11Error::AnotherWmRunning) => {
-            eprintln!("[ERROR tilo::wm] Another window manager is already running on this display.");
-            std::process::exit(1);
-        }
+        std::process::exit(1);
+    }
+
+    println!("[INFO  tilo::wm] Successfully became the window manager.");
+
+    let mut wm = match WindowManager::new(ctx) {
+        Ok(wm) => wm,
         Err(err) => {
-            eprintln!("[ERROR tilo::wm] Failed to initialize window manager: {}", err);
+            eprintln!(
+                "[ERROR tilo::wm] Failed to initialize window manager state: {}",
+                err
+            );
             std::process::exit(1);
         }
+    };
+    println!("[INFO  tilo::wm] Entering X11 event loop...");
+    if let Err(err) = wm.run() {
+        eprintln!("[ERROR tilo::wm] Event loop error: {}", err);
+        std::process::exit(1);
     }
 }
