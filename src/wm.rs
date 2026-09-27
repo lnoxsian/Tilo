@@ -6,6 +6,10 @@
 
 use crate::atoms::Atoms;
 use crate::client::{Client, ClientState};
+use crate::ewmh::{
+    init_ewmh, update_net_active_window, update_net_client_list, update_net_current_desktop,
+    update_net_wm_state_above, update_net_wm_state_fullscreen, EwmhAtoms, NetWmStateAction,
+};
 use crate::floating::{calculate_default_floating_geometry, clamp_floating_geometry};
 use crate::focus::{
     find_neighbor, set_window_border_color, set_window_border_width, BorderConfig, Direction,
@@ -78,12 +82,26 @@ pub struct WindowManager {
     pub workspace_manager: WorkspaceManager,
     /// Configured window rules for matching window properties.
     pub rules: Vec<WindowRule>,
+    /// Cached interned X11 atoms for EWMH.
+    pub ewmh_atoms: EwmhAtoms,
+    /// Window ID of the hidden child window used for `_NET_SUPPORTING_WM_CHECK`.
+    pub supporting_window: Window,
 }
 
 impl WindowManager {
     /// Creates a new `WindowManager` wrapping the provided `X11Context`.
     pub fn new(context: X11Context) -> Result<Self, X11Error> {
         let atoms = Atoms::intern(&context.connection)?;
+        let ewmh_atoms = EwmhAtoms::intern(&context.connection)?;
+        let supporting_window = init_ewmh(
+            &context.connection,
+            context.root_window,
+            &ewmh_atoms,
+            context.screen_width,
+            context.screen_height,
+            9,
+            1,
+        )?;
         let border_config = BorderConfig::default();
         let mut layout_config = LayoutConfig::default();
         layout_config.border_width = border_config.width;
@@ -104,7 +122,42 @@ impl WindowManager {
             input_manager,
             workspace_manager,
             rules: Vec::new(),
+            ewmh_atoms,
+            supporting_window,
         })
+    }
+
+    /// Updates the root window's `_NET_ACTIVE_WINDOW` property.
+    pub fn update_ewmh_active_window(&self) -> Result<(), X11Error> {
+        let focused = self.client_state.focused_window();
+        update_net_active_window(
+            &self.context.connection,
+            self.context.root_window,
+            focused,
+            &self.ewmh_atoms,
+        )
+    }
+
+    /// Updates the root window's `_NET_CLIENT_LIST` property.
+    pub fn update_ewmh_client_list(&self) -> Result<(), X11Error> {
+        let clients = self.client_state.all_clients();
+        update_net_client_list(
+            &self.context.connection,
+            self.context.root_window,
+            &clients,
+            &self.ewmh_atoms,
+        )
+    }
+
+    /// Updates the root window's `_NET_CURRENT_DESKTOP` property (0-indexed).
+    pub fn update_ewmh_current_desktop(&self) -> Result<(), X11Error> {
+        let desktop_idx = self.current_workspace.saturating_sub(1);
+        update_net_current_desktop(
+            &self.context.connection,
+            self.context.root_window,
+            desktop_idx,
+            &self.ewmh_atoms,
+        )
     }
 
     /// Starts the main event loop, blocking the thread and waiting for X11 events.
@@ -276,10 +329,20 @@ impl WindowManager {
         );
 
         let is_current_ws = target_ws == self.current_workspace;
+        let is_floating = client.floating;
+        let is_fullscreen = client.fullscreen;
+
         if is_current_ws {
             client.mapped = true;
             self.workspace_manager.add_client(window, target_ws);
             self.client_state.add_client(window, client);
+
+            if is_floating {
+                let _ = update_net_wm_state_above(&self.context.connection, window, true, &self.ewmh_atoms);
+            }
+            if is_fullscreen {
+                let _ = update_net_wm_state_fullscreen(&self.context.connection, window, true, &self.ewmh_atoms);
+            }
 
             // Map, retile, and focus client window on active workspace
             self.map_client(window)?;
@@ -291,9 +354,16 @@ impl WindowManager {
             client.mapped = false;
             self.workspace_manager.add_client(window, target_ws);
             self.client_state.add_client(window, client);
+            if is_floating {
+                let _ = update_net_wm_state_above(&self.context.connection, window, true, &self.ewmh_atoms);
+            }
+            if is_fullscreen {
+                let _ = update_net_wm_state_fullscreen(&self.context.connection, window, true, &self.ewmh_atoms);
+            }
             let _ = self.set_wm_state(window, WmState::Withdrawn);
         }
 
+        let _ = self.update_ewmh_client_list();
         Ok(true)
     }
 
@@ -312,6 +382,7 @@ impl WindowManager {
 
         let removed = self.client_state.remove_client(window);
         let _ = self.set_wm_state(window, WmState::Withdrawn);
+        let _ = self.update_ewmh_client_list();
         if removed.is_some() {
             let _ = self.retile();
             // Restore focus to previous client on workspace, or global stack, or root
@@ -323,6 +394,7 @@ impl WindowManager {
                     self.context.root_window,
                     x11rb::CURRENT_TIME,
                 );
+                let _ = self.update_ewmh_active_window();
             }
         }
         removed
@@ -405,6 +477,9 @@ impl WindowManager {
             .map(|c| c.workspace)
             .unwrap_or(self.current_workspace);
         self.workspace_focus.focus(ws, window);
+
+        // 7. Update EWMH _NET_ACTIVE_WINDOW
+        let _ = self.update_ewmh_active_window();
 
         self.context.flush()?;
         Ok(())
@@ -496,6 +571,7 @@ impl WindowManager {
         // 3. Update active workspace IDs
         self.workspace_manager.current_workspace_id = target_id;
         self.current_workspace = target_id;
+        let _ = self.update_ewmh_current_desktop();
 
         // 4. Retile target workspace
         self.retile()?;
@@ -517,6 +593,7 @@ impl WindowManager {
                 self.context.root_window,
                 x11rb::CURRENT_TIME,
             );
+            let _ = self.update_ewmh_active_window();
         }
 
         self.context.flush()?;
@@ -697,6 +774,9 @@ impl WindowManager {
             // Refocus window
             self.focus_client(window)?;
         }
+
+        let is_floating_now = self.client_state.get_client(window).map(|c| c.floating).unwrap_or(false);
+        let _ = update_net_wm_state_above(&self.context.connection, window, is_floating_now, &self.ewmh_atoms);
 
         self.context.flush()?;
         Ok(())
@@ -1068,8 +1148,75 @@ impl WindowManager {
         Ok(())
     }
 
-    /// Handles client messages (e.g. _NET_WM_STATE, WM_PROTOCOLS).
-    pub fn handle_client_message(&mut self, _event: &ClientMessageEvent) -> Result<(), X11Error> {
+    /// Handles client messages (e.g. _NET_ACTIVE_WINDOW, _NET_CURRENT_DESKTOP, _NET_WM_STATE, _NET_CLOSE_WINDOW).
+    pub fn handle_client_message(&mut self, event: &ClientMessageEvent) -> Result<(), X11Error> {
+        self.stats.client_messages += 1;
+        let atoms = self.ewmh_atoms;
+
+        if event.type_ == atoms.net_active_window {
+            let window = event.window;
+            if self.client_state.contains(window) {
+                if let Some(ws) = self.workspace_manager.find_workspace_for(window) {
+                    if ws != self.current_workspace {
+                        self.switch_workspace(ws)?;
+                    }
+                }
+                self.focus_client(window)?;
+            }
+        } else if event.type_ == atoms.net_current_desktop {
+            let data = event.data.as_data32();
+            let target_ws = data[0] + 1; // 0-indexed in EWMH -> 1-based workspace
+            if target_ws >= 1 && target_ws <= 9 {
+                self.switch_workspace(target_ws)?;
+            }
+        } else if event.type_ == atoms.net_close_window {
+            let window = event.window;
+            if self.client_state.contains(window) {
+                self.kill_client(window)?;
+            }
+        } else if event.type_ == atoms.net_wm_state {
+            let data = event.data.as_data32();
+            let action_num = data[0];
+            let prop1 = data[1];
+            let prop2 = data[2];
+
+            if let Some(action) = NetWmStateAction::from_u32(action_num) {
+                let window = event.window;
+                let is_fullscreen_target = prop1 == atoms.net_wm_state_fullscreen || prop2 == atoms.net_wm_state_fullscreen;
+                let is_above_target = prop1 == atoms.net_wm_state_above || prop2 == atoms.net_wm_state_above;
+
+                if is_fullscreen_target {
+                    if let Some(client) = self.client_state.get_client_mut(window) {
+                        let new_fullscreen = match action {
+                            NetWmStateAction::Remove => false,
+                            NetWmStateAction::Add => true,
+                            NetWmStateAction::Toggle => !client.fullscreen,
+                        };
+                        client.fullscreen = new_fullscreen;
+                        let _ = update_net_wm_state_fullscreen(
+                            &self.context.connection,
+                            window,
+                            new_fullscreen,
+                            &atoms,
+                        );
+                    }
+                    self.retile()?;
+                }
+
+                if is_above_target {
+                    let currently_floating = self.client_state.get_client(window).map(|c| c.floating).unwrap_or(false);
+                    let new_floating = match action {
+                        NetWmStateAction::Remove => false,
+                        NetWmStateAction::Add => true,
+                        NetWmStateAction::Toggle => !currently_floating,
+                    };
+                    if new_floating != currently_floating {
+                        self.toggle_floating(window)?;
+                    }
+                }
+            }
+        }
+
         Ok(())
     }
 }

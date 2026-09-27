@@ -140,6 +140,11 @@ impl ClientState {
             .collect()
     }
 
+    /// Returns the window IDs of all managed clients across all workspaces.
+    pub fn all_clients(&self) -> Vec<Window> {
+        self.client_order.clone()
+    }
+
     /// Returns the window IDs of all mapped, non-floating, non-fullscreen clients on a given workspace.
     pub fn visible_tiled_clients_on_workspace(&self, workspace: u32) -> Vec<Window> {
         self.client_order

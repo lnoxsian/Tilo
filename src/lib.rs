@@ -2,6 +2,7 @@
 
 pub mod atoms;
 pub mod client;
+pub mod ewmh;
 pub mod floating;
 pub mod focus;
 pub mod icccm;
