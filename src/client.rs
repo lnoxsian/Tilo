@@ -6,6 +6,8 @@
 use std::collections::HashMap;
 use x11rb::protocol::xproto::Window;
 
+use crate::floating::{ClientLayoutState, FloatingGeometry};
+
 /// Represents a single tracked application window.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Client {
@@ -23,6 +25,10 @@ pub struct Client {
     pub mapped: bool,
     /// True if the window currently has input focus.
     pub focused: bool,
+    /// Detailed layout state (Tiled vs Floating with geometry).
+    pub layout_state: ClientLayoutState,
+    /// The last saved floating geometry for restoring when un-tiled.
+    pub floating_geometry: Option<FloatingGeometry>,
 }
 
 impl Client {
@@ -36,7 +42,27 @@ impl Client {
             fullscreen: false,
             mapped: false,
             focused: false,
+            layout_state: ClientLayoutState::Tiled,
+            floating_geometry: None,
         }
+    }
+
+    /// Returns true if this client is in a floating state.
+    pub fn is_floating(&self) -> bool {
+        self.floating || matches!(self.layout_state, ClientLayoutState::Floating(_))
+    }
+
+    /// Sets the client to floating with the given geometry.
+    pub fn set_floating(&mut self, geom: FloatingGeometry) {
+        self.floating = true;
+        self.floating_geometry = Some(geom);
+        self.layout_state = ClientLayoutState::Floating(geom);
+    }
+
+    /// Sets the client to tiled mode.
+    pub fn set_tiled(&mut self) {
+        self.floating = false;
+        self.layout_state = ClientLayoutState::Tiled;
     }
 }
 
@@ -123,6 +149,20 @@ impl ClientState {
                 self.clients
                     .get(&w)
                     .map(|c| c.workspace == workspace && c.mapped && !c.floating && !c.fullscreen)
+                    .unwrap_or(false)
+            })
+            .collect()
+    }
+
+    /// Returns the window IDs of all mapped floating clients on a given workspace.
+    pub fn floating_clients_on_workspace(&self, workspace: u32) -> Vec<Window> {
+        self.client_order
+            .iter()
+            .copied()
+            .filter(|&w| {
+                self.clients
+                    .get(&w)
+                    .map(|c| c.workspace == workspace && c.mapped && c.floating)
                     .unwrap_or(false)
             })
             .collect()

@@ -6,6 +6,7 @@
 
 use crate::atoms::Atoms;
 use crate::client::{Client, ClientState};
+use crate::floating::{calculate_default_floating_geometry, clamp_floating_geometry};
 use crate::focus::{
     find_neighbor, set_window_border_color, set_window_border_width, BorderConfig, Direction,
     WorkspaceFocus,
@@ -286,24 +287,30 @@ impl WindowManager {
     pub fn retile(&mut self) -> Result<(), X11Error> {
         let current_ws = self.current_workspace;
         let visible_tiled = self.client_state.visible_tiled_clients_on_workspace(current_ws);
-        if visible_tiled.is_empty() {
-            return Ok(());
+        if !visible_tiled.is_empty() {
+            let screen_rect = Rect::new(
+                0,
+                0,
+                self.context.screen_width as u32,
+                self.context.screen_height as u32,
+            );
+
+            let rects = calculate_master_stack(&visible_tiled, &screen_rect, &self.layout_config);
+            apply_layout_with_border(
+                &self.context.connection,
+                &visible_tiled,
+                &rects,
+                self.layout_config.border_width,
+            )?;
         }
 
-        let screen_rect = Rect::new(
-            0,
-            0,
-            self.context.screen_width as u32,
-            self.context.screen_height as u32,
-        );
-
-        let rects = calculate_master_stack(&visible_tiled, &screen_rect, &self.layout_config);
-        apply_layout_with_border(
-            &self.context.connection,
-            &visible_tiled,
-            &rects,
-            self.layout_config.border_width,
-        )?;
+        // Keep all mapped floating windows on the active workspace stacked above tiled windows
+        for &w in &self.client_state.floating_clients_on_workspace(current_ws) {
+            let _ = self.context.connection.configure_window(
+                w,
+                &ConfigureWindowAux::new().stack_mode(StackMode::ABOVE),
+            );
+        }
 
         self.context.flush()?;
         Ok(())
@@ -532,6 +539,156 @@ impl WindowManager {
         self.workspace_manager.current_id()
     }
 
+    /// Toggles the floating state of a specific window.
+    ///
+    /// If the window is currently tiled, it will be made floating, restoring its previous 
+    /// floating geometry or using a default centered geometry. If it is floating, it will
+    /// be tiled.
+    pub fn toggle_floating(&mut self, window: Window) -> Result<(), X11Error> {
+        let is_currently_floating = self
+            .client_state
+            .get_client(window)
+            .map(|c| c.floating)
+            .unwrap_or(false);
+
+        if !is_currently_floating {
+            // Tiled -> Floating: Restore previous floating geometry or calculate default centered geometry
+            let geom = if let Some(client) = self.client_state.get_client(window) {
+                client.floating_geometry.unwrap_or_else(|| {
+                    calculate_default_floating_geometry(
+                        self.context.screen_width,
+                        self.context.screen_height,
+                    )
+                })
+            } else {
+                return Ok(());
+            };
+
+            if let Some(client) = self.client_state.get_client_mut(window) {
+                client.set_floating(geom);
+            }
+
+            // Apply floating geometry, border width, and raise above tiled windows
+            let aux = ConfigureWindowAux::new()
+                .x(geom.x)
+                .y(geom.y)
+                .width(geom.width)
+                .height(geom.height)
+                .border_width(self.border_config.width)
+                .stack_mode(StackMode::ABOVE);
+            let _ = self.context.connection.configure_window(window, &aux);
+
+            // Retile the active workspace (remaining tiled windows expand to fill space)
+            self.retile()?;
+
+            // Set focus and raise
+            self.focus_client(window)?;
+        } else {
+            // Floating -> Tiled: Transition back to tiled layout
+            if let Some(client) = self.client_state.get_client_mut(window) {
+                client.set_tiled();
+            }
+
+            // Recalculate tiling layout for the active workspace
+            self.retile()?;
+
+            // Refocus window
+            self.focus_client(window)?;
+        }
+
+        self.context.flush()?;
+        Ok(())
+    }
+
+    /// Moves a floating window to a new absolute position.
+    pub fn move_floating(&mut self, window: Window, x: i32, y: i32) -> Result<(), X11Error> {
+        let is_tiled = match self.client_state.get_client(window) {
+            Some(c) => !c.floating,
+            None => return Ok(()),
+        };
+
+        if is_tiled {
+            self.toggle_floating(window)?;
+        }
+
+        let mut geom = match self.client_state.get_client(window) {
+            Some(client) => client.floating_geometry.unwrap_or_else(|| {
+                calculate_default_floating_geometry(
+                    self.context.screen_width,
+                    self.context.screen_height,
+                )
+            }),
+            None => return Ok(()),
+        };
+
+        geom.x = x;
+        geom.y = y;
+        let clamped = clamp_floating_geometry(
+            geom,
+            self.context.screen_width,
+            self.context.screen_height,
+        );
+
+        if let Some(client) = self.client_state.get_client_mut(window) {
+            client.set_floating(clamped);
+        }
+
+        let aux = ConfigureWindowAux::new()
+            .x(clamped.x)
+            .y(clamped.y)
+            .stack_mode(StackMode::ABOVE);
+        self.context.connection.configure_window(window, &aux)?;
+        self.context.flush()?;
+        Ok(())
+    }
+
+    /// Resizes a floating window to new dimensions.
+    pub fn resize_floating(
+        &mut self,
+        window: Window,
+        width: u32,
+        height: u32,
+    ) -> Result<(), X11Error> {
+        let is_tiled = match self.client_state.get_client(window) {
+            Some(c) => !c.floating,
+            None => return Ok(()),
+        };
+
+        if is_tiled {
+            self.toggle_floating(window)?;
+        }
+
+        let mut geom = match self.client_state.get_client(window) {
+            Some(client) => client.floating_geometry.unwrap_or_else(|| {
+                calculate_default_floating_geometry(
+                    self.context.screen_width,
+                    self.context.screen_height,
+                )
+            }),
+            None => return Ok(()),
+        };
+
+        geom.width = width;
+        geom.height = height;
+        let clamped = clamp_floating_geometry(
+            geom,
+            self.context.screen_width,
+            self.context.screen_height,
+        );
+
+        if let Some(client) = self.client_state.get_client_mut(window) {
+            client.set_floating(clamped);
+        }
+
+        let aux = ConfigureWindowAux::new()
+            .width(clamped.width)
+            .height(clamped.height)
+            .stack_mode(StackMode::ABOVE);
+        self.context.connection.configure_window(window, &aux)?;
+        self.context.flush()?;
+        Ok(())
+    }
+
     /// Sends ICCCM WM_TAKE_FOCUS ClientMessage if the client specifies support in WM_PROTOCOLS.
     pub fn send_take_focus_if_supported(&self, window: Window) -> Result<bool, X11Error> {
         let supports = if let Ok(reply) = self.context.connection.get_property(
@@ -705,6 +862,28 @@ impl WindowManager {
                 "[WARN  tilo::wm] Failed to configure window 0x{:x}: {}",
                 event.window, err
             );
+        } else if let Some(client) = self.client_state.get_client_mut(event.window) {
+            if client.floating {
+                let mut geom = client.floating_geometry.unwrap_or_else(|| {
+                    calculate_default_floating_geometry(
+                        self.context.screen_width,
+                        self.context.screen_height,
+                    )
+                });
+                if event.value_mask.contains(ConfigWindow::X) {
+                    geom.x = i32::from(event.x);
+                }
+                if event.value_mask.contains(ConfigWindow::Y) {
+                    geom.y = i32::from(event.y);
+                }
+                if event.value_mask.contains(ConfigWindow::WIDTH) {
+                    geom.width = u32::from(event.width);
+                }
+                if event.value_mask.contains(ConfigWindow::HEIGHT) {
+                    geom.height = u32::from(event.height);
+                }
+                client.set_floating(geom);
+            }
         }
         Ok(())
     }
@@ -772,10 +951,7 @@ impl WindowManager {
             }
             Action::ToggleFloating => {
                 if let Some(win) = self.client_state.focused_window() {
-                    if let Some(client) = self.client_state.get_client_mut(win) {
-                        client.floating = !client.floating;
-                    }
-                    let _ = self.retile();
+                    let _ = self.toggle_floating(win);
                 }
             }
             Action::ToggleFullscreen => {

@@ -127,6 +127,7 @@ fn test_client_lifecycle_and_management_in_xephyr() {
             )
             .expect("Create win2 failed");
         client_conn.flush().unwrap();
+        client_conn.sync().unwrap();
 
         let managed2 = wm.manage_window(win2).expect("Manage win2 failed");
         assert!(managed2);
@@ -157,6 +158,7 @@ fn test_client_lifecycle_and_management_in_xephyr() {
             )
             .expect("Create override win failed");
         client_conn.flush().unwrap();
+        client_conn.sync().unwrap();
 
         let managed_override = wm.manage_window(override_win).expect("Manage override failed");
         assert!(!managed_override, "Override-redirect window must be ignored");
