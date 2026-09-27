@@ -4,6 +4,7 @@ pub mod atoms;
 pub mod client;
 pub mod floating;
 pub mod focus;
+pub mod icccm;
 pub mod input;
 pub mod keybind;
 pub mod layout;

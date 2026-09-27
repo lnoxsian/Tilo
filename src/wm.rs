@@ -11,6 +11,10 @@ use crate::focus::{
     find_neighbor, set_window_border_color, set_window_border_width, BorderConfig, Direction,
     WorkspaceFocus,
 };
+use crate::icccm::{
+    get_wm_hints, get_wm_normal_hints, get_wm_state, send_wm_delete as icccm_send_wm_delete,
+    set_wm_state as icccm_set_wm_state, IcccmAtoms, WmState,
+};
 use crate::input::InputManager;
 use crate::keybind::{default_keybindings, Action};
 use crate::layout::{apply_layout_with_border, calculate_master_stack, LayoutConfig, Rect};
@@ -19,7 +23,7 @@ use crate::workspace::{WorkspaceId, WorkspaceManager};
 use crate::x11::{X11Context, X11Error};
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::{
-    AtomEnum, ButtonPressEvent, ChangeWindowAttributesAux, ClientMessageData, ClientMessageEvent,
+    AtomEnum, ButtonPressEvent, ChangeWindowAttributesAux, ClientMessageEvent,
     ConfigWindow, ConfigureRequestEvent, ConfigureWindowAux, ConnectionExt, EventMask, InputFocus,
     KeyPressEvent, PropertyNotifyEvent, StackMode, Window,
 };
@@ -279,6 +283,7 @@ impl WindowManager {
 
             // Map, retile, and focus client window on active workspace
             self.map_client(window)?;
+            let _ = self.set_wm_state(window, WmState::Normal);
             self.retile()?;
             self.focus_client(window)?;
         } else {
@@ -286,6 +291,7 @@ impl WindowManager {
             client.mapped = false;
             self.workspace_manager.add_client(window, target_ws);
             self.client_state.add_client(window, client);
+            let _ = self.set_wm_state(window, WmState::Withdrawn);
         }
 
         Ok(true)
@@ -305,6 +311,7 @@ impl WindowManager {
         self.workspace_focus.remove_window_all(window);
 
         let removed = self.client_state.remove_client(window);
+        let _ = self.set_wm_state(window, WmState::Withdrawn);
         if removed.is_some() {
             let _ = self.retile();
             // Restore focus to previous client on workspace, or global stack, or root
@@ -467,6 +474,7 @@ impl WindowManager {
                 client.mapped = false;
             }
             let _ = self.context.connection.unmap_window(win);
+            let _ = self.set_wm_state(win, WmState::Iconic);
         }
 
         // 2. Map all windows on target workspace
@@ -482,6 +490,7 @@ impl WindowManager {
                 client.mapped = true;
             }
             let _ = self.context.connection.map_window(win);
+            let _ = self.set_wm_state(win, WmState::Normal);
         }
 
         // 3. Update active workspace IDs
@@ -606,6 +615,30 @@ impl WindowManager {
         rules: &[WindowRule],
     ) -> Result<RuleAction, X11Error> {
         apply_window_rules(&self.context.connection, &self.atoms, window, rules)
+    }
+
+    /// Returns the cached atoms needed for ICCCM operations.
+    pub fn icccm_atoms(&self) -> IcccmAtoms {
+        IcccmAtoms::from(&self.atoms)
+    }
+
+    /// Sets the `WM_STATE` property on a client window.
+    pub fn set_wm_state(&self, window: Window, state: WmState) -> Result<(), X11Error> {
+        let atoms = self.icccm_atoms();
+        icccm_set_wm_state(&self.context.connection, window, state, &atoms)
+    }
+
+    /// Gets the current `WM_STATE` property from a client window.
+    pub fn get_wm_state(&self, window: Window) -> Result<Option<WmState>, X11Error> {
+        let atoms = self.icccm_atoms();
+        get_wm_state(&self.context.connection, window, &atoms)
+    }
+
+    /// Attempts to close a client window gracefully via ICCCM `WM_DELETE_WINDOW`,
+    /// falling back to `KillClient` if unsupported.
+    pub fn send_wm_delete(&self, window: Window) -> Result<(), X11Error> {
+        let atoms = self.icccm_atoms();
+        icccm_send_wm_delete(&self.context.connection, window, &atoms)
     }
 
     /// Toggles the floating state of a specific window.
@@ -760,35 +793,21 @@ impl WindowManager {
 
     /// Sends ICCCM WM_TAKE_FOCUS ClientMessage if the client specifies support in WM_PROTOCOLS.
     pub fn send_take_focus_if_supported(&self, window: Window) -> Result<bool, X11Error> {
-        let supports = if let Ok(reply) = self.context.connection.get_property(
-            false,
+        let atoms = self.icccm_atoms();
+        let supports = crate::icccm::supports_protocol(
+            &self.context.connection,
             window,
-            self.atoms.wm_protocols,
-            AtomEnum::ATOM,
-            0,
-            32,
-        ) {
-            if let Ok(prop) = reply.reply() {
-                if let Some(mut value) = prop.value32() {
-                    value.any(|atom| atom == self.atoms.wm_take_focus)
-                } else {
-                    false
-                }
-            } else {
-                false
-            }
-        } else {
-            false
-        };
+            atoms.wm_take_focus,
+            atoms.wm_protocols,
+        )?;
 
         if supports {
-            let _ = crate::focus::send_take_focus(
+            crate::icccm::send_wm_take_focus(
                 &self.context.connection,
                 window,
-                self.atoms.wm_protocols,
-                self.atoms.wm_take_focus,
+                &atoms,
                 x11rb::CURRENT_TIME,
-            );
+            )?;
         }
         Ok(supports)
     }
@@ -799,6 +818,7 @@ impl WindowManager {
         if let Some(client) = self.client_state.get_client_mut(window) {
             client.mapped = true;
         }
+        let _ = self.set_wm_state(window, WmState::Normal);
         self.context.flush()?;
         Ok(())
     }
@@ -809,66 +829,14 @@ impl WindowManager {
         if let Some(client) = self.client_state.get_client_mut(window) {
             client.mapped = false;
         }
+        let _ = self.set_wm_state(window, WmState::Withdrawn);
         self.context.flush()?;
         Ok(())
     }
 
     /// Safely requests a client to close via ICCCM `WM_DELETE_WINDOW`, or forcefully kills it.
     pub fn kill_client(&self, window: Window) -> Result<(), X11Error> {
-        // Query WM_PROTOCOLS property to check for WM_DELETE_WINDOW support
-        let reply = self
-            .context
-            .connection
-            .get_property(
-                false,
-                window,
-                self.atoms.wm_protocols,
-                AtomEnum::ATOM,
-                0,
-                32,
-            )?
-            .reply();
-
-        let mut supports_delete = false;
-        if let Ok(prop) = reply {
-            if let Some(atoms) = prop.value32() {
-                for atom in atoms {
-                    if atom == self.atoms.wm_delete_window {
-                        supports_delete = true;
-                        break;
-                    }
-                }
-            }
-        }
-
-        if supports_delete {
-            let data = [
-                self.atoms.wm_delete_window,
-                x11rb::CURRENT_TIME,
-                0,
-                0,
-                0,
-            ];
-            let event = ClientMessageEvent {
-                response_type: x11rb::protocol::xproto::CLIENT_MESSAGE_EVENT,
-                format: 32,
-                sequence: 0,
-                window,
-                type_: self.atoms.wm_protocols,
-                data: ClientMessageData::from(data),
-            };
-            self.context.connection.send_event(
-                false,
-                window,
-                EventMask::NO_EVENT,
-                event,
-            )?;
-        } else {
-            self.context.connection.kill_client(window)?;
-        }
-
-        self.context.flush()?;
-        Ok(())
+        self.send_wm_delete(window)
     }
 
     /// Moves and resizes a client window.
@@ -976,8 +944,24 @@ impl WindowManager {
         Ok(())
     }
 
-    /// Handles window property changes (e.g. WM_NAME, WM_HINTS).
-    pub fn handle_property_notify(&mut self, _event: &PropertyNotifyEvent) -> Result<(), X11Error> {
+    /// Handles window property changes (e.g. WM_NAME, WM_HINTS, WM_NORMAL_HINTS).
+    pub fn handle_property_notify(&mut self, event: &PropertyNotifyEvent) -> Result<(), X11Error> {
+        self.stats.property_notifications += 1;
+
+        if event.atom == AtomEnum::WM_HINTS.into() {
+            if let Ok(Some(hints)) = get_wm_hints(&self.context.connection, event.window) {
+                if hints.is_urgent {
+                    let _ = set_window_border_color(
+                        &self.context.connection,
+                        event.window,
+                        self.border_config.urgent_color,
+                    );
+                }
+            }
+        } else if event.atom == AtomEnum::WM_NORMAL_HINTS.into() {
+            let _ = get_wm_normal_hints(&self.context.connection, event.window);
+        }
+
         Ok(())
     }
 

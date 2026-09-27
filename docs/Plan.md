@@ -2910,6 +2910,38 @@ cycle_layout
 
 Do not implement every i3 layout feature.
 
+## Layout Comparison with i3
+
+The following table documents which layouts are implemented versus which are missing compared to i3:
+
+| Layout                         | i3? | tilo? | Description |
+|:-------------------------------|:---:|:-----:|:------------|
+| **MasterStack** (`layout master`)   | Yes | ✅ Done  | First window is master (left `master_ratio` of screen); remaining windows stack vertically on the right. |
+| **Vertical** (`layout vertical`)    | Yes | ✅ Done  | Divide screen width evenly by N. Windows placed side-by-side. |
+| **Horizontal** (`layout horizontal`)| Yes | ✅ Done  | Divide screen height evenly by N. Windows stacked one above the other. |
+| **Monocle** (`layout monocle`)      | Yes | ✅ Done  | All windows take full screen; only focused window is raised. |
+| **Floating** (`toggle floating`)    | Yes | ✅ Done  | Windows float freely at arbitrary positions, stacked above tiled windows. |
+| **Tabbed** (`layout tabbed`)        | Yes | ❌ Missing | All windows in the container share the full body area, with a **horizontal tab bar** rendered across the top showing client titles. The focused tab's window body is visible; other windows are hidden behind it. |
+| **Stacked** (`layout stacking`)     | Yes | ❌ Missing | Window title bars are stacked **vertically** in an accordion-style header list. The focused window expands to fill the remaining body area below the stacked title headers. |
+
+### Notes on Missing Layouts
+
+**Tabbed Layout** (`layout tabbed`):
+- Renders a horizontal row of tab buttons at the top of the container, one per managed window.
+- Each tab displays the window's `WM_NAME` or `_NET_WM_NAME` title.
+- The active tab's window body fills the area below the tab bar.
+- Switching tabs changes focus and remaps/unmaps the windows accordingly.
+- Requires X11 rendering of a tab decoration strip (or a separate drawable window per tab).
+
+**Stacked Layout** (`layout stacking`):
+- Renders a vertical list of title headers, one per managed window, in a column on one side.
+- The focused window occupies all remaining screen space after the headers are drawn.
+- Similar to Tabbed but oriented vertically for the title list rather than horizontally.
+- Often used for a side-panel workflow where context switching is frequent.
+
+Both layouts require a decoration/title rendering pass and are deferred to a later phase
+after Window Decoration (Phase 25) is implemented.
+
 ### Implementation Details
 
 #### Structs & Enums
@@ -2926,6 +2958,12 @@ pub enum LayoutType {
     Horizontal,
     /// One window takes up the whole screen.
     Monocle,
+    /// All windows share the full area with a horizontal tab bar at the top.
+    /// Requires window decoration rendering. Deferred to post-Phase 25.
+    Tabbed,
+    /// Window title bars stacked vertically; focused window takes remaining body.
+    /// Requires window decoration rendering. Deferred to post-Phase 25.
+    Stacked,
 }
 
 impl Default for LayoutType {
