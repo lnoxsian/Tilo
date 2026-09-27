@@ -100,6 +100,20 @@ impl ClientState {
             .collect()
     }
 
+    /// Returns the window IDs of all clients belonging to the specified workspace.
+    pub fn clients_on_workspace(&self, workspace: u32) -> Vec<Window> {
+        self.client_order
+            .iter()
+            .copied()
+            .filter(|&w| {
+                self.clients
+                    .get(&w)
+                    .map(|c| c.workspace == workspace)
+                    .unwrap_or(false)
+            })
+            .collect()
+    }
+
     /// Retrieves a reference to a tracked client.
     pub fn get_client(&self, window: Window) -> Option<&Client> {
         self.clients.get(&window)

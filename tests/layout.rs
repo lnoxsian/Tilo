@@ -6,6 +6,7 @@ use x11rb::connection::Connection;
 use x11rb::protocol::xproto::{
     ConnectionExt, CreateWindowAux, WindowClass,
 };
+use x11rb::wrapper::ConnectionExt as _;
 
 struct XephyrServer {
     child: Child,
@@ -128,6 +129,7 @@ fn test_tiling_live_in_xephyr() {
             )
             .unwrap();
             conn.flush().unwrap();
+            conn.sync().unwrap();
             win
         };
 

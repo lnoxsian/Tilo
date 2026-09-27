@@ -5,6 +5,7 @@ use x11rb::connection::Connection;
 use x11rb::protocol::xproto::{
     ConnectionExt, CreateWindowAux, WindowClass,
 };
+use x11rb::wrapper::ConnectionExt as _;
 
 struct XephyrServer {
     child: Child,
@@ -86,6 +87,7 @@ fn test_client_lifecycle_and_management_in_xephyr() {
             )
             .expect("Create win1 failed");
         client_conn.flush().unwrap();
+        client_conn.sync().unwrap();
 
         // Manage win1
         let managed = wm.manage_window(win1).expect("Manage win1 failed");

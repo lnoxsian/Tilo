@@ -6,6 +6,10 @@
 
 use crate::atoms::Atoms;
 use crate::client::{Client, ClientState};
+use crate::focus::{
+    find_neighbor, set_window_border_color, set_window_border_width, BorderConfig, Direction,
+    WorkspaceFocus,
+};
 use crate::layout::{apply_layout_with_border, calculate_master_stack, LayoutConfig, Rect};
 use crate::x11::{X11Context, X11Error};
 use x11rb::connection::Connection;
@@ -53,19 +57,31 @@ pub struct WindowManager {
     pub atoms: Atoms,
     /// Active tiling layout configuration (ratios, gaps, borders).
     pub layout_config: LayoutConfig,
+    /// Window border and focus appearance configuration.
+    pub border_config: BorderConfig,
+    /// Workspace-specific focus state tracker.
+    pub workspace_focus: WorkspaceFocus,
+    /// Currently active workspace ID.
+    pub current_workspace: u32,
 }
 
 impl WindowManager {
     /// Creates a new `WindowManager` wrapping the provided `X11Context`.
     pub fn new(context: X11Context) -> Result<Self, X11Error> {
         let atoms = Atoms::intern(&context.connection)?;
+        let border_config = BorderConfig::default();
+        let mut layout_config = LayoutConfig::default();
+        layout_config.border_width = border_config.width;
         Ok(Self {
             context,
             client_state: ClientState::new(),
             running: true,
             stats: EventStats::default(),
             atoms,
-            layout_config: LayoutConfig::default(),
+            layout_config,
+            border_config,
+            workspace_focus: WorkspaceFocus::new(),
+            current_workspace: 1,
         })
     }
 
@@ -199,7 +215,20 @@ impl WindowManager {
         // Construct client state
         let mut client = Client::new(window);
         client.mapped = true;
+        client.workspace = self.current_workspace;
         self.client_state.add_client(window, client);
+
+        // Set initial border width and normal (unfocused) border color
+        let _ = set_window_border_width(
+            &self.context.connection,
+            window,
+            self.border_config.width,
+        );
+        let _ = set_window_border_color(
+            &self.context.connection,
+            window,
+            self.border_config.normal_color,
+        );
 
         // Map, retile, and focus client window
         self.map_client(window)?;
@@ -212,13 +241,21 @@ impl WindowManager {
     /// Deregisters and unmanages a window, removing it from `client_state`.
     ///
     /// If the window was previously focused, input focus is transferred to the
-    /// previous window on the focus stack or reverted to the root window.
+    /// previous window on the workspace/focus stack or reverted to the root window.
     pub fn unmanage_window(&mut self, window: Window) -> Option<Client> {
+        let ws = self
+            .client_state
+            .get_client(window)
+            .map(|c| c.workspace)
+            .unwrap_or(self.current_workspace);
+        let next_ws_win = self.workspace_focus.remove_window(ws, window);
+        self.workspace_focus.remove_window_all(window);
+
         let removed = self.client_state.remove_client(window);
         if removed.is_some() {
             let _ = self.retile();
-            // Restore focus to previous client or root
-            if let Some(next_window) = self.client_state.focused_window() {
+            // Restore focus to previous client on workspace, or global stack, or root
+            if let Some(next_window) = next_ws_win.or_else(|| self.client_state.focused_window()) {
                 let _ = self.focus_client(next_window);
             } else {
                 let _ = self.context.connection.set_input_focus(
@@ -257,21 +294,135 @@ impl WindowManager {
         Ok(())
     }
 
-    /// Sets input focus to a specific client window and raises it.
+    /// Sets input focus to a specific client window, raises it, and updates border colors.
     pub fn focus_client(&mut self, window: Window) -> Result<(), X11Error> {
+        let prev_focused = self.client_state.focused_window();
+
+        // 1. Reset previous window's border to normal color
+        if let Some(prev) = prev_focused {
+            if prev != window && self.client_state.contains(prev) {
+                let _ = set_window_border_color(
+                    &self.context.connection,
+                    prev,
+                    self.border_config.normal_color,
+                );
+            }
+        }
+
+        // 2. Set new window's border to active focused color
+        let _ = set_window_border_color(
+            &self.context.connection,
+            window,
+            self.border_config.focused_color,
+        );
+
+        // 3. Set X11 input focus
         self.context.connection.set_input_focus(
             InputFocus::POINTER_ROOT,
             window,
             x11rb::CURRENT_TIME,
         )?;
 
-        // Raise window in stacking order
+        // 4. Raise window in stacking order
         let aux = ConfigureWindowAux::default().stack_mode(StackMode::ABOVE);
         let _ = self.context.connection.configure_window(window, &aux);
 
+        // 5. Send WM_TAKE_FOCUS if supported by client (ICCCM)
+        let _ = self.send_take_focus_if_supported(window);
+
+        // 6. Update internal focus tracking
         self.client_state.focus(window);
+        let ws = self
+            .client_state
+            .get_client(window)
+            .map(|c| c.workspace)
+            .unwrap_or(self.current_workspace);
+        self.workspace_focus.focus(ws, window);
+
         self.context.flush()?;
         Ok(())
+    }
+
+    /// Focuses the adjacent window in the given spatial direction on the active workspace.
+    ///
+    /// If `wrap` is true, wraps around to the opposite edge when no adjacent window exists.
+    pub fn focus_in_direction(
+        &mut self,
+        direction: Direction,
+        wrap: bool,
+    ) -> Result<Option<Window>, X11Error> {
+        let current = self.client_state.focused_window();
+        let visible_tiled = self.client_state.visible_tiled_clients();
+        if visible_tiled.is_empty() {
+            return Ok(None);
+        }
+
+        let screen_rect = Rect::new(
+            0,
+            0,
+            self.context.screen_width as u32,
+            self.context.screen_height as u32,
+        );
+        let rects = calculate_master_stack(&visible_tiled, &screen_rect, &self.layout_config);
+        let pairs: Vec<(Window, Rect)> = visible_tiled
+            .into_iter()
+            .zip(rects.into_iter())
+            .collect();
+
+        if let Some(target) = find_neighbor(direction, current, &pairs, wrap) {
+            self.focus_client(target)?;
+            Ok(Some(target))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Switches the active workspace, restoring the previously focused client on that workspace.
+    pub fn set_current_workspace(&mut self, workspace_id: u32) -> Result<(), X11Error> {
+        self.current_workspace = workspace_id;
+        if let Some(focused) = self.workspace_focus.focused_window_on(workspace_id) {
+            if self.client_state.contains(focused) {
+                self.focus_client(focused)?;
+            }
+        } else if let Some(&first) = self.client_state.clients_on_workspace(workspace_id).first() {
+            self.focus_client(first)?;
+        }
+        Ok(())
+    }
+
+    /// Sends ICCCM WM_TAKE_FOCUS ClientMessage if the client specifies support in WM_PROTOCOLS.
+    pub fn send_take_focus_if_supported(&self, window: Window) -> Result<bool, X11Error> {
+        let supports = if let Ok(reply) = self.context.connection.get_property(
+            false,
+            window,
+            self.atoms.wm_protocols,
+            AtomEnum::ATOM,
+            0,
+            32,
+        ) {
+            if let Ok(prop) = reply.reply() {
+                if let Some(mut value) = prop.value32() {
+                    value.any(|atom| atom == self.atoms.wm_take_focus)
+                } else {
+                    false
+                }
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+
+        if supports {
+            let _ = crate::focus::send_take_focus(
+                &self.context.connection,
+                window,
+                self.atoms.wm_protocols,
+                self.atoms.wm_take_focus,
+                x11rb::CURRENT_TIME,
+            );
+        }
+        Ok(supports)
     }
 
     /// Maps a client window, making it visible on the screen.
