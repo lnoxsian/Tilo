@@ -14,6 +14,7 @@ use crate::focus::{
 use crate::input::InputManager;
 use crate::keybind::{default_keybindings, Action};
 use crate::layout::{apply_layout_with_border, calculate_master_stack, LayoutConfig, Rect};
+use crate::rules::{apply_rules as apply_window_rules, RuleAction, WindowRule};
 use crate::workspace::{WorkspaceId, WorkspaceManager};
 use crate::x11::{X11Context, X11Error};
 use x11rb::connection::Connection;
@@ -71,6 +72,8 @@ pub struct WindowManager {
     pub input_manager: InputManager,
     /// Workspace manager tracking virtual desktops and client allocation.
     pub workspace_manager: WorkspaceManager,
+    /// Configured window rules for matching window properties.
+    pub rules: Vec<WindowRule>,
 }
 
 impl WindowManager {
@@ -96,6 +99,7 @@ impl WindowManager {
             current_workspace: 1,
             input_manager,
             workspace_manager,
+            rules: Vec::new(),
         })
     }
 
@@ -225,13 +229,35 @@ impl WindowManager {
             .connection
             .change_window_attributes(window, &aux);
 
+        // Evaluate window rules before finalizing client state
+        let rule_action = self.evaluate_window_rules(window)?;
+        let target_ws = rule_action.target_workspace.unwrap_or(self.current_workspace);
+        self.workspace_manager.get_or_create(target_ws);
+
         // Construct client state
         let mut client = Client::new(window);
-        client.mapped = true;
-        let ws = self.current_workspace;
-        client.workspace = ws;
-        self.workspace_manager.add_client(window, ws);
-        self.client_state.add_client(window, client);
+        client.workspace = target_ws;
+
+        if rule_action.floating == Some(true) {
+            let geom = calculate_default_floating_geometry(
+                self.context.screen_width,
+                self.context.screen_height,
+            );
+            client.set_floating(geom);
+
+            let aux = ConfigureWindowAux::new()
+                .x(geom.x)
+                .y(geom.y)
+                .width(geom.width)
+                .height(geom.height)
+                .border_width(self.border_config.width)
+                .stack_mode(StackMode::ABOVE);
+            let _ = self.context.connection.configure_window(window, &aux);
+        }
+
+        if rule_action.fullscreen == Some(true) {
+            client.fullscreen = true;
+        }
 
         // Set initial border width and normal (unfocused) border color
         let _ = set_window_border_width(
@@ -245,10 +271,22 @@ impl WindowManager {
             self.border_config.normal_color,
         );
 
-        // Map, retile, and focus client window
-        self.map_client(window)?;
-        self.retile()?;
-        self.focus_client(window)?;
+        let is_current_ws = target_ws == self.current_workspace;
+        if is_current_ws {
+            client.mapped = true;
+            self.workspace_manager.add_client(window, target_ws);
+            self.client_state.add_client(window, client);
+
+            // Map, retile, and focus client window on active workspace
+            self.map_client(window)?;
+            self.retile()?;
+            self.focus_client(window)?;
+        } else {
+            // Target is a background workspace: window remains unmapped until switched to
+            client.mapped = false;
+            self.workspace_manager.add_client(window, target_ws);
+            self.client_state.add_client(window, client);
+        }
 
         Ok(true)
     }
@@ -537,6 +575,37 @@ impl WindowManager {
     /// Returns the ID of the currently active workspace.
     pub fn current_workspace_id(&self) -> WorkspaceId {
         self.workspace_manager.current_id()
+    }
+
+    /// Adds a window rule to the window manager.
+    pub fn add_rule(&mut self, rule: WindowRule) {
+        self.rules.push(rule);
+    }
+
+    /// Replaces the configured window rules with a new set.
+    pub fn set_rules(&mut self, rules: Vec<WindowRule>) {
+        self.rules = rules;
+    }
+
+    /// Evaluates window rules for a window using the currently configured rules.
+    pub fn evaluate_window_rules(&self, window: Window) -> Result<RuleAction, X11Error> {
+        apply_window_rules(&self.context.connection, &self.atoms, window, &self.rules)
+    }
+
+    /// Evaluates window rules for a newly mapped client and applies the resulting actions.
+    ///
+    /// # Arguments
+    /// * `window` - The newly requested window.
+    /// * `rules` - A slice of configured `WindowRule` objects.
+    ///
+    /// # Returns
+    /// * `Result<RuleAction, X11Error>` - Returns a combined `RuleAction` containing all applied overrides.
+    pub fn apply_rules(
+        &self,
+        window: Window,
+        rules: &[WindowRule],
+    ) -> Result<RuleAction, X11Error> {
+        apply_window_rules(&self.context.connection, &self.atoms, window, rules)
     }
 
     /// Toggles the floating state of a specific window.
