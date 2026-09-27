@@ -44,10 +44,11 @@ test-xephyr-release: release
 	@echo "==> Starting nested Xephyr X11 test session (release)..."
 	$(SCRIPTS_DIR)/run-xephyr.sh --release
 
-# Run tilo inside Xephyr with demo windows (xclock, xcalc, xeyes) to test tiling layouts visually
+# Run tilo inside Xephyr with demo windows to test implemented layouts visually
+# Usage: make test-layout [LAYOUT=single|master|stack|floating|all]
 test-xephyr-layout: debug
-	@echo "==> Starting Xephyr layout test with sample windows..."
-	$(SCRIPTS_DIR)/run-xephyr.sh --layout-demo
+	@echo "==> Starting Xephyr layout demo..."
+	$(SCRIPTS_DIR)/run-xephyr.sh --test-layout $(LAYOUT)
 
 # Alias for test-xephyr-layout
 test-layout: test-xephyr-layout
@@ -55,7 +56,7 @@ test-layout: test-xephyr-layout
 # Run automated integration tests for implemented layouts (master/stack and floating)
 test-layouts:
 	@echo "==> Running automated layout integration tests..."
-	$(SCRIPTS_DIR)/run-xephyr.sh --test-layout
+	$(SCRIPTS_DIR)/run-xephyr.sh --automated-tests
 
 # Clean build artifacts
 clean:
