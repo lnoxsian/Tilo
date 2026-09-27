@@ -6,7 +6,10 @@
 use thiserror::Error;
 use x11rb::connection::Connection;
 use x11rb::errors::{ConnectError, ConnectionError, ReplyError, ReplyOrIdError};
-use x11rb::protocol::xproto::{Colormap, Screen, Visualid, Window};
+use x11rb::protocol::ErrorKind;
+use x11rb::protocol::xproto::{
+    ChangeWindowAttributesAux, Colormap, ConnectionExt, EventMask, Screen, Visualid, Window,
+};
 use x11rb::rust_connection::RustConnection;
 
 /// Represents errors that can occur during X11 initialization and operation.
@@ -31,6 +34,10 @@ pub enum X11Error {
     /// The requested screen number is not available on this X server.
     #[error("Screen {0} is not available")]
     InvalidScreen(usize),
+
+    /// Another window manager is already managing this display/root window.
+    #[error("Another window manager is already running")]
+    AnotherWmRunning,
 }
 
 /// Manages the underlying X11 connection and root screen details.
@@ -133,6 +140,50 @@ impl X11Context {
         self.connection.flush()?;
         Ok(())
     }
+
+    /// Claims the Window Manager role by registering for substructure redirection
+    /// and essential events on the root window.
+    ///
+    /// If another window manager is already running, the X server will return an
+    /// `Access` error. This function intercepts that error to exit gracefully.
+    ///
+    /// # Events Selected:
+    /// - `SubstructureRedirect`: Intercepts map and configure requests (core WM capability)
+    /// - `SubstructureNotify`: Receives notifications about child window creation/destruction
+    /// - `StructureNotify`: Receives notifications about root window changes
+    /// - `PropertyChange`: Tracks property changes on windows (e.g. titles, hints)
+    /// - `KeyPress`: Receives keyboard input for keybindings
+    /// - `ButtonPress`: Receives mouse button events for window interactions
+    /// - `PointerMotion`: Receives pointer movement during window dragging/resizing
+    ///
+    /// # Returns
+    /// `Ok(())` if ownership is successfully claimed. Returns `Err(X11Error::AnotherWmRunning)`
+    /// if another window manager is active, or another `X11Error` on protocol failure.
+    pub fn become_wm(&self) -> Result<(), X11Error> {
+        let event_mask = EventMask::SUBSTRUCTURE_REDIRECT
+            | EventMask::SUBSTRUCTURE_NOTIFY
+            | EventMask::STRUCTURE_NOTIFY
+            | EventMask::PROPERTY_CHANGE
+            | EventMask::KEY_PRESS
+            | EventMask::BUTTON_PRESS
+            | EventMask::POINTER_MOTION;
+
+        let values = ChangeWindowAttributesAux::default().event_mask(event_mask);
+
+        let cookie = self
+            .connection
+            .change_window_attributes(self.root_window, &values)?;
+
+        match cookie.check() {
+            Ok(()) => Ok(()),
+            Err(ReplyError::X11Error(ref err))
+                if err.error_kind == ErrorKind::Access || err.error_code == 10 =>
+            {
+                Err(X11Error::AnotherWmRunning)
+            }
+            Err(err) => Err(X11Error::from(err)),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -189,6 +240,32 @@ mod tests {
             assert_eq!(ctx1.screen_height, ctx2.screen_height);
             assert!(ctx1.flush().is_ok());
             assert!(ctx2.flush().is_ok());
+        }
+    }
+
+    #[test]
+    fn test_error_another_wm_running_display() {
+        let err = X11Error::AnotherWmRunning;
+        assert_eq!(err.to_string(), "Another window manager is already running");
+    }
+
+    #[test]
+    fn test_become_wm_on_active_display() {
+        if std::env::var("DISPLAY").is_ok() {
+            let ctx = X11Context::new().expect("Failed to connect to active DISPLAY");
+            // If another WM is running (like on normal desktop), become_wm must detect it
+            // and return AnotherWmRunning cleanly without crashing or panicking.
+            match ctx.become_wm() {
+                Ok(()) => {
+                    // Running in an environment without a WM (e.g. bare Xephyr/Xvfb)
+                }
+                Err(X11Error::AnotherWmRunning) => {
+                    // Successfully caught the existing window manager conflict
+                }
+                Err(other) => {
+                    panic!("Unexpected error from become_wm: {:?}", other);
+                }
+            }
         }
     }
 }
