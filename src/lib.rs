@@ -7,6 +7,7 @@ pub mod input;
 pub mod keybind;
 pub mod layout;
 pub mod wm;
+pub mod workspace;
 pub mod x11;
 
 

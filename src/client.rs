@@ -114,6 +114,20 @@ impl ClientState {
             .collect()
     }
 
+    /// Returns the window IDs of all mapped, non-floating, non-fullscreen clients on a given workspace.
+    pub fn visible_tiled_clients_on_workspace(&self, workspace: u32) -> Vec<Window> {
+        self.client_order
+            .iter()
+            .copied()
+            .filter(|&w| {
+                self.clients
+                    .get(&w)
+                    .map(|c| c.workspace == workspace && c.mapped && !c.floating && !c.fullscreen)
+                    .unwrap_or(false)
+            })
+            .collect()
+    }
+
     /// Retrieves a reference to a tracked client.
     pub fn get_client(&self, window: Window) -> Option<&Client> {
         self.clients.get(&window)

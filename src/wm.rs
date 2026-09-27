@@ -13,6 +13,7 @@ use crate::focus::{
 use crate::input::InputManager;
 use crate::keybind::{default_keybindings, Action};
 use crate::layout::{apply_layout_with_border, calculate_master_stack, LayoutConfig, Rect};
+use crate::workspace::{WorkspaceId, WorkspaceManager};
 use crate::x11::{X11Context, X11Error};
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::{
@@ -67,6 +68,8 @@ pub struct WindowManager {
     pub current_workspace: u32,
     /// Keyboard input manager handling global key grabs and actions.
     pub input_manager: InputManager,
+    /// Workspace manager tracking virtual desktops and client allocation.
+    pub workspace_manager: WorkspaceManager,
 }
 
 impl WindowManager {
@@ -78,6 +81,7 @@ impl WindowManager {
         layout_config.border_width = border_config.width;
         let mut input_manager = InputManager::new(default_keybindings());
         let _ = input_manager.setup(&context.connection, context.root_window);
+        let workspace_manager = WorkspaceManager::new();
 
         Ok(Self {
             context,
@@ -90,6 +94,7 @@ impl WindowManager {
             workspace_focus: WorkspaceFocus::new(),
             current_workspace: 1,
             input_manager,
+            workspace_manager,
         })
     }
 
@@ -222,7 +227,9 @@ impl WindowManager {
         // Construct client state
         let mut client = Client::new(window);
         client.mapped = true;
-        client.workspace = self.current_workspace;
+        let ws = self.current_workspace;
+        client.workspace = ws;
+        self.workspace_manager.add_client(window, ws);
         self.client_state.add_client(window, client);
 
         // Set initial border width and normal (unfocused) border color
@@ -251,10 +258,10 @@ impl WindowManager {
     /// previous window on the workspace/focus stack or reverted to the root window.
     pub fn unmanage_window(&mut self, window: Window) -> Option<Client> {
         let ws = self
-            .client_state
-            .get_client(window)
-            .map(|c| c.workspace)
+            .workspace_manager
+            .find_workspace_for(window)
             .unwrap_or(self.current_workspace);
+        self.workspace_manager.remove_client(window);
         let next_ws_win = self.workspace_focus.remove_window(ws, window);
         self.workspace_focus.remove_window_all(window);
 
@@ -275,9 +282,10 @@ impl WindowManager {
         removed
     }
 
-    /// Recalculates and applies the tiling layout to all visible managed clients.
+    /// Recalculates and applies the tiling layout to all visible managed clients on the active workspace.
     pub fn retile(&mut self) -> Result<(), X11Error> {
-        let visible_tiled = self.client_state.visible_tiled_clients();
+        let current_ws = self.current_workspace;
+        let visible_tiled = self.client_state.visible_tiled_clients_on_workspace(current_ws);
         if visible_tiled.is_empty() {
             return Ok(());
         }
@@ -353,13 +361,17 @@ impl WindowManager {
     /// Focuses the adjacent window in the given spatial direction on the active workspace.
     ///
     /// If `wrap` is true, wraps around to the opposite edge when no adjacent window exists.
+    /// Focuses the adjacent window in the given spatial direction on the active workspace.
+    ///
+    /// If `wrap` is true, wraps around to the opposite edge when no adjacent window exists.
     pub fn focus_in_direction(
         &mut self,
         direction: Direction,
         wrap: bool,
     ) -> Result<Option<Window>, X11Error> {
         let current = self.client_state.focused_window();
-        let visible_tiled = self.client_state.visible_tiled_clients();
+        let current_ws = self.current_workspace;
+        let visible_tiled = self.client_state.visible_tiled_clients_on_workspace(current_ws);
         if visible_tiled.is_empty() {
             return Ok(None);
         }
@@ -384,17 +396,140 @@ impl WindowManager {
         }
     }
 
+    /// Switches the currently active workspace to the specified target.
+    ///
+    /// Follows the Phase 8 switching algorithm:
+    /// 1. Unmaps (hides) all windows on the current workspace.
+    /// 2. Maps (shows) all windows on the target workspace.
+    /// 3. Updates active workspace state.
+    /// 4. Retiles the target workspace.
+    /// 5. Restores previous focus where possible or reverts to root.
+    pub fn switch_workspace(&mut self, target_id: WorkspaceId) -> Result<(), X11Error> {
+        let current_id = self.workspace_manager.current_id();
+        if target_id == current_id {
+            return Ok(());
+        }
+
+        // 1. Unmap all windows on current workspace
+        let current_windows = self
+            .workspace_manager
+            .get(current_id)
+            .map(|ws| ws.clients.clone())
+            .unwrap_or_default();
+
+        for &win in &current_windows {
+            if let Some(client) = self.client_state.get_client_mut(win) {
+                client.mapped = false;
+            }
+            let _ = self.context.connection.unmap_window(win);
+        }
+
+        // 2. Map all windows on target workspace
+        self.workspace_manager.get_or_create(target_id);
+        let target_windows = self
+            .workspace_manager
+            .get(target_id)
+            .map(|ws| ws.clients.clone())
+            .unwrap_or_default();
+
+        for &win in &target_windows {
+            if let Some(client) = self.client_state.get_client_mut(win) {
+                client.mapped = true;
+            }
+            let _ = self.context.connection.map_window(win);
+        }
+
+        // 3. Update active workspace IDs
+        self.workspace_manager.current_workspace_id = target_id;
+        self.current_workspace = target_id;
+
+        // 4. Retile target workspace
+        self.retile()?;
+
+        // 5. Restore focus
+        let target_focus = self
+            .workspace_focus
+            .focused_window_on(target_id)
+            .or_else(|| self.workspace_manager.get(target_id).and_then(|ws| ws.focused_client))
+            .or_else(|| target_windows.first().copied());
+
+        if let Some(focus_win) = target_focus {
+            if self.client_state.contains(focus_win) {
+                self.focus_client(focus_win)?;
+            }
+        } else {
+            let _ = self.context.connection.set_input_focus(
+                InputFocus::POINTER_ROOT,
+                self.context.root_window,
+                x11rb::CURRENT_TIME,
+            );
+        }
+
+        self.context.flush()?;
+        Ok(())
+    }
+
+    /// Moves a client window to a target workspace, hiding it from the screen
+    /// and retiling the remaining windows on the active workspace.
+    pub fn move_to_workspace(
+        &mut self,
+        window: Window,
+        target_id: WorkspaceId,
+    ) -> Result<(), X11Error> {
+        let current_id = self.workspace_manager.current_id();
+        if current_id == target_id {
+            return Ok(());
+        }
+
+        self.workspace_manager.move_client(window, target_id);
+
+        if let Some(client) = self.client_state.get_client_mut(window) {
+            client.workspace = target_id;
+            client.mapped = false;
+        }
+
+        // Unmap moved window from screen
+        let _ = self.context.connection.unmap_window(window);
+
+        // Restore focus on current workspace
+        let next_focus = self.workspace_focus.remove_window(current_id, window);
+        if let Some(next_win) = next_focus {
+            if self.client_state.contains(next_win) {
+                let _ = self.focus_client(next_win);
+            }
+        } else if let Some(&first) = self
+            .workspace_manager
+            .get(current_id)
+            .and_then(|ws| ws.clients.first())
+        {
+            let _ = self.focus_client(first);
+        } else {
+            let _ = self.context.connection.set_input_focus(
+                InputFocus::POINTER_ROOT,
+                self.context.root_window,
+                x11rb::CURRENT_TIME,
+            );
+        }
+
+        // Retile active workspace
+        self.retile()?;
+        self.context.flush()?;
+        Ok(())
+    }
+
     /// Switches the active workspace, restoring the previously focused client on that workspace.
     pub fn set_current_workspace(&mut self, workspace_id: u32) -> Result<(), X11Error> {
-        self.current_workspace = workspace_id;
-        if let Some(focused) = self.workspace_focus.focused_window_on(workspace_id) {
-            if self.client_state.contains(focused) {
-                self.focus_client(focused)?;
-            }
-        } else if let Some(&first) = self.client_state.clients_on_workspace(workspace_id).first() {
-            self.focus_client(first)?;
-        }
-        Ok(())
+        self.switch_workspace(workspace_id)
+    }
+
+    /// Checks if a workspace with the given ID exists.
+    pub fn workspace_exists(&self, id: WorkspaceId) -> bool {
+        self.workspace_manager.workspace_exists(id)
+    }
+
+    /// Returns the ID of the currently active workspace.
+    pub fn current_workspace_id(&self) -> WorkspaceId {
+        self.workspace_manager.current_id()
     }
 
     /// Sends ICCCM WM_TAKE_FOCUS ClientMessage if the client specifies support in WM_PROTOCOLS.
@@ -582,6 +717,13 @@ impl WindowManager {
 
     /// Handles the notification that a window was unmapped.
     pub fn handle_unmap_notify(&mut self, window: Window) -> Result<(), X11Error> {
+        // If the window belongs to an inactive workspace, it was unmapped intentionally
+        // by the window manager during a workspace switch. Keep it tracked on its workspace!
+        if let Some(ws) = self.workspace_manager.find_workspace_for(window) {
+            if ws != self.current_workspace {
+                return Ok(());
+            }
+        }
         let _ = self.unmap_client(window);
         Ok(())
     }
@@ -621,14 +763,11 @@ impl WindowManager {
                 let _ = self.swap_in_direction(dir)?;
             }
             Action::Workspace(ws) => {
-                let _ = self.set_current_workspace(ws)?;
+                let _ = self.switch_workspace(ws)?;
             }
             Action::MoveToWorkspace(ws) => {
                 if let Some(win) = self.client_state.focused_window() {
-                    if let Some(client) = self.client_state.get_client_mut(win) {
-                        client.workspace = ws;
-                    }
-                    let _ = self.retile();
+                    let _ = self.move_to_workspace(win, ws)?;
                 }
             }
             Action::ToggleFloating => {
@@ -664,7 +803,8 @@ impl WindowManager {
             Some(w) => w,
             None => return Ok(None),
         };
-        let visible_tiled = self.client_state.visible_tiled_clients();
+        let current_ws = self.current_workspace;
+        let visible_tiled = self.client_state.visible_tiled_clients_on_workspace(current_ws);
         if visible_tiled.len() < 2 {
             return Ok(None);
         }
