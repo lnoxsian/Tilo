@@ -435,6 +435,7 @@ impl WindowManager {
         }
 
         let launcher = self.launcher.as_mut().unwrap();
+        launcher.refresh_if_needed();
         launcher.rect = rect;
 
         if launcher.window_id == 0 {
@@ -566,30 +567,63 @@ impl WindowManager {
             None => return Ok(()),
         };
 
+        if let Some(ref mut launcher) = self.launcher {
+            launcher.refresh_if_needed_throttled(std::time::Duration::from_millis(500));
+        }
+
         if let Some(action) = crate::launcher::handle_launcher_keypress(event.detail, u16::from(event.state), mapping) {
             match action {
                 crate::launcher::LauncherAction::Cancel => {
                     let _ = self.close_launcher();
+                }
+                crate::launcher::LauncherAction::Refresh => {
+                    if let Some(ref mut launcher) = self.launcher {
+                        launcher.refresh();
+                    }
+                    let _ = self.render_launcher();
                 }
                 crate::launcher::LauncherAction::Execute => {
                     let cmd_to_spawn = if let Some(ref launcher) = self.launcher {
                         let results = launcher.filtered_results(8);
                         let trimmed = launcher.query.trim();
                         if trimmed.is_empty() {
-                            results.get(launcher.selected_index).cloned()
-                        } else if trimmed.contains(' ') {
-                            // User typed arguments: e.g. "firefox --private-window"
-                            // If first word matches selected result, use selected binary with the typed arguments
-                            let first_word = trimmed.split_whitespace().next().unwrap_or("");
-                            let args_part = &trimmed[first_word.len()..];
-                            let binary = if let Some(sel) = results.get(launcher.selected_index) {
-                                sel.as_str()
-                            } else {
-                                first_word
-                            };
-                            Some(format!("{}{}", binary, args_part))
+                            results.get(launcher.selected_index).map(|s| launcher.command_for(s))
                         } else if let Some(selected) = results.get(launcher.selected_index) {
-                            Some(selected.clone())
+                            let sel_cmd = launcher.command_for(selected);
+                            if !trimmed.contains(' ') {
+                                // User just typed a single-word filter (e.g. "fire", "vlc", "code")
+                                Some(sel_cmd)
+                            } else {
+                                // Query has spaces. Check if it's arguments or a multi-word search query.
+                                let first_word = trimmed.split_whitespace().next().unwrap_or("");
+                                let sel_binary = sel_cmd.split_whitespace().next().unwrap_or(&sel_cmd);
+                                let sel_bin_name = std::path::Path::new(sel_binary)
+                                    .file_name()
+                                    .and_then(|n| n.to_str())
+                                    .unwrap_or(sel_binary);
+
+                                if trimmed.eq_ignore_ascii_case(selected) {
+                                    // User typed the exact full name (e.g. "Visual Studio Code")
+                                    Some(sel_cmd)
+                                } else if first_word.eq_ignore_ascii_case(selected)
+                                    || first_word.eq_ignore_ascii_case(sel_binary)
+                                    || first_word.eq_ignore_ascii_case(sel_bin_name)
+                                {
+                                    // User typed binary followed by args (e.g. "firefox --private-window")
+                                    let args_part = &trimmed[first_word.len()..];
+                                    Some(format!("{}{}", sel_cmd, args_part))
+                                } else if trimmed.to_lowercase().starts_with(&selected.to_lowercase())
+                                    && trimmed.len() > selected.len()
+                                    && trimmed[selected.len()..].starts_with(' ')
+                                {
+                                    // User typed selected name followed by args
+                                    let args_part = &trimmed[selected.len()..];
+                                    Some(format!("{}{}", sel_cmd, args_part))
+                                } else {
+                                    // Multi-word search query matching the selected item (e.g. "Visual Studio")
+                                    Some(sel_cmd)
+                                }
+                            }
                         } else {
                             Some(trimmed.to_string())
                         }

@@ -7,14 +7,16 @@
 //! - Keyboard state machine and actions ([`LauncherAction`], [`handle_launcher_keypress`]).
 //! - Double-buffered overlay window with search input and filtered result list.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::os::unix::fs::PermissionsExt;
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::time::SystemTime;
 
 use crate::input::KeyboardMapping;
 use crate::keybind::{
     MOD_CONTROL, MOD_SUPER, XK_A, XK_B, XK_BACKSPACE, XK_C, XK_D, XK_DOWN, XK_E,
-    XK_END, XK_ESCAPE, XK_F, XK_HOME, XK_LEFT, XK_N, XK_P, XK_RETURN, XK_RIGHT,
+    XK_END, XK_ESCAPE, XK_F, XK_F5, XK_HOME, XK_LEFT, XK_N, XK_P, XK_R, XK_RETURN, XK_RIGHT,
     XK_TAB, XK_U, XK_UP, XK_W,
 };
 use crate::layout::Rect;
@@ -38,12 +40,23 @@ pub const LAUNCHER_HEIGHT: u16 = 256;
 /// Maximum number of suggestions displayed by default.
 pub const LAUNCHER_MAX_RESULTS: usize = 8;
 
+/// Cached scan results for a single directory (either binary PATH or desktop application directory).
+#[derive(Debug, Clone, Default)]
+pub struct DirCacheEntry {
+    /// Modification timestamp recorded for this directory.
+    pub mtime: Option<SystemTime>,
+    /// Discovered item names in this directory.
+    pub items: Vec<String>,
+    /// Discovered application command mappings in this directory.
+    pub commands: HashMap<String, String>,
+}
+
 /// Core configuration and state for the application launcher.
 #[derive(Debug)]
 pub struct Launcher {
     /// X11 window ID for the launcher overlay (0 if unallocated).
     pub window_id: u32,
-    /// Cached list of executable names discovered in `$PATH`.
+    /// Cached list of executable and application names.
     pub executable_cache: Vec<String>,
     /// Current search query typed by the user.
     pub query: String,
@@ -59,15 +72,26 @@ pub struct Launcher {
     pub renderer: Option<Renderer>,
     /// Visual color scheme.
     pub color_scheme: ColorScheme,
+    /// Mapping of application display names (or desktop IDs) to executable command lines.
+    pub app_commands: HashMap<String, String>,
+    /// Monitored directories and their last-seen modification times.
+    pub dir_mtimes: HashMap<PathBuf, Option<SystemTime>>,
+    /// Monitored directory paths kept in order to avoid re-allocations on check.
+    pub monitored_dirs: Vec<PathBuf>,
+    /// Last value of the PATH environment variable.
+    pub last_path_var: String,
+    /// Per-directory incremental cache.
+    pub dir_cache: HashMap<PathBuf, DirCacheEntry>,
+    /// Timestamp of last filesystem check for rapid keystroke throttling.
+    pub last_check_instant: Option<std::time::Instant>,
 }
 
 impl Launcher {
-    /// Creates a new `Launcher` instance with scanned `$PATH` executables.
+    /// Creates a new `Launcher` instance and scans for executables and applications.
     pub fn new() -> Self {
-        let executable_cache = scan_path().unwrap_or_default();
-        Self {
+        let mut launcher = Self {
             window_id: 0,
-            executable_cache,
+            executable_cache: Vec::new(),
             query: String::new(),
             cursor_position: 0,
             selected_index: 0,
@@ -75,7 +99,163 @@ impl Launcher {
             rect: Rect::new(0, 0, LAUNCHER_WIDTH as u32, LAUNCHER_HEIGHT as u32),
             renderer: None,
             color_scheme: ColorScheme::default(),
+            app_commands: HashMap::new(),
+            dir_mtimes: HashMap::new(),
+            monitored_dirs: Vec::new(),
+            last_path_var: String::new(),
+            dir_cache: HashMap::new(),
+            last_check_instant: None,
+        };
+        launcher.refresh();
+        launcher
+    }
+
+    /// Returns the executable command line for a given item name.
+    ///
+    /// If the item is an application display name, returns its associated clean command.
+    /// Otherwise returns the item name itself as fallback.
+    pub fn command_for(&self, name: &str) -> String {
+        self.app_commands
+            .get(name)
+            .cloned()
+            .unwrap_or_else(|| name.to_string())
+    }
+
+    /// Refreshes the executable and application cache using the specified PATH string and desktop directories.
+    ///
+    /// Optimizes rescan by only reading directories whose `mtime` has changed,
+    /// reusing cached results for unmodified directories.
+    pub fn refresh_from(&mut self, path_var: &str, desktop_dirs: &[PathBuf]) -> bool {
+        self.last_path_var = path_var.to_string();
+
+        let mut monitored = Vec::new();
+        let mut bin_dirs_set = HashSet::new();
+        for p in path_var.split(':') {
+            if !p.is_empty() {
+                let pb = PathBuf::from(p);
+                bin_dirs_set.insert(pb.clone());
+                monitored.push(pb);
+            }
         }
+        for d in desktop_dirs {
+            monitored.push(d.clone());
+        }
+        let mut seen = HashSet::new();
+        monitored.retain(|d| seen.insert(d.clone()));
+        self.monitored_dirs = monitored;
+
+        let mut any_changed = false;
+        let mut new_mtimes = HashMap::with_capacity(self.monitored_dirs.len());
+
+        for dir in &self.monitored_dirs {
+            let current_mtime = std::fs::metadata(dir).and_then(|m| m.modified()).ok();
+            new_mtimes.insert(dir.clone(), current_mtime);
+
+            let cached_mtime = self.dir_cache.get(dir).and_then(|e| e.mtime);
+            if cached_mtime != current_mtime || !self.dir_cache.contains_key(dir) {
+                // Only scan this specific directory because it changed
+                any_changed = true;
+                let (items, commands) = if bin_dirs_set.contains(dir) {
+                    scan_single_bin_dir(dir)
+                } else {
+                    scan_single_desktop_dir(dir)
+                };
+                self.dir_cache.insert(
+                    dir.clone(),
+                    DirCacheEntry {
+                        mtime: current_mtime,
+                        items,
+                        commands,
+                    },
+                );
+            }
+        }
+
+        self.dir_mtimes = new_mtimes;
+
+        // Clean up any removed directories from cache
+        self.dir_cache.retain(|k, _| self.monitored_dirs.contains(k));
+
+        // Re-merge all cached entries
+        let mut all_names = HashSet::new();
+        let mut app_commands = HashMap::new();
+
+        for dir in &self.monitored_dirs {
+            if let Some(entry) = self.dir_cache.get(dir) {
+                for item in &entry.items {
+                    all_names.insert(item.clone());
+                }
+                for (k, v) in &entry.commands {
+                    if !app_commands.contains_key(k) {
+                        app_commands.insert(k.clone(), v.clone());
+                    }
+                }
+            }
+        }
+
+        let mut sorted: Vec<String> = all_names.into_iter().collect();
+        sorted.sort();
+
+        self.executable_cache = sorted;
+        self.app_commands = app_commands;
+
+        let count = self.filtered_results(LAUNCHER_MAX_RESULTS).len();
+        if self.selected_index >= count {
+            self.selected_index = count.saturating_sub(1);
+        }
+
+        any_changed
+    }
+
+    /// Checks if any monitored directory or PATH string has changed compared to the last scan.
+    ///
+    /// Avoids heap allocations when no changes are detected.
+    pub fn refresh_if_needed_from(&mut self, path_var: &str, desktop_dirs: &[PathBuf]) -> bool {
+        if path_var != self.last_path_var || self.monitored_dirs.is_empty() {
+            return self.refresh_from(path_var, desktop_dirs);
+        }
+
+        let mut changed = false;
+        for dir in &self.monitored_dirs {
+            let current_mtime = std::fs::metadata(dir).and_then(|m| m.modified()).ok();
+            if self.dir_mtimes.get(dir) != Some(&current_mtime) {
+                changed = true;
+                break;
+            }
+        }
+
+        if changed {
+            self.refresh_from(path_var, desktop_dirs)
+        } else {
+            false
+        }
+    }
+
+    /// Refreshes the executable and application cache immediately using system `$PATH` and desktop directories.
+    pub fn refresh(&mut self) -> bool {
+        let path_var = std::env::var("PATH").unwrap_or_else(|_| "/usr/local/bin:/usr/bin:/bin".to_string());
+        let desktop_dirs = get_desktop_directories();
+        self.refresh_from(&path_var, &desktop_dirs)
+    }
+
+    /// Checks if any system directory in `$PATH` or desktop applications has changed.
+    pub fn refresh_if_needed(&mut self) -> bool {
+        let current_path = std::env::var("PATH").unwrap_or_default();
+        let desktop_dirs = get_desktop_directories();
+        self.refresh_if_needed_from(&current_path, &desktop_dirs)
+    }
+
+    /// Checks for directory modifications with rate-limiting to prevent excessive
+    /// filesystem stat calls during rapid keystrokes.
+    pub fn refresh_if_needed_throttled(&mut self, min_interval: std::time::Duration) -> bool {
+        let now = std::time::Instant::now();
+        if let Some(last) = self.last_check_instant {
+            if now.duration_since(last) < min_interval {
+                return false;
+            }
+        }
+        self.last_check_instant = Some(now);
+        self.refresh_if_needed()
     }
 
     /// Calculates the exact window height required for a given number of result items with no empty space.
@@ -309,6 +489,30 @@ pub fn scan_path() -> Result<Vec<String>, TiloError> {
     scan_path_from(&path_var)
 }
 
+/// Scans a single binary directory for executable files.
+pub fn scan_single_bin_dir(dir: &std::path::Path) -> (Vec<String>, HashMap<String, String>) {
+    let mut items = Vec::new();
+    let mut commands = HashMap::new();
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let file_path = entry.path();
+            if let Ok(metadata) = file_path.metadata() {
+                if (metadata.is_file() || metadata.file_type().is_symlink())
+                    && (metadata.permissions().mode() & 0o111 != 0)
+                {
+                    if let Some(file_name) = file_path.file_name().and_then(|n| n.to_str()) {
+                        let name_str = file_name.to_string();
+                        commands.insert(name_str.clone(), name_str.clone());
+                        items.push(name_str);
+                    }
+                }
+            }
+        }
+    }
+    items.sort();
+    (items, commands)
+}
+
 /// Scans the specified colon-delimited path string for executable files.
 pub fn scan_path_from(path_var: &str) -> Result<Vec<String>, TiloError> {
     let mut executables = HashSet::new();
@@ -319,16 +523,303 @@ pub fn scan_path_from(path_var: &str) -> Result<Vec<String>, TiloError> {
             continue;
         }
 
-        if let Ok(entries) = std::fs::read_dir(dir_path) {
+        let (items, _) = scan_single_bin_dir(dir_path);
+        for item in items {
+            executables.insert(item);
+        }
+    }
+
+    let mut sorted: Vec<String> = executables.into_iter().collect();
+    sorted.sort();
+    Ok(sorted)
+}
+
+// ---------------------------------------------------------------------------
+// PATH & Desktop Application Scanning and Caching
+// ---------------------------------------------------------------------------
+
+/// Returns the list of standard desktop entry directories to search for `.desktop` files.
+pub fn get_desktop_directories() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    let home = std::env::var("HOME").unwrap_or_default();
+
+    // 1. User application directory: $XDG_DATA_HOME/applications or ~/.local/share/applications
+    if let Ok(data_home) = std::env::var("XDG_DATA_HOME") {
+        if !data_home.is_empty() {
+            dirs.push(PathBuf::from(data_home).join("applications"));
+        }
+    } else if !home.is_empty() {
+        dirs.push(PathBuf::from(&home).join(".local/share/applications"));
+    }
+
+    // 2. User flatpak exports
+    if !home.is_empty() {
+        dirs.push(PathBuf::from(&home).join(".local/share/flatpak/exports/share/applications"));
+    }
+
+    // 3. System application directories: $XDG_DATA_DIRS/applications or defaults
+    if let Ok(data_dirs) = std::env::var("XDG_DATA_DIRS") {
+        for dir in data_dirs.split(':') {
+            if !dir.is_empty() {
+                dirs.push(PathBuf::from(dir).join("applications"));
+            }
+        }
+    } else {
+        dirs.push(PathBuf::from("/usr/local/share/applications"));
+        dirs.push(PathBuf::from("/usr/share/applications"));
+    }
+
+    // 4. System flatpak and snap exports
+    dirs.push(PathBuf::from("/var/lib/flatpak/exports/share/applications"));
+    dirs.push(PathBuf::from("/var/lib/snapd/desktop/applications"));
+
+    // 5. Nix profiles (if available)
+    if !home.is_empty() {
+        dirs.push(PathBuf::from(&home).join(".nix-profile/share/applications"));
+    }
+    dirs.push(PathBuf::from("/run/current-system/sw/share/applications"));
+
+    // Deduplicate preserving order
+    let mut seen = HashSet::new();
+    dirs.retain(|d| seen.insert(d.clone()));
+    dirs
+}
+
+/// Returns all directories monitored for dynamic launcher refreshes,
+/// including all `$PATH` directories and all desktop application directories.
+pub fn get_monitored_directories() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+
+    // PATH directories
+    let path_var = std::env::var("PATH").unwrap_or_else(|_| "/usr/local/bin:/usr/bin:/bin".to_string());
+    for p in path_var.split(':') {
+        if !p.is_empty() {
+            dirs.push(PathBuf::from(p));
+        }
+    }
+
+    // Desktop directories
+    dirs.extend(get_desktop_directories());
+
+    // Deduplicate
+    let mut seen = HashSet::new();
+    dirs.retain(|d| seen.insert(d.clone()));
+    dirs
+}
+
+fn is_field_code(arg: &str) -> bool {
+    matches!(
+        arg,
+        "%f" | "%F"
+            | "%u"
+            | "%U"
+            | "%d"
+            | "%D"
+            | "%n"
+            | "%N"
+            | "%i"
+            | "%c"
+            | "%k"
+            | "%v"
+            | "%m"
+            | "@@"
+            | "@@u"
+            | "@@f"
+            | "@@U"
+            | "@@F"
+    ) || (arg.starts_with('%')
+        && arg.len() == 2
+        && arg.chars().nth(1).map_or(false, |c| {
+            matches!(
+                c,
+                'f' | 'F' | 'u' | 'U' | 'd' | 'D' | 'n' | 'N' | 'i' | 'c' | 'k' | 'v' | 'm'
+            )
+        }))
+}
+
+/// Strips field codes (e.g. `%u`, `%U`, `%f`, `%F`, `@@`) from an `Exec` line in a `.desktop` file.
+pub fn clean_exec_field(raw: &str) -> String {
+    let tokens = parse_command_line(raw);
+    let mut clean_tokens = Vec::with_capacity(tokens.len());
+
+    for token in tokens {
+        if is_field_code(&token) {
+            continue;
+        }
+        if token == "%%" {
+            clean_tokens.push("%".to_string());
+        } else {
+            clean_tokens.push(token);
+        }
+    }
+
+    let mut result = String::new();
+    for token in clean_tokens {
+        if !result.is_empty() {
+            result.push(' ');
+        }
+        if token.contains(' ') || token.contains('\t') {
+            result.push('"');
+            result.push_str(&token.replace('\"', "\\\""));
+            result.push('"');
+        } else {
+            result.push_str(&token);
+        }
+    }
+    result
+}
+
+/// Parses the `[Desktop Entry]` section of a `.desktop` file.
+///
+/// Returns `Some((name, clean_exec))` if the file represents a visible application,
+/// or `None` if `NoDisplay=true`, `Hidden=true`, `Type` is not `Application`,
+/// or required fields are missing.
+pub fn parse_desktop_file(content: &str) -> Option<(String, String)> {
+    let mut in_desktop_entry = false;
+    let mut name = None;
+    let mut exec = None;
+    let mut is_application = true;
+    let mut no_display = false;
+    let mut hidden = false;
+
+    for line in content.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+
+        if line.starts_with('[') && line.ends_with(']') {
+            if line == "[Desktop Entry]" {
+                in_desktop_entry = true;
+            } else if in_desktop_entry {
+                // Done parsing [Desktop Entry]
+                break;
+            }
+            continue;
+        }
+
+        if !in_desktop_entry {
+            continue;
+        }
+
+        if let Some((key, val)) = line.split_once('=') {
+            let key = key.trim();
+            let val = val.trim();
+
+            match key {
+                "Type" => {
+                    if !val.eq_ignore_ascii_case("Application") {
+                        is_application = false;
+                    }
+                }
+                "NoDisplay" => {
+                    if val.eq_ignore_ascii_case("true") {
+                        no_display = true;
+                    }
+                }
+                "Hidden" => {
+                    if val.eq_ignore_ascii_case("true") {
+                        hidden = true;
+                    }
+                }
+                "Name" => {
+                    // Only standard Name, not Name[lang]
+                    if name.is_none() {
+                        name = Some(val.to_string());
+                    }
+                }
+                "Exec" => {
+                    if exec.is_none() {
+                        exec = Some(val.to_string());
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    if !is_application || no_display || hidden {
+        return None;
+    }
+
+    let name = name?;
+    let exec = exec?;
+    let clean_exec = clean_exec_field(&exec);
+    if clean_exec.is_empty() {
+        return None;
+    }
+
+    Some((name, clean_exec))
+}
+
+/// Scans a single desktop entry directory for `.desktop` application files.
+pub fn scan_single_desktop_dir(dir: &std::path::Path) -> (Vec<String>, HashMap<String, String>) {
+    let mut items = Vec::new();
+    let mut commands = HashMap::new();
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|s| s.to_str()) == Some("desktop") {
+                if let Ok(content) = std::fs::read_to_string(&path) {
+                    if let Some((name, clean_exec)) = parse_desktop_file(&content) {
+                        commands.insert(name.clone(), clean_exec.clone());
+                        items.push(name);
+
+                        let first_word = clean_exec.split_whitespace().next().unwrap_or("");
+                        let binary_name = std::path::Path::new(first_word)
+                            .file_name()
+                            .and_then(|n| n.to_str())
+                            .unwrap_or("");
+                        if !binary_name.is_empty() && !commands.contains_key(binary_name) {
+                            commands.insert(binary_name.to_string(), clean_exec);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    items.sort();
+    (items, commands)
+}
+
+/// Scans desktop entry directories and returns application names and their clean execution commands.
+pub fn scan_desktop_dirs(dirs: &[PathBuf]) -> (Vec<String>, HashMap<String, String>) {
+    let mut all_names = HashSet::new();
+    let mut app_commands = HashMap::new();
+    let mut seen_desktop_files = HashSet::new();
+
+    for dir in dirs {
+        if !dir.is_dir() {
+            continue;
+        }
+        if let Ok(entries) = std::fs::read_dir(dir) {
             for entry in entries.flatten() {
-                let file_path = entry.path();
-                if let Ok(metadata) = file_path.metadata() {
-                    // Check if file is executable by user, group, or others
-                    if (metadata.is_file() || metadata.file_type().is_symlink())
-                        && (metadata.permissions().mode() & 0o111 != 0)
-                    {
-                        if let Some(file_name) = file_path.file_name().and_then(|n| n.to_str()) {
-                            executables.insert(file_name.to_string());
+                let path = entry.path();
+                if path.extension().and_then(|s| s.to_str()) == Some("desktop") {
+                    let file_name = match path.file_name().and_then(|s| s.to_str()) {
+                        Some(f) => f.to_string(),
+                        None => continue,
+                    };
+
+                    // Don't re-parse lower priority duplicates of the same desktop file
+                    if !seen_desktop_files.insert(file_name) {
+                        continue;
+                    }
+
+                    if let Ok(content) = std::fs::read_to_string(&path) {
+                        if let Some((name, clean_exec)) = parse_desktop_file(&content) {
+                            app_commands.insert(name.clone(), clean_exec.clone());
+                            all_names.insert(name);
+
+                            // Also index the binary name if not already in app_commands
+                            let first_word = clean_exec.split_whitespace().next().unwrap_or("");
+                            let binary_name = std::path::Path::new(first_word)
+                                .file_name()
+                                .and_then(|n| n.to_str())
+                                .unwrap_or("");
+                            if !binary_name.is_empty() && !app_commands.contains_key(binary_name) {
+                                app_commands.insert(binary_name.to_string(), clean_exec);
+                            }
                         }
                     }
                 }
@@ -336,9 +827,37 @@ pub fn scan_path_from(path_var: &str) -> Result<Vec<String>, TiloError> {
         }
     }
 
-    let mut sorted: Vec<String> = executables.into_iter().collect();
+    let mut sorted: Vec<String> = all_names.into_iter().collect();
     sorted.sort();
-    Ok(sorted)
+    (sorted, app_commands)
+}
+
+/// Scans both `$PATH` executables and desktop applications.
+///
+/// Returns a tuple of:
+/// - A sorted list of unique searchable names.
+/// - A map from application names and binary names to executable command lines.
+pub fn scan_all_executables(path_var: &str) -> (Vec<String>, HashMap<String, String>) {
+    let mut all_names = HashSet::new();
+    let mut app_commands = HashMap::new();
+
+    // 1. Scan PATH executables
+    if let Ok(path_execs) = scan_path_from(path_var) {
+        for exe in path_execs {
+            app_commands.insert(exe.clone(), exe.clone());
+            all_names.insert(exe);
+        }
+    }
+
+    // 2. Scan desktop directories
+    let desktop_dirs = get_desktop_directories();
+    let (desktop_names, desktop_cmds) = scan_desktop_dirs(&desktop_dirs);
+    all_names.extend(desktop_names);
+    app_commands.extend(desktop_cmds);
+
+    let mut sorted: Vec<String> = all_names.into_iter().collect();
+    sorted.sort();
+    (sorted, app_commands)
 }
 
 // ---------------------------------------------------------------------------
@@ -423,44 +942,106 @@ pub fn spawn_app(app_name: &str) -> Result<u32, TiloError> {
 ///
 /// Higher scores represent better matches. Returns `None` if the target
 /// does not contain all query characters in sequence.
+/// Optimized to stream characters without heap allocating `Vec<char>`.
 pub fn fuzzy_match(query: &str, target: &str) -> Option<i32> {
-    let query_chars: Vec<char> = query.chars().collect();
-    let target_chars: Vec<char> = target.chars().collect();
-
-    if query_chars.is_empty() {
+    if query.is_empty() {
         return Some(0);
     }
 
-    let mut q_idx = 0;
+    let mut q_chars = query.chars();
+    let mut current_q = match q_chars.next() {
+        Some(c) => c,
+        None => return Some(0),
+    };
+
     let mut score = 0;
     let mut consecutive = 0;
+    let mut prev_c = '\0';
+    let mut t_idx = 0;
 
-    for (t_idx, &t_c) in target_chars.iter().enumerate() {
-        if q_idx < query_chars.len() && t_c.eq_ignore_ascii_case(&query_chars[q_idx]) {
+    for t_c in target.chars() {
+        if t_c.eq_ignore_ascii_case(&current_q) {
             score += 10;
             score += consecutive * 5;
             if t_idx == 0 {
                 score += 15; // Starting character bonus
-            } else if target_chars[t_idx - 1] == '-'
-                || target_chars[t_idx - 1] == '_'
-                || target_chars[t_idx - 1] == '.'
-            {
+            } else if prev_c == '-' || prev_c == '_' || prev_c == '.' || prev_c == ' ' {
                 score += 10; // Word boundary bonus (e.g. "fc" matching "firewall-cmd")
             }
             consecutive += 1;
-            q_idx += 1;
-
-            if q_idx == query_chars.len() {
-                return Some(score);
+            match q_chars.next() {
+                Some(next_q) => current_q = next_q,
+                None => return Some(score),
             }
         } else {
             consecutive = 0;
             score -= 1; // Gap penalty
         }
+        prev_c = t_c;
+        t_idx += 1;
     }
 
-    if q_idx == query_chars.len() {
-        Some(score)
+    None
+}
+
+#[inline]
+fn starts_with_ignore_case(haystack: &str, needle: &str) -> bool {
+    if needle.len() > haystack.len() {
+        return false;
+    }
+    haystack
+        .chars()
+        .zip(needle.chars())
+        .all(|(h, n)| h.eq_ignore_ascii_case(&n))
+}
+
+#[inline]
+fn find_ignore_case(haystack: &str, needle: &str) -> Option<usize> {
+    if needle.is_empty() {
+        return Some(0);
+    }
+    let needle_chars: Vec<char> = needle.chars().collect();
+    let haystack_chars: Vec<char> = haystack.chars().collect();
+    if needle_chars.len() > haystack_chars.len() {
+        return None;
+    }
+    for i in 0..=haystack_chars.len() - needle_chars.len() {
+        if haystack_chars[i..i + needle_chars.len()]
+            .iter()
+            .zip(needle_chars.iter())
+            .all(|(a, b)| a.eq_ignore_ascii_case(b))
+        {
+            return Some(i);
+        }
+    }
+    None
+}
+
+fn score_item(item: &str, query: &str) -> Option<i32> {
+    if query.is_empty() {
+        return None;
+    }
+
+    if item.eq_ignore_ascii_case(query) {
+        // Exact match
+        Some(5000)
+    } else if starts_with_ignore_case(item, query) {
+        // High priority for prefix matches
+        Some(3000 - (item.len() as i32 * 2))
+    } else if let Some(fuzzy_score) = fuzzy_match(query, item) {
+        let first_char = query.chars().next();
+        let starts_with_first = first_char.map_or(false, |fc| {
+            item.chars().next().map_or(false, |ic| ic.eq_ignore_ascii_case(&fc))
+        });
+        if starts_with_first {
+            Some(1500 + fuzzy_score * 10 - (item.len() as i32))
+        } else if let Some(pos) = find_ignore_case(item, query) {
+            Some(500 - (pos as i32 * 5) - (item.len() as i32))
+        } else {
+            Some(fuzzy_score * 5 - (item.len() as i32))
+        }
+    } else if let Some(pos) = find_ignore_case(item, query) {
+        Some(500 - (pos as i32 * 5) - (item.len() as i32))
     } else {
         None
     }
@@ -468,44 +1049,35 @@ pub fn fuzzy_match(query: &str, target: &str) -> Option<i32> {
 
 /// Filters and ranks cached executable names against the user query.
 ///
-/// If the query contains arguments (e.g. `firefox --private-window`),
-/// only the binary portion is used to match against the executable cache.
+/// Matches against the full query (allowing multi-word searches like "Visual Studio Code"),
+/// as well as the initial binary name if CLI arguments are provided (e.g. `firefox --private-window`).
 pub fn filter_executables(cache: &[String], query: &str, max_results: usize) -> Vec<String> {
-    let binary_query = query.split_whitespace().next().unwrap_or("").trim();
-    if binary_query.is_empty() {
+    let trimmed = query.trim();
+    if trimmed.is_empty() {
         return cache.iter().take(max_results).cloned().collect();
     }
 
-    let query_lower = binary_query.to_lowercase();
-    let first_char = query_lower.chars().next();
+    let binary_query = trimmed.split_whitespace().next().unwrap_or("").trim();
+    let has_args = binary_query.len() < trimmed.len();
+
     let mut scored: Vec<(&String, i32)> = Vec::new();
 
     for item in cache {
-        let item_lower = item.to_lowercase();
-
-        if item_lower == query_lower {
-            // Exact match
-            scored.push((item, 5000));
-        } else if item_lower.starts_with(&query_lower) {
-            // High priority for prefix matches
-            let score = 3000 - (item.len() as i32 * 2);
-            scored.push((item, score));
-        } else if let Some(fuzzy_score) = fuzzy_match(&query_lower, &item_lower) {
-            // If the item starts with the first character of the query, it ranks above substring matches
-            if first_char.map_or(false, |fc| item_lower.starts_with(fc)) {
-                let score = 1500 + fuzzy_score * 10 - (item.len() as i32);
-                scored.push((item, score));
-            } else if let Some(pos) = item_lower.find(&query_lower) {
-                // Substring matches that don't start with query char
-                let score = 500 - (pos as i32 * 5) - (item.len() as i32);
-                scored.push((item, score));
-            } else {
-                // General fuzzy match
-                scored.push((item, fuzzy_score * 5 - (item.len() as i32)));
+        let full_score = score_item(item, trimmed);
+        let score = if has_args {
+            let bin_score = score_item(item, binary_query);
+            match (full_score, bin_score) {
+                (Some(s1), Some(s2)) => Some(s1.max(s2)),
+                (Some(s1), None) => Some(s1),
+                (None, Some(s2)) => Some(s2),
+                (None, None) => None,
             }
-        } else if let Some(pos) = item_lower.find(&query_lower) {
-            let score = 500 - (pos as i32 * 5) - (item.len() as i32);
-            scored.push((item, score));
+        } else {
+            full_score
+        };
+
+        if let Some(s) = score {
+            scored.push((item, s));
         }
     }
 
@@ -532,6 +1104,8 @@ pub enum LauncherAction {
     Execute,
     /// Close the launcher without executing (Escape)
     Cancel,
+    /// Force refresh the executable and application cache (Ctrl+R, F5)
+    Refresh,
     /// Delete the character immediately before the cursor (Backspace)
     DeleteChar,
     /// Delete the word before the cursor (Ctrl+W)
@@ -580,6 +1154,7 @@ pub fn handle_launcher_keypress(
             XK_B => return Some(LauncherAction::MoveCursorLeft),
             XK_F => return Some(LauncherAction::MoveCursorRight),
             XK_C => return Some(LauncherAction::Cancel),
+            XK_R => return Some(LauncherAction::Refresh),
             _ => return None,
         }
     }
@@ -595,6 +1170,7 @@ pub fn handle_launcher_keypress(
         XK_HOME => Some(LauncherAction::MoveToStart),
         XK_END => Some(LauncherAction::MoveToEnd),
         XK_TAB => Some(LauncherAction::AutoComplete),
+        XK_F5 => Some(LauncherAction::Refresh),
         s if (0x20..=0x7e).contains(&s) => {
             Some(LauncherAction::InsertChar(s as u8 as char))
         }
@@ -694,6 +1270,9 @@ pub fn update_launcher_state(launcher: &mut Launcher, action: LauncherAction) {
                     launcher.selected_index -= 1;
                 }
             }
+        }
+        LauncherAction::Refresh => {
+            launcher.refresh();
         }
         LauncherAction::Execute | LauncherAction::Cancel => {}
     }
@@ -1010,6 +1589,10 @@ mod tests {
                 v[(25 - 8) * 2] = XK_N;
                 // keycode 26 = XK_D
                 v[(26 - 8) * 2] = XK_D;
+                // keycode 27 = XK_R
+                v[(27 - 8) * 2] = XK_R;
+                // keycode 28 = XK_F5
+                v[(28 - 8) * 2] = XK_F5;
                 v
             },
         };
@@ -1024,6 +1607,7 @@ mod tests {
         assert_eq!(handle_launcher_keypress(17, 0, &mapping), Some(LauncherAction::AutoComplete));
         assert_eq!(handle_launcher_keypress(18, 0, &mapping), Some(LauncherAction::MoveToStart));
         assert_eq!(handle_launcher_keypress(19, 0, &mapping), Some(LauncherAction::MoveToEnd));
+        assert_eq!(handle_launcher_keypress(28, 0, &mapping), Some(LauncherAction::Refresh));
 
         // Ctrl combinations
         assert_eq!(handle_launcher_keypress(20, MOD_CONTROL, &mapping), Some(LauncherAction::DeleteWord));
@@ -1032,8 +1616,113 @@ mod tests {
         assert_eq!(handle_launcher_keypress(23, MOD_CONTROL, &mapping), Some(LauncherAction::MoveToEnd));
         assert_eq!(handle_launcher_keypress(24, MOD_CONTROL, &mapping), Some(LauncherAction::SelectPrevious));
         assert_eq!(handle_launcher_keypress(25, MOD_CONTROL, &mapping), Some(LauncherAction::SelectNext));
+        assert_eq!(handle_launcher_keypress(27, MOD_CONTROL, &mapping), Some(LauncherAction::Refresh));
 
         // Mod4 + D cancels launcher
         assert_eq!(handle_launcher_keypress(26, MOD_SUPER, &mapping), Some(LauncherAction::Cancel));
+    }
+
+    #[test]
+    fn test_clean_exec_field() {
+        assert_eq!(clean_exec_field("firefox %u"), "firefox");
+        assert_eq!(clean_exec_field("vlc --started-from-file %U"), "vlc --started-from-file");
+        assert_eq!(clean_exec_field("/usr/bin/google-chrome-stable %U"), "/usr/bin/google-chrome-stable");
+        assert_eq!(
+            clean_exec_field("/usr/bin/flatpak run --branch=stable --arch=x86_64 --command=steam com.valvesoftware.Steam @@u %U @@"),
+            "/usr/bin/flatpak run --branch=stable --arch=x86_64 --command=steam com.valvesoftware.Steam"
+        );
+        assert_eq!(clean_exec_field("code --unity-launch %F"), "code --unity-launch");
+    }
+
+    #[test]
+    fn test_parse_desktop_file() {
+        let content_valid = r#"
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Visual Studio Code
+Exec=code --new-window %F
+Icon=vscode
+"#;
+        let parsed = parse_desktop_file(content_valid);
+        assert_eq!(
+            parsed,
+            Some(("Visual Studio Code".to_string(), "code --new-window".to_string()))
+        );
+
+        let content_no_display = r#"
+[Desktop Entry]
+Type=Application
+Name=Hidden Tool
+Exec=hidden-tool
+NoDisplay=true
+"#;
+        assert_eq!(parse_desktop_file(content_no_display), None);
+
+        let content_hidden = r#"
+[Desktop Entry]
+Type=Application
+Name=Hidden Tool 2
+Exec=hidden-tool-2
+Hidden=true
+"#;
+        assert_eq!(parse_desktop_file(content_hidden), None);
+
+        let content_link = r#"
+[Desktop Entry]
+Type=Link
+Name=URL Link
+Exec=link
+"#;
+        assert_eq!(parse_desktop_file(content_link), None);
+    }
+
+    #[test]
+    fn test_dynamic_refresh_on_new_binary() {
+        let temp_dir = std::env::temp_dir().join(format!("tilo_launcher_dyn_refresh_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        let _ = std::fs::create_dir_all(&temp_dir);
+
+        let temp_desktop = std::env::temp_dir().join(format!("tilo_launcher_dyn_desk_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temp_desktop);
+        let _ = std::fs::create_dir_all(&temp_desktop);
+
+        let path_var = temp_dir.to_str().unwrap();
+        let desktop_dirs = vec![temp_desktop.clone()];
+
+        // 1. Initial state: create bin1
+        let bin1 = temp_dir.join("bin1");
+        std::fs::write(&bin1, "#!/bin/sh\n").unwrap();
+        let mut perms = std::fs::metadata(&bin1).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&bin1, perms).unwrap();
+
+        let mut launcher = Launcher::new();
+        launcher.refresh_from(path_var, &desktop_dirs);
+        assert!(launcher.executable_cache.contains(&"bin1".to_string()));
+        assert!(!launcher.executable_cache.contains(&"bin2_new".to_string()));
+
+        // Check if needed returns false when nothing changed
+        assert!(!launcher.refresh_if_needed_from(path_var, &desktop_dirs));
+
+        // 2. Wait briefly to guarantee mtime change, then install/create bin2_new
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        let bin2 = temp_dir.join("bin2_new");
+        std::fs::write(&bin2, "#!/bin/sh\n").unwrap();
+        let mut perms2 = std::fs::metadata(&bin2).unwrap().permissions();
+        perms2.set_mode(0o755);
+        std::fs::set_permissions(&bin2, perms2).unwrap();
+
+        // 3. refresh_if_needed_from should detect the directory change and refresh!
+        assert!(launcher.refresh_if_needed_from(path_var, &desktop_dirs));
+        assert!(launcher.executable_cache.contains(&"bin2_new".to_string()));
+
+        // Searching for newly installed binary works immediately
+        let results = filter_executables(&launcher.executable_cache, "bin2", 5);
+        assert!(results.contains(&"bin2_new".to_string()));
+
+        // Cleanup
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        let _ = std::fs::remove_dir_all(&temp_desktop);
     }
 }

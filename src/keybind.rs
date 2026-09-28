@@ -39,6 +39,8 @@ pub const XK_END: Keysym = 0xff57;
 
 pub const XK_NUM_LOCK: Keysym = 0xff7f;
 
+pub const XK_F5: Keysym = 0xffc2;
+
 pub const XK_A: Keysym = 0x0061;
 pub const XK_B: Keysym = 0x0062;
 pub const XK_C: Keysym = 0x0063;
@@ -169,6 +171,7 @@ pub fn parse_keysym(name: &str) -> Option<Keysym> {
         "grave" | "`" => Some(XK_GRAVE),
         "asciitilde" | "~" | "tilde" => Some(XK_ASCIITILDE),
         "Num_Lock" | "NumLock" => Some(XK_NUM_LOCK),
+        "F5" | "f5" => Some(XK_F5),
         s if s.len() == 1 => {
             let c = s.chars().next().unwrap();
             if c.is_ascii() {
@@ -292,6 +295,7 @@ mod tests {
         assert_eq!(parse_keysym("Q"), Some(XK_Q));
         assert_eq!(parse_keysym("1"), Some(XK_1));
         assert_eq!(parse_keysym("Space"), Some(XK_SPACE));
+        assert_eq!(parse_keysym("F5"), Some(XK_F5));
         assert_eq!(parse_keysym("NonExistentKey"), None);
     }
 

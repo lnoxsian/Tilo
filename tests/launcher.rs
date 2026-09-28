@@ -1,6 +1,6 @@
 use std::os::unix::fs::PermissionsExt;
 use std::process::{Child, Command};
-use tilo::launcher::{filter_executables, scan_path_from, spawn_app};
+use tilo::launcher::{filter_executables, scan_desktop_dirs, scan_path_from, spawn_app, Launcher};
 use tilo::wm::WindowManager;
 use tilo::x11::X11Context;
 use x11rb::protocol::xproto::{ConnectionExt, KeyPressEvent};
@@ -247,4 +247,78 @@ fn test_launcher_in_xephyr_lifecycle_and_interaction() {
         assert!(wm.launcher.as_ref().unwrap().visible, "SIGUSR1 should toggle launcher open");
         wm.close_launcher().unwrap();
     }
+}
+
+#[test]
+fn test_dynamic_refresh_on_open_launcher() {
+    let temp_bin_dir = std::env::temp_dir().join(format!("tilo_test_dyn_bin_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&temp_bin_dir);
+    let _ = std::fs::create_dir_all(&temp_bin_dir);
+
+    // 1. Initial binary
+    let app1 = temp_bin_dir.join("init_app");
+    std::fs::write(&app1, "#!/bin/sh\nexit 0\n").unwrap();
+    let mut perms = std::fs::metadata(&app1).unwrap().permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&app1, perms).unwrap();
+
+    let temp_desktop_dir = std::env::temp_dir().join(format!("tilo_test_dyn_desk_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&temp_desktop_dir);
+    let _ = std::fs::create_dir_all(&temp_desktop_dir);
+
+    let path_var = temp_bin_dir.to_str().unwrap();
+    let desktop_dirs = vec![temp_desktop_dir.clone()];
+
+    let mut launcher = Launcher::new();
+    launcher.refresh_from(path_var, &desktop_dirs);
+    assert!(launcher.executable_cache.contains(&"init_app".to_string()));
+    assert!(!launcher.executable_cache.contains(&"newly_installed_pkg".to_string()));
+
+    // Verify refresh_if_needed_from returns false when no files or directories changed
+    assert!(!launcher.refresh_if_needed_from(path_var, &desktop_dirs));
+
+    // 2. Simulate installing a new package/binary while system is running
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    let app2 = temp_bin_dir.join("newly_installed_pkg");
+    std::fs::write(&app2, "#!/bin/sh\nexit 0\n").unwrap();
+    let mut perms2 = std::fs::metadata(&app2).unwrap().permissions();
+    perms2.set_mode(0o755);
+    std::fs::set_permissions(&app2, perms2).unwrap();
+
+    // 3. Opening launcher triggers refresh_if_needed_from
+    assert!(launcher.refresh_if_needed_from(path_var, &desktop_dirs));
+    assert!(launcher.executable_cache.contains(&"newly_installed_pkg".to_string()));
+
+    launcher.query = "newly".to_string();
+    let filtered = launcher.filtered_results(5);
+    assert!(filtered.contains(&"newly_installed_pkg".to_string()));
+
+    // Cleanup
+    let _ = std::fs::remove_dir_all(&temp_bin_dir);
+    let _ = std::fs::remove_dir_all(&temp_desktop_dir);
+}
+
+#[test]
+fn test_desktop_applications_indexing_and_command_resolution() {
+    let temp_desktop_dir = std::env::temp_dir().join(format!("tilo_test_desktop_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&temp_desktop_dir);
+    let _ = std::fs::create_dir_all(&temp_desktop_dir);
+
+    let desktop_file = temp_desktop_dir.join("vlc.desktop");
+    let content = r#"
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=VLC media player
+Exec=vlc --started-from-file %U
+NoDisplay=false
+"#;
+    std::fs::write(&desktop_file, content).unwrap();
+
+    let (parsed_names, commands) = scan_desktop_dirs(&[temp_desktop_dir.clone()]);
+    assert!(parsed_names.contains(&"VLC media player".to_string()));
+    assert_eq!(commands.get("VLC media player").unwrap(), "vlc --started-from-file");
+    assert_eq!(commands.get("vlc").unwrap(), "vlc --started-from-file");
+
+    let _ = std::fs::remove_dir_all(&temp_desktop_dir);
 }
