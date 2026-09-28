@@ -244,6 +244,22 @@ impl ClientState {
         self.focus_stack.push(window);
     }
 
+    /// Removes focus from a specific window.
+    pub fn remove_focus(&mut self, window: Window) {
+        if let Some(client) = self.clients.get_mut(&window) {
+            client.focused = false;
+        }
+        self.focus_stack.retain(|&w| w != window);
+    }
+
+    /// Clears focus from all managed clients.
+    pub fn unfocus_all(&mut self) {
+        for client in self.clients.values_mut() {
+            client.focused = false;
+        }
+        self.focus_stack.clear();
+    }
+
     /// Returns the window ID at the top of the focus stack, if any.
     pub fn focused_window(&self) -> Option<Window> {
         self.focus_stack.last().copied()

@@ -1404,9 +1404,18 @@ impl WindowManager {
         window: Window,
         target_id: WorkspaceId,
     ) -> Result<(), X11Error> {
-        let current_id = self.workspace_manager.current_id();
+        let current_id = self
+            .client_state
+            .get_client(window)
+            .map(|c| c.workspace)
+            .or_else(|| self.workspace_manager.find_workspace_for(window))
+            .unwrap_or(self.current_workspace);
         if current_id == target_id {
             return Ok(());
+        }
+
+        if self.scratchpad.is_scratchpad(window) {
+            self.scratchpad.clear_client();
         }
 
         self.workspace_manager.move_client(window, target_id);
@@ -1443,12 +1452,24 @@ impl WindowManager {
         {
             let _ = self.focus_client(first);
         } else {
+            self.client_state.remove_focus(window);
             let _ = self.context.connection.set_input_focus(
                 InputFocus::POINTER_ROOT,
                 self.context.root_window,
                 x11rb::CURRENT_TIME,
             );
+            let _ = self.update_ewmh_active_window();
+            if let Some(ref mut bar) = self.statusbar {
+                bar.set_title("");
+            }
         }
+
+        // Update statusbar tags
+        if let Some(ref mut bar) = self.statusbar {
+            let occupied = self.workspace_manager.occupied_workspaces();
+            bar.set_workspace(self.current_workspace, &occupied);
+        }
+        let _ = self.render_statusbar();
 
         // Retile all workspaces
         self.retile()?;
@@ -2221,7 +2242,10 @@ impl WindowManager {
                 let _ = self.switch_workspace(ws)?;
             }
             Action::MoveToWorkspace(ws) => {
-                if let Some(win) = self.client_state.focused_window() {
+                let win = self.client_state.focused_window()
+                    .or_else(|| self.workspace_focus.focused_window_on(self.current_workspace))
+                    .or_else(|| self.workspace_manager.get(self.current_workspace).and_then(|w| w.clients.first().copied()));
+                if let Some(win) = win {
                     let _ = self.move_to_workspace(win, ws)?;
                 }
             }
@@ -2339,31 +2363,29 @@ impl WindowManager {
             b.button == event.detail && b.modifiers == clean_modifiers
         });
 
+        let is_floating = self
+            .client_state
+            .get_client(window)
+            .map(|c| c.is_floating() && !c.is_fullscreen())
+            .unwrap_or(false);
+
         match matching_binding.map(|b| b.action_type) {
             Some(crate::mouse::MouseActionType::Move) => {
                 let _ = self.focus_client(window);
                 let _ = self.raise_window(window);
 
-                let (win_x, win_y, win_w, win_h) = if let Some(reply) = self.context.connection.get_geometry(window).ok().and_then(|c| c.reply().ok()) {
-                    (reply.x as i32, reply.y as i32, reply.width as u32, reply.height as u32)
-                } else {
-                    (event.root_x as i32 - event.event_x as i32, event.root_y as i32 - event.event_y as i32, 400, 300)
-                };
-
-                let was_tiled = if let Some(client) = self.client_state.get_client_mut(window) {
-                    let tiled = !client.floating;
-                    client.floating = true;
-                    let fg = crate::floating::FloatingGeometry::new(win_x, win_y, win_w, win_h);
-                    client.floating_geometry = Some(fg);
-                    client.layout_state = crate::floating::ClientLayoutState::Floating(fg);
-                    tiled
-                } else {
-                    false
-                };
-
-                if was_tiled {
-                    let _ = self.retile();
+                if !is_floating {
+                    self.context.flush()?;
+                    return Ok(());
                 }
+
+                let (win_x, win_y) = if let Some(reply) = self.context.connection.get_geometry(window).ok().and_then(|c| c.reply().ok()) {
+                    (reply.x as i32, reply.y as i32)
+                } else if let Some(fg) = self.client_state.get_client(window).and_then(|c| c.floating_geometry) {
+                    (fg.x, fg.y)
+                } else {
+                    (event.root_x as i32 - event.event_x as i32, event.root_y as i32 - event.event_y as i32)
+                };
 
                 self.mouse_action = crate::mouse::MouseAction::Moving {
                     window,
@@ -2389,26 +2411,18 @@ impl WindowManager {
                 let _ = self.focus_client(window);
                 let _ = self.raise_window(window);
 
-                let (win_x, win_y, win_w, win_h) = if let Some(reply) = self.context.connection.get_geometry(window).ok().and_then(|c| c.reply().ok()) {
-                    (reply.x as i32, reply.y as i32, reply.width as u32, reply.height as u32)
-                } else {
-                    (event.root_x as i32 - event.event_x as i32, event.root_y as i32 - event.event_y as i32, 400, 300)
-                };
-
-                let was_tiled = if let Some(client) = self.client_state.get_client_mut(window) {
-                    let tiled = !client.floating;
-                    client.floating = true;
-                    let fg = crate::floating::FloatingGeometry::new(win_x, win_y, win_w, win_h);
-                    client.floating_geometry = Some(fg);
-                    client.layout_state = crate::floating::ClientLayoutState::Floating(fg);
-                    tiled
-                } else {
-                    false
-                };
-
-                if was_tiled {
-                    let _ = self.retile();
+                if !is_floating {
+                    self.context.flush()?;
+                    return Ok(());
                 }
+
+                let (win_w, win_h) = if let Some(reply) = self.context.connection.get_geometry(window).ok().and_then(|c| c.reply().ok()) {
+                    (reply.width as u32, reply.height as u32)
+                } else if let Some(fg) = self.client_state.get_client(window).and_then(|c| c.floating_geometry) {
+                    (fg.width, fg.height)
+                } else {
+                    (400, 300)
+                };
 
                 self.mouse_action = crate::mouse::MouseAction::Resizing {
                     window,

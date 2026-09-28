@@ -188,9 +188,12 @@ pub fn handle_key_press(
 ) -> Option<Action> {
     let clean_modifiers = u16::from(event.state) & !(num_lock_mask | MOD_LOCK);
     let keysym = mapping.keycode_to_keysym(event.detail, u16::from(event.state));
+    let syms = mapping.keysyms_for_keycode(event.detail);
 
     for bind in bindings {
-        if bind.modifiers == clean_modifiers && bind.keysym == keysym {
+        if bind.modifiers == clean_modifiers
+            && (bind.keysym == keysym || syms.contains(&bind.keysym))
+        {
             return Some(bind.action.clone());
         }
     }
@@ -364,5 +367,71 @@ mod tests {
             same_screen: true,
         };
         assert_eq!(handle_key_press(&ev3, &bindings, &mapping, MOD_MOD2), None);
+    }
+
+    #[test]
+    fn test_handle_key_press_shifted_numbers() {
+        const XK_1: Keysym = 0x0031;
+        const XK_EXCLAM: Keysym = 0x0021;
+
+        let mapping = KeyboardMapping {
+            min_keycode: 8,
+            max_keycode: 40,
+            keysyms_per_keycode: 2,
+            keysyms: {
+                let mut v = vec![0; (40 - 8 + 1) * 2];
+                // keycode 10 is '1' (column 0 = '1', column 1 = '!')
+                v[(10 - 8) * 2] = XK_1;
+                v[(10 - 8) * 2 + 1] = XK_EXCLAM;
+                v
+            },
+        };
+
+        let bindings = vec![
+            KeyBind::new(MOD_SUPER, XK_1, Action::Workspace(1)),
+            KeyBind::new(MOD_SUPER | MOD_SHIFT, XK_1, Action::MoveToWorkspace(1)),
+        ];
+
+        // 1. Mod4 + 1 -> Workspace(1)
+        let ev_ws1 = KeyPressEvent {
+            response_type: 2,
+            detail: 10,
+            sequence: 1,
+            time: 0,
+            root: 1,
+            event: 1,
+            child: 0,
+            root_x: 0,
+            root_y: 0,
+            event_x: 0,
+            event_y: 0,
+            state: x11rb::protocol::xproto::KeyButMask::from(MOD_SUPER),
+            same_screen: true,
+        };
+        assert_eq!(
+            handle_key_press(&ev_ws1, &bindings, &mapping, MOD_MOD2),
+            Some(Action::Workspace(1))
+        );
+
+        // 2. Mod4 + Shift + 1 -> MoveToWorkspace(1)
+        let ev_move_ws1 = KeyPressEvent {
+            response_type: 2,
+            detail: 10,
+            sequence: 2,
+            time: 0,
+            root: 1,
+            event: 1,
+            child: 0,
+            root_x: 0,
+            root_y: 0,
+            event_x: 0,
+            event_y: 0,
+            state: x11rb::protocol::xproto::KeyButMask::from(MOD_SUPER | MOD_SHIFT),
+            same_screen: true,
+        };
+        assert_eq!(
+            handle_key_press(&ev_move_ws1, &bindings, &mapping, MOD_MOD2),
+            Some(Action::MoveToWorkspace(1))
+        );
     }
 }

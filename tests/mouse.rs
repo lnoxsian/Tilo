@@ -139,7 +139,7 @@ fn test_mouse_interaction_in_xephyr() {
     wm.manage_window(client_win).unwrap();
     assert!(wm.client_state.contains(client_win));
 
-    // 2. Simulate Mod + Left Click (Button 1) on window to initiate Move
+    // 2. Mod + Left Click on tiled window MUST NOT initiate drag
     let press_move = ButtonPressEvent {
         response_type: 4,
         detail: 1, // Left click
@@ -157,6 +157,14 @@ fn test_mouse_interaction_in_xephyr() {
     };
 
     wm.handle_button_press(&press_move).unwrap();
+    assert!(!wm.mouse_action.is_active(), "Tiled window must not start drag");
+    assert!(!wm.client_state.get_client(client_win).unwrap().floating, "Tiled window must remain tiled");
+
+    // Make window floating: mouse drag is now enabled!
+    wm.toggle_floating(client_win).unwrap();
+    assert!(wm.client_state.get_client(client_win).unwrap().floating);
+
+    wm.handle_button_press(&press_move).unwrap();
     assert!(wm.mouse_action.is_active());
     match wm.mouse_action {
         MouseAction::Moving { window, .. } => assert_eq!(window, client_win),
@@ -164,7 +172,7 @@ fn test_mouse_interaction_in_xephyr() {
     }
 
     let client = wm.client_state.get_client(client_win).unwrap();
-    assert!(client.floating, "Window must become floating when dragged");
+    assert!(client.floating, "Window must remain floating when dragged");
 
     // 3. Simulate pointer motion while moving (drag by +100, +50)
     let motion_move = MotionNotifyEvent {
@@ -336,7 +344,7 @@ fn test_click_to_focus_and_tiled_drag_in_xephyr() {
     assert!(!wm.client_state.get_client(w2).unwrap().floating, "Normal click must not float window");
     assert!(!wm.mouse_action.is_active(), "Normal click must not trigger drag action");
 
-    // 3. Simulate Mod + Left Click on tiled window w2 to drag and float it
+    // 3. Simulate Mod + Left Click on tiled window w2: MUST NOT drag, MUST NOT float
     let drag_w2 = ButtonPressEvent {
         response_type: 4,
         detail: 1, // Left click
@@ -354,8 +362,16 @@ fn test_click_to_focus_and_tiled_drag_in_xephyr() {
     };
 
     wm.handle_button_press(&drag_w2).unwrap();
-    assert!(wm.mouse_action.is_active());
-    assert!(wm.client_state.get_client(w2).unwrap().floating, "Mod-dragged window must become floating");
+    assert_eq!(wm.client_state.focused_window(), Some(w2));
+    assert!(!wm.mouse_action.is_active(), "Tiled window must NOT start mouse drag");
+    assert!(!wm.client_state.get_client(w2).unwrap().floating, "Tiled window must NOT become floating when dragged");
+
+    // 4. Toggle w2 to floating: now Mod + Left Click SHOULD start mouse drag
+    wm.toggle_floating(w2).unwrap();
+    assert!(wm.client_state.get_client(w2).unwrap().floating);
+
+    wm.handle_button_press(&drag_w2).unwrap();
+    assert!(wm.mouse_action.is_active(), "Floating window MUST start mouse drag");
 
     // Motion
     let motion = MotionNotifyEvent {

@@ -556,7 +556,7 @@ fn parse_action(tokens: &[&Token], line: usize, config: &Config) -> Result<Actio
             let ws_id = token_to_u32(tokens[1], line, "workspace")?;
             Ok(Action::Workspace(ws_id))
         }
-        "move_workspace" | "move_to_workspace" => {
+        "move_workspace" | "move_to_workspace" | "movetoworkspace" | "move_window_to_workspace" => {
             if tokens.len() < 2 {
                 return Err(ConfigError::ParseError {
                     line,
