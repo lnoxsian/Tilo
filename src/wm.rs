@@ -448,6 +448,7 @@ impl WindowManager {
 
         launcher.visible = true;
         launcher.query.clear();
+        launcher.cursor_position = 0;
         launcher.selected_index = 0;
 
         let _ = launcher.render(&self.context.connection);
@@ -461,6 +462,7 @@ impl WindowManager {
             if launcher.visible {
                 launcher.visible = false;
                 launcher.query.clear();
+                launcher.cursor_position = 0;
                 launcher.selected_index = 0;
                 let _ = self.context.connection.ungrab_keyboard(x11rb::CURRENT_TIME);
                 let _ = self.context.connection.unmap_window(launcher.window_id);
@@ -519,7 +521,7 @@ impl WindowManager {
                         let results = launcher.filtered_results(8);
                         let trimmed = launcher.query.trim();
                         if trimmed.is_empty() {
-                            None
+                            results.get(launcher.selected_index).cloned()
                         } else if trimmed.contains(' ') {
                             // User typed arguments: e.g. "firefox --private-window"
                             // If first word matches selected result, use selected binary with the typed arguments

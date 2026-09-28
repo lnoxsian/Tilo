@@ -13,8 +13,9 @@ use std::process::{Command, Stdio};
 
 use crate::input::KeyboardMapping;
 use crate::keybind::{
-    MOD_CONTROL, MOD_SUPER, XK_A, XK_BACKSPACE, XK_D, XK_DOWN, XK_ESCAPE, XK_N,
-    XK_P, XK_RETURN, XK_U, XK_UP, XK_W,
+    MOD_CONTROL, MOD_SUPER, XK_A, XK_B, XK_BACKSPACE, XK_C, XK_D, XK_DOWN, XK_E,
+    XK_END, XK_ESCAPE, XK_F, XK_HOME, XK_LEFT, XK_N, XK_P, XK_RETURN, XK_RIGHT,
+    XK_TAB, XK_U, XK_UP, XK_W,
 };
 use crate::layout::Rect;
 use crate::render::Renderer;
@@ -24,6 +25,9 @@ use x11rb::connection::Connection;
 use x11rb::protocol::xproto::{
     ConnectionExt, CreateWindowAux, EventMask, Screen, WindowClass,
 };
+
+/// Type alias for keyboard mapping matching Plan.md specification.
+pub type KeysymMap = KeyboardMapping;
 
 /// Default width of the application launcher overlay window.
 pub const LAUNCHER_WIDTH: u16 = 560;
@@ -43,6 +47,8 @@ pub struct Launcher {
     pub executable_cache: Vec<String>,
     /// Current search query typed by the user.
     pub query: String,
+    /// Cursor character index within the search query.
+    pub cursor_position: usize,
     /// Currently selected index in the filtered results.
     pub selected_index: usize,
     /// Whether the launcher is currently active and mapped on screen.
@@ -63,6 +69,7 @@ impl Launcher {
             window_id: 0,
             executable_cache,
             query: String::new(),
+            cursor_position: 0,
             selected_index: 0,
             visible: false,
             rect: Rect::new(0, 0, LAUNCHER_WIDTH as u32, LAUNCHER_HEIGHT as u32),
@@ -105,6 +112,11 @@ impl Launcher {
         }
 
         let results = self.filtered_results(LAUNCHER_MAX_RESULTS);
+
+        // Keep selected index within valid bounds
+        if !results.is_empty() && self.selected_index >= results.len() {
+            self.selected_index = results.len() - 1;
+        }
 
         // Dynamically compute the window height to snugly fit the suggestions with zero empty space
         let display_count = if results.is_empty() && !self.query.is_empty() {
@@ -169,27 +181,36 @@ impl Launcher {
             self.color_scheme.fg
         };
 
+        let text_start_x = if self.query.is_empty() {
+            16 + prefix_width as i16 + 4
+        } else {
+            16 + prefix_width as i16
+        };
+
         renderer.draw_text(
             conn,
             renderer.pixmap,
-            16 + prefix_width as i16,
+            text_start_x,
             input_baseline,
             query_text,
             query_color,
         )?;
 
-        // Draw cursor if query is being typed
-        if !self.query.is_empty() {
-            let cursor_x = 16 + prefix_width as i16 + renderer.text_width(&self.query) as i16;
-            renderer.draw_text(
-                conn,
-                renderer.pixmap,
-                cursor_x,
-                input_baseline,
-                "_",
-                self.color_scheme.active_bg,
-            )?;
-        }
+        // Draw vertical cursor bar at cursor_position
+        let text_before_cursor: String = self.query.chars().take(self.cursor_position).collect();
+        let cursor_offset = renderer.text_width(&text_before_cursor);
+        let cursor_x = 16 + prefix_width as i16 + cursor_offset as i16;
+        let cursor_y = 10i16;
+        let cursor_height = 16u16;
+        renderer.fill_rect(
+            conn,
+            renderer.pixmap,
+            cursor_x,
+            cursor_y,
+            2,
+            cursor_height,
+            self.color_scheme.active_bg,
+        )?;
 
         // 4. Draw separator line below input field
         renderer.fill_rect(conn, renderer.pixmap, 8, 36, w.saturating_sub(16), 1, 0x333344)?;
@@ -517,8 +538,16 @@ pub enum LauncherAction {
     DeleteWord,
     /// Delete all text before the cursor (Ctrl+U)
     DeleteLine,
-    /// Move cursor to start of line (Ctrl+A)
+    /// Move cursor to start of line (Ctrl+A, Home)
     MoveToStart,
+    /// Move cursor to end of line (Ctrl+E, End)
+    MoveToEnd,
+    /// Move cursor one character to the left (Left arrow, Ctrl+B)
+    MoveCursorLeft,
+    /// Move cursor one character to the right (Right arrow, Ctrl+F)
+    MoveCursorRight,
+    /// Auto-complete selected suggestion into query (Tab)
+    AutoComplete,
     /// Insert a character into the query
     InsertChar(char),
 }
@@ -547,7 +576,11 @@ pub fn handle_launcher_keypress(
             XK_W => return Some(LauncherAction::DeleteWord),
             XK_U => return Some(LauncherAction::DeleteLine),
             XK_A => return Some(LauncherAction::MoveToStart),
-            _ => {}
+            XK_E => return Some(LauncherAction::MoveToEnd),
+            XK_B => return Some(LauncherAction::MoveCursorLeft),
+            XK_F => return Some(LauncherAction::MoveCursorRight),
+            XK_C => return Some(LauncherAction::Cancel),
+            _ => return None,
         }
     }
 
@@ -557,6 +590,11 @@ pub fn handle_launcher_keypress(
         XK_BACKSPACE => Some(LauncherAction::DeleteChar),
         XK_UP => Some(LauncherAction::SelectPrevious),
         XK_DOWN => Some(LauncherAction::SelectNext),
+        XK_LEFT => Some(LauncherAction::MoveCursorLeft),
+        XK_RIGHT => Some(LauncherAction::MoveCursorRight),
+        XK_HOME => Some(LauncherAction::MoveToStart),
+        XK_END => Some(LauncherAction::MoveToEnd),
+        XK_TAB => Some(LauncherAction::AutoComplete),
         s if (0x20..=0x7e).contains(&s) => {
             Some(LauncherAction::InsertChar(s as u8 as char))
         }
@@ -568,36 +606,90 @@ pub fn handle_launcher_keypress(
 pub fn update_launcher_state(launcher: &mut Launcher, action: LauncherAction) {
     match action {
         LauncherAction::InsertChar(c) => {
-            launcher.query.push(c);
+            let mut chars: Vec<char> = launcher.query.chars().collect();
+            let pos = launcher.cursor_position.min(chars.len());
+            chars.insert(pos, c);
+            launcher.cursor_position = pos + 1;
+            launcher.query = chars.into_iter().collect();
             launcher.selected_index = 0;
         }
         LauncherAction::DeleteChar => {
-            launcher.query.pop();
-            launcher.selected_index = 0;
+            let mut chars: Vec<char> = launcher.query.chars().collect();
+            let pos = launcher.cursor_position.min(chars.len());
+            if pos > 0 {
+                chars.remove(pos - 1);
+                launcher.cursor_position = pos - 1;
+                launcher.query = chars.into_iter().collect();
+                launcher.selected_index = 0;
+            }
         }
         LauncherAction::DeleteWord => {
-            if let Some(idx) = launcher.query.rfind(' ') {
-                launcher.query.truncate(idx);
-            } else {
-                launcher.query.clear();
+            let mut chars: Vec<char> = launcher.query.chars().collect();
+            let pos = launcher.cursor_position.min(chars.len());
+            if pos > 0 {
+                let mut i = pos;
+                // Skip trailing whitespace before cursor
+                while i > 0 && chars[i - 1].is_whitespace() {
+                    i -= 1;
+                }
+                // Skip word characters
+                while i > 0 && !chars[i - 1].is_whitespace() {
+                    i -= 1;
+                }
+                chars.drain(i..pos);
+                launcher.cursor_position = i;
+                launcher.query = chars.into_iter().collect();
+                launcher.selected_index = 0;
             }
+        }
+        LauncherAction::DeleteLine => {
+            let mut chars: Vec<char> = launcher.query.chars().collect();
+            let pos = launcher.cursor_position.min(chars.len());
+            chars.drain(0..pos);
+            launcher.cursor_position = 0;
+            launcher.query = chars.into_iter().collect();
             launcher.selected_index = 0;
         }
-        LauncherAction::DeleteLine | LauncherAction::MoveToStart => {
-            launcher.query.clear();
-            launcher.selected_index = 0;
+        LauncherAction::MoveToStart => {
+            launcher.cursor_position = 0;
+        }
+        LauncherAction::MoveToEnd => {
+            launcher.cursor_position = launcher.query.chars().count();
+        }
+        LauncherAction::MoveCursorLeft => {
+            launcher.cursor_position = launcher.cursor_position.saturating_sub(1);
+        }
+        LauncherAction::MoveCursorRight => {
+            let len = launcher.query.chars().count();
+            if launcher.cursor_position < len {
+                launcher.cursor_position += 1;
+            }
+        }
+        LauncherAction::AutoComplete => {
+            let results = launcher.filtered_results(LAUNCHER_MAX_RESULTS);
+            if let Some(selected) = results.get(launcher.selected_index) {
+                let trimmed = launcher.query.trim_start();
+                if let Some(space_idx) = trimmed.find(' ') {
+                    let args = &trimmed[space_idx..];
+                    launcher.query = format!("{}{}", selected, args);
+                } else {
+                    launcher.query = format!("{} ", selected);
+                }
+                launcher.cursor_position = launcher.query.chars().count();
+                launcher.selected_index = 0;
+            }
         }
         LauncherAction::SelectNext => {
-            let count = launcher.filtered_results(8).len();
+            let count = launcher.filtered_results(LAUNCHER_MAX_RESULTS).len();
             if count > 0 {
                 launcher.selected_index = (launcher.selected_index + 1) % count;
             }
         }
         LauncherAction::SelectPrevious => {
-            let count = launcher.filtered_results(8).len();
+            let count = launcher.filtered_results(LAUNCHER_MAX_RESULTS).len();
             if count > 0 {
                 if launcher.selected_index == 0 {
-                    launcher.selected_index = count.saturating_sub(1);
+                    launcher.selected_index = count - 1;
                 } else {
                     launcher.selected_index -= 1;
                 }
@@ -755,5 +847,193 @@ mod tests {
         let res = filter_executables(&cache, "ff", 5);
         assert!(res.contains(&"firefox".to_string()));
         assert_eq!(res[0], "firefox");
+    }
+
+    #[test]
+    fn test_cursor_movement_and_editing() {
+        let mut launcher = Launcher::new();
+        update_launcher_state(&mut launcher, LauncherAction::InsertChar('a'));
+        update_launcher_state(&mut launcher, LauncherAction::InsertChar('b'));
+        update_launcher_state(&mut launcher, LauncherAction::InsertChar('c'));
+        assert_eq!(launcher.query, "abc");
+        assert_eq!(launcher.cursor_position, 3);
+
+        // Move cursor left: "ab|c"
+        update_launcher_state(&mut launcher, LauncherAction::MoveCursorLeft);
+        assert_eq!(launcher.cursor_position, 2);
+
+        // Insert 'x' in middle: "abx|c"
+        update_launcher_state(&mut launcher, LauncherAction::InsertChar('x'));
+        assert_eq!(launcher.query, "abxc");
+        assert_eq!(launcher.cursor_position, 3);
+
+        // Move to start: "|abxc"
+        update_launcher_state(&mut launcher, LauncherAction::MoveToStart);
+        assert_eq!(launcher.cursor_position, 0);
+
+        // Backspace at start does nothing
+        update_launcher_state(&mut launcher, LauncherAction::DeleteChar);
+        assert_eq!(launcher.query, "abxc");
+        assert_eq!(launcher.cursor_position, 0);
+
+        // Move to end: "abxc|"
+        update_launcher_state(&mut launcher, LauncherAction::MoveToEnd);
+        assert_eq!(launcher.cursor_position, 4);
+
+        // Move cursor right at end stays at end
+        update_launcher_state(&mut launcher, LauncherAction::MoveCursorRight);
+        assert_eq!(launcher.cursor_position, 4);
+
+        // Delete char at end: deletes 'c' -> "abx|"
+        update_launcher_state(&mut launcher, LauncherAction::DeleteChar);
+        assert_eq!(launcher.query, "abx");
+        assert_eq!(launcher.cursor_position, 3);
+
+        // Move left and delete: "ab|x" -> "a|x"
+        update_launcher_state(&mut launcher, LauncherAction::MoveCursorLeft);
+        assert_eq!(launcher.cursor_position, 2);
+        update_launcher_state(&mut launcher, LauncherAction::DeleteChar);
+        assert_eq!(launcher.query, "ax");
+        assert_eq!(launcher.cursor_position, 1);
+    }
+
+    #[test]
+    fn test_delete_word_and_delete_line() {
+        let mut launcher = Launcher::new();
+        launcher.query = "firefox --private-window".to_string();
+        launcher.cursor_position = launcher.query.chars().count();
+
+        // Ctrl+W deletes "--private-window"
+        update_launcher_state(&mut launcher, LauncherAction::DeleteWord);
+        assert_eq!(launcher.query, "firefox ");
+        assert_eq!(launcher.cursor_position, 8);
+
+        // Ctrl+W deletes "firefox "
+        update_launcher_state(&mut launcher, LauncherAction::DeleteWord);
+        assert_eq!(launcher.query, "");
+        assert_eq!(launcher.cursor_position, 0);
+
+        // Ctrl+U deletes line before cursor
+        launcher.query = "echo hello world".to_string();
+        launcher.cursor_position = 10; // cursor right after "hello" ("echo hello| world")
+        update_launcher_state(&mut launcher, LauncherAction::DeleteLine);
+        assert_eq!(launcher.query, " world");
+        assert_eq!(launcher.cursor_position, 0);
+    }
+
+    #[test]
+    fn test_tab_autocomplete() {
+        let mut launcher = Launcher::new();
+        launcher.executable_cache = vec![
+            "firefox".to_string(),
+            "firewall-cmd".to_string(),
+            "foot".to_string(),
+        ];
+
+        // Autocomplete without arguments
+        launcher.query = "fir".to_string();
+        launcher.cursor_position = 3;
+        update_launcher_state(&mut launcher, LauncherAction::AutoComplete);
+        assert_eq!(launcher.query, "firefox ");
+        assert_eq!(launcher.cursor_position, 8);
+
+        // Autocomplete with existing arguments
+        launcher.query = "fir --private-window".to_string();
+        launcher.cursor_position = launcher.query.chars().count();
+        update_launcher_state(&mut launcher, LauncherAction::AutoComplete);
+        assert_eq!(launcher.query, "firefox --private-window");
+    }
+
+    #[test]
+    fn test_selection_wraparound() {
+        let mut launcher = Launcher::new();
+        launcher.executable_cache = vec![
+            "firefox".to_string(),
+            "firewall-cmd".to_string(),
+            "foot".to_string(),
+        ];
+        launcher.query = "f".to_string();
+        launcher.selected_index = 0;
+
+        // Wrap around previous: 0 -> 2
+        update_launcher_state(&mut launcher, LauncherAction::SelectPrevious);
+        assert_eq!(launcher.selected_index, 2);
+
+        // Wrap around next: 2 -> 0
+        update_launcher_state(&mut launcher, LauncherAction::SelectNext);
+        assert_eq!(launcher.selected_index, 0);
+
+        // Next: 0 -> 1
+        update_launcher_state(&mut launcher, LauncherAction::SelectNext);
+        assert_eq!(launcher.selected_index, 1);
+    }
+
+    #[test]
+    fn test_handle_launcher_keypress_mappings() {
+        let mapping = KeyboardMapping {
+            min_keycode: 8,
+            max_keycode: 60,
+            keysyms_per_keycode: 2,
+            keysyms: {
+                let mut v = vec![0; (60 - 8 + 1) * 2];
+                // keycode 10 = XK_RETURN
+                v[(10 - 8) * 2] = XK_RETURN;
+                // keycode 11 = XK_ESCAPE
+                v[(11 - 8) * 2] = XK_ESCAPE;
+                // keycode 12 = XK_BACKSPACE
+                v[(12 - 8) * 2] = XK_BACKSPACE;
+                // keycode 13 = XK_UP
+                v[(13 - 8) * 2] = XK_UP;
+                // keycode 14 = XK_DOWN
+                v[(14 - 8) * 2] = XK_DOWN;
+                // keycode 15 = XK_LEFT
+                v[(15 - 8) * 2] = XK_LEFT;
+                // keycode 16 = XK_RIGHT
+                v[(16 - 8) * 2] = XK_RIGHT;
+                // keycode 17 = XK_TAB
+                v[(17 - 8) * 2] = XK_TAB;
+                // keycode 18 = XK_HOME
+                v[(18 - 8) * 2] = XK_HOME;
+                // keycode 19 = XK_END
+                v[(19 - 8) * 2] = XK_END;
+                // keycode 20 = XK_W
+                v[(20 - 8) * 2] = XK_W;
+                // keycode 21 = XK_U
+                v[(21 - 8) * 2] = XK_U;
+                // keycode 22 = XK_A
+                v[(22 - 8) * 2] = XK_A;
+                // keycode 23 = XK_E
+                v[(23 - 8) * 2] = XK_E;
+                // keycode 24 = XK_P
+                v[(24 - 8) * 2] = XK_P;
+                // keycode 25 = XK_N
+                v[(25 - 8) * 2] = XK_N;
+                // keycode 26 = XK_D
+                v[(26 - 8) * 2] = XK_D;
+                v
+            },
+        };
+
+        assert_eq!(handle_launcher_keypress(10, 0, &mapping), Some(LauncherAction::Execute));
+        assert_eq!(handle_launcher_keypress(11, 0, &mapping), Some(LauncherAction::Cancel));
+        assert_eq!(handle_launcher_keypress(12, 0, &mapping), Some(LauncherAction::DeleteChar));
+        assert_eq!(handle_launcher_keypress(13, 0, &mapping), Some(LauncherAction::SelectPrevious));
+        assert_eq!(handle_launcher_keypress(14, 0, &mapping), Some(LauncherAction::SelectNext));
+        assert_eq!(handle_launcher_keypress(15, 0, &mapping), Some(LauncherAction::MoveCursorLeft));
+        assert_eq!(handle_launcher_keypress(16, 0, &mapping), Some(LauncherAction::MoveCursorRight));
+        assert_eq!(handle_launcher_keypress(17, 0, &mapping), Some(LauncherAction::AutoComplete));
+        assert_eq!(handle_launcher_keypress(18, 0, &mapping), Some(LauncherAction::MoveToStart));
+        assert_eq!(handle_launcher_keypress(19, 0, &mapping), Some(LauncherAction::MoveToEnd));
+
+        // Ctrl combinations
+        assert_eq!(handle_launcher_keypress(20, MOD_CONTROL, &mapping), Some(LauncherAction::DeleteWord));
+        assert_eq!(handle_launcher_keypress(21, MOD_CONTROL, &mapping), Some(LauncherAction::DeleteLine));
+        assert_eq!(handle_launcher_keypress(22, MOD_CONTROL, &mapping), Some(LauncherAction::MoveToStart));
+        assert_eq!(handle_launcher_keypress(23, MOD_CONTROL, &mapping), Some(LauncherAction::MoveToEnd));
+        assert_eq!(handle_launcher_keypress(24, MOD_CONTROL, &mapping), Some(LauncherAction::SelectPrevious));
+        assert_eq!(handle_launcher_keypress(25, MOD_CONTROL, &mapping), Some(LauncherAction::SelectNext));
+
+        // Mod4 + D cancels launcher
+        assert_eq!(handle_launcher_keypress(26, MOD_SUPER, &mapping), Some(LauncherAction::Cancel));
     }
 }

@@ -28,10 +28,12 @@ pub const XK_DELETE: Keysym = 0xffff;
 pub const XK_COMMA: Keysym = 0x002c;
 pub const XK_PERIOD: Keysym = 0x002e;
 
+pub const XK_HOME: Keysym = 0xff50;
 pub const XK_LEFT: Keysym = 0xff51;
 pub const XK_UP: Keysym = 0xff52;
 pub const XK_RIGHT: Keysym = 0xff53;
 pub const XK_DOWN: Keysym = 0xff54;
+pub const XK_END: Keysym = 0xff57;
 
 pub const XK_NUM_LOCK: Keysym = 0xff7f;
 
