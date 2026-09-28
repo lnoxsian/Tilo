@@ -231,18 +231,16 @@ impl Launcher {
         }
     }
 
-    /// Refreshes the executable and application cache immediately using system `$PATH` and desktop directories.
+    /// Refreshes the executable cache immediately using system `$PATH`.
     pub fn refresh(&mut self) -> bool {
         let path_var = std::env::var("PATH").unwrap_or_else(|_| "/usr/local/bin:/usr/bin:/bin".to_string());
-        let desktop_dirs = get_desktop_directories();
-        self.refresh_from(&path_var, &desktop_dirs)
+        self.refresh_from(&path_var, &[])
     }
 
-    /// Checks if any system directory in `$PATH` or desktop applications has changed.
+    /// Checks if any system directory in `$PATH` has changed.
     pub fn refresh_if_needed(&mut self) -> bool {
         let current_path = std::env::var("PATH").unwrap_or_default();
-        let desktop_dirs = get_desktop_directories();
-        self.refresh_if_needed_from(&current_path, &desktop_dirs)
+        self.refresh_if_needed_from(&current_path, &[])
     }
 
     /// Checks for directory modifications with rate-limiting to prevent excessive
@@ -298,23 +296,8 @@ impl Launcher {
             self.selected_index = results.len() - 1;
         }
 
-        // Dynamically compute the window height to snugly fit the suggestions with zero empty space
-        let display_count = if results.is_empty() && !self.query.is_empty() {
-            0
-        } else {
-            results.len().min(LAUNCHER_MAX_RESULTS)
-        };
-        let target_height = Self::calculate_height(display_count);
-
-        if target_height != self.rect.height as u16 {
-            self.rect.height = target_height as u32;
-            let _ = conn.configure_window(
-                self.window_id,
-                &x11rb::protocol::xproto::ConfigureWindowAux::new()
-                    .height(target_height as u32),
-            );
-        }
-
+        // Launcher maintains a fixed height and position so it doesn't move or resize
+        // when search results are 1 or fewer than 8.
         let w = self.rect.width as u16;
         let h = self.rect.height as u16;
 
@@ -539,54 +522,16 @@ pub fn scan_path_from(path_var: &str) -> Result<Vec<String>, TiloError> {
 // ---------------------------------------------------------------------------
 
 /// Returns the list of standard desktop entry directories to search for `.desktop` files.
+///
+/// Since the launcher directly searches all executables in `$PATH`,
+/// scanning `.desktop` directories (`~/.local/share/applications`,
+/// `/usr/local/share/applications`, `/usr/share/applications`, etc.) is disabled.
 pub fn get_desktop_directories() -> Vec<PathBuf> {
-    let mut dirs = Vec::new();
-    let home = std::env::var("HOME").unwrap_or_default();
-
-    // 1. User application directory: $XDG_DATA_HOME/applications or ~/.local/share/applications
-    if let Ok(data_home) = std::env::var("XDG_DATA_HOME") {
-        if !data_home.is_empty() {
-            dirs.push(PathBuf::from(data_home).join("applications"));
-        }
-    } else if !home.is_empty() {
-        dirs.push(PathBuf::from(&home).join(".local/share/applications"));
-    }
-
-    // 2. User flatpak exports
-    if !home.is_empty() {
-        dirs.push(PathBuf::from(&home).join(".local/share/flatpak/exports/share/applications"));
-    }
-
-    // 3. System application directories: $XDG_DATA_DIRS/applications or defaults
-    if let Ok(data_dirs) = std::env::var("XDG_DATA_DIRS") {
-        for dir in data_dirs.split(':') {
-            if !dir.is_empty() {
-                dirs.push(PathBuf::from(dir).join("applications"));
-            }
-        }
-    } else {
-        dirs.push(PathBuf::from("/usr/local/share/applications"));
-        dirs.push(PathBuf::from("/usr/share/applications"));
-    }
-
-    // 4. System flatpak and snap exports
-    dirs.push(PathBuf::from("/var/lib/flatpak/exports/share/applications"));
-    dirs.push(PathBuf::from("/var/lib/snapd/desktop/applications"));
-
-    // 5. Nix profiles (if available)
-    if !home.is_empty() {
-        dirs.push(PathBuf::from(&home).join(".nix-profile/share/applications"));
-    }
-    dirs.push(PathBuf::from("/run/current-system/sw/share/applications"));
-
-    // Deduplicate preserving order
-    let mut seen = HashSet::new();
-    dirs.retain(|d| seen.insert(d.clone()));
-    dirs
+    Vec::new()
 }
 
 /// Returns all directories monitored for dynamic launcher refreshes,
-/// including all `$PATH` directories and all desktop application directories.
+/// which consists of all valid `$PATH` directories.
 pub fn get_monitored_directories() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
 
@@ -597,9 +542,6 @@ pub fn get_monitored_directories() -> Vec<PathBuf> {
             dirs.push(PathBuf::from(p));
         }
     }
-
-    // Desktop directories
-    dirs.extend(get_desktop_directories());
 
     // Deduplicate
     let mut seen = HashSet::new();
@@ -832,28 +774,22 @@ pub fn scan_desktop_dirs(dirs: &[PathBuf]) -> (Vec<String>, HashMap<String, Stri
     (sorted, app_commands)
 }
 
-/// Scans both `$PATH` executables and desktop applications.
+/// Scans `$PATH` executables.
 ///
 /// Returns a tuple of:
 /// - A sorted list of unique searchable names.
-/// - A map from application names and binary names to executable command lines.
+/// - A map from binary names to executable command lines.
 pub fn scan_all_executables(path_var: &str) -> (Vec<String>, HashMap<String, String>) {
     let mut all_names = HashSet::new();
     let mut app_commands = HashMap::new();
 
-    // 1. Scan PATH executables
+    // Scan PATH executables
     if let Ok(path_execs) = scan_path_from(path_var) {
         for exe in path_execs {
             app_commands.insert(exe.clone(), exe.clone());
             all_names.insert(exe);
         }
     }
-
-    // 2. Scan desktop directories
-    let desktop_dirs = get_desktop_directories();
-    let (desktop_names, desktop_cmds) = scan_desktop_dirs(&desktop_dirs);
-    all_names.extend(desktop_names);
-    app_commands.extend(desktop_cmds);
 
     let mut sorted: Vec<String> = all_names.into_iter().collect();
     sorted.sort();
@@ -1416,6 +1352,25 @@ mod tests {
     }
 
     #[test]
+    fn test_launcher_fixed_height_on_few_results() {
+        let mut launcher = Launcher::new();
+        assert_eq!(launcher.rect.height, LAUNCHER_HEIGHT as u32);
+
+        // When 1 result is present, rect height must remain fixed at LAUNCHER_HEIGHT (256)
+        launcher.executable_cache = vec!["single_app".to_string()];
+        launcher.query = "single".to_string();
+        let res = launcher.filtered_results(LAUNCHER_MAX_RESULTS);
+        assert_eq!(res.len(), 1);
+        assert_eq!(launcher.rect.height, 256);
+
+        // When 0 results match, rect height must still remain fixed at 256
+        launcher.query = "non_existent_query_xyz".to_string();
+        let res_none = launcher.filtered_results(LAUNCHER_MAX_RESULTS);
+        assert!(res_none.is_empty());
+        assert_eq!(launcher.rect.height, 256);
+    }
+
+    #[test]
     fn test_plan_md_fuzzy_match_ff_finds_firefox() {
         let cache = vec![
             "firefox".to_string(),
@@ -1683,12 +1638,7 @@ Exec=link
         let _ = std::fs::remove_dir_all(&temp_dir);
         let _ = std::fs::create_dir_all(&temp_dir);
 
-        let temp_desktop = std::env::temp_dir().join(format!("tilo_launcher_dyn_desk_{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&temp_desktop);
-        let _ = std::fs::create_dir_all(&temp_desktop);
-
         let path_var = temp_dir.to_str().unwrap();
-        let desktop_dirs = vec![temp_desktop.clone()];
 
         // 1. Initial state: create bin1
         let bin1 = temp_dir.join("bin1");
@@ -1698,12 +1648,12 @@ Exec=link
         std::fs::set_permissions(&bin1, perms).unwrap();
 
         let mut launcher = Launcher::new();
-        launcher.refresh_from(path_var, &desktop_dirs);
+        launcher.refresh_from(path_var, &[]);
         assert!(launcher.executable_cache.contains(&"bin1".to_string()));
         assert!(!launcher.executable_cache.contains(&"bin2_new".to_string()));
 
         // Check if needed returns false when nothing changed
-        assert!(!launcher.refresh_if_needed_from(path_var, &desktop_dirs));
+        assert!(!launcher.refresh_if_needed_from(path_var, &[]));
 
         // 2. Wait briefly to guarantee mtime change, then install/create bin2_new
         std::thread::sleep(std::time::Duration::from_millis(50));
@@ -1714,7 +1664,7 @@ Exec=link
         std::fs::set_permissions(&bin2, perms2).unwrap();
 
         // 3. refresh_if_needed_from should detect the directory change and refresh!
-        assert!(launcher.refresh_if_needed_from(path_var, &desktop_dirs));
+        assert!(launcher.refresh_if_needed_from(path_var, &[]));
         assert!(launcher.executable_cache.contains(&"bin2_new".to_string()));
 
         // Searching for newly installed binary works immediately
@@ -1723,6 +1673,17 @@ Exec=link
 
         // Cleanup
         let _ = std::fs::remove_dir_all(&temp_dir);
-        let _ = std::fs::remove_dir_all(&temp_desktop);
+    }
+
+    #[test]
+    fn test_desktop_directories_are_not_searched_or_monitored() {
+        assert!(get_desktop_directories().is_empty());
+
+        let monitored = get_monitored_directories();
+        // Monitored directories must not contain standard .desktop application paths
+        for dir in &monitored {
+            let s = dir.to_string_lossy();
+            assert!(!s.ends_with("share/applications"), "Monitored dirs should not contain desktop application dirs: {}", s);
+        }
     }
 }

@@ -204,6 +204,7 @@ fn test_launcher_in_xephyr_lifecycle_and_interaction() {
         }
 
         assert_eq!(wm.launcher.as_ref().unwrap().query, "f");
+        assert_eq!(wm.launcher.as_ref().unwrap().rect.height, 256, "Launcher height must stay fixed at 256px");
 
         // 5. Test close launcher
         wm.close_launcher().expect("close_launcher should succeed");
@@ -262,20 +263,15 @@ fn test_dynamic_refresh_on_open_launcher() {
     perms.set_mode(0o755);
     std::fs::set_permissions(&app1, perms).unwrap();
 
-    let temp_desktop_dir = std::env::temp_dir().join(format!("tilo_test_dyn_desk_{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&temp_desktop_dir);
-    let _ = std::fs::create_dir_all(&temp_desktop_dir);
-
     let path_var = temp_bin_dir.to_str().unwrap();
-    let desktop_dirs = vec![temp_desktop_dir.clone()];
 
     let mut launcher = Launcher::new();
-    launcher.refresh_from(path_var, &desktop_dirs);
+    launcher.refresh_from(path_var, &[]);
     assert!(launcher.executable_cache.contains(&"init_app".to_string()));
     assert!(!launcher.executable_cache.contains(&"newly_installed_pkg".to_string()));
 
     // Verify refresh_if_needed_from returns false when no files or directories changed
-    assert!(!launcher.refresh_if_needed_from(path_var, &desktop_dirs));
+    assert!(!launcher.refresh_if_needed_from(path_var, &[]));
 
     // 2. Simulate installing a new package/binary while system is running
     std::thread::sleep(std::time::Duration::from_millis(50));
@@ -286,7 +282,7 @@ fn test_dynamic_refresh_on_open_launcher() {
     std::fs::set_permissions(&app2, perms2).unwrap();
 
     // 3. Opening launcher triggers refresh_if_needed_from
-    assert!(launcher.refresh_if_needed_from(path_var, &desktop_dirs));
+    assert!(launcher.refresh_if_needed_from(path_var, &[]));
     assert!(launcher.executable_cache.contains(&"newly_installed_pkg".to_string()));
 
     launcher.query = "newly".to_string();
@@ -295,7 +291,6 @@ fn test_dynamic_refresh_on_open_launcher() {
 
     // Cleanup
     let _ = std::fs::remove_dir_all(&temp_bin_dir);
-    let _ = std::fs::remove_dir_all(&temp_desktop_dir);
 }
 
 #[test]
@@ -315,7 +310,7 @@ NoDisplay=false
 "#;
     std::fs::write(&desktop_file, content).unwrap();
 
-    let (parsed_names, commands) = scan_desktop_dirs(&[temp_desktop_dir.clone()]);
+    let (parsed_names, commands) = scan_desktop_dirs(std::slice::from_ref(&temp_desktop_dir));
     assert!(parsed_names.contains(&"VLC media player".to_string()));
     assert_eq!(commands.get("VLC media player").unwrap(), "vlc --started-from-file");
     assert_eq!(commands.get("vlc").unwrap(), "vlc --started-from-file");
