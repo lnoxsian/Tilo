@@ -242,6 +242,8 @@ echo -e "${C_GREEN}--> Launching Xephyr on display ${XEPHYR_DISPLAY} (${SCREEN_S
 "${XEPHYR_BIN}" "${XEPHYR_DISPLAY}" \
     -ac \
     -screen "${SCREEN_SIZE}" \
+    -title "tilo [Xephyr ${XEPHYR_DISPLAY}]" \
+    -resizeable \
     -br \
     -noreset &
 XEPHYR_PID=$!
@@ -407,6 +409,7 @@ show_keybindings() {
 ${C_BOLD}${C_YELLOW}tilo Default Keybindings inside Xephyr:${C_RESET}
   ${C_CYAN}Mod4 + Return${C_RESET}           Spawn terminal (xterm / alacritty / kitty)
   ${C_CYAN}Mod4 + Space${C_RESET}            Toggle Application Launcher (search & spawn apps)
+  ${C_CYAN}Alt + Space / Mod4 + d${C_RESET}  Alternative shortcuts to toggle Launcher (if host captures Super)
   ${C_CYAN}Mod4 + Shift + Space${C_RESET}    Toggle Tiled <-> Floating mode for focused window
   ${C_CYAN}Mod4 + f${C_RESET}                Toggle Fullscreen mode for focused window
   ${C_CYAN}Mod4 + j / k${C_RESET}            Focus Next / Previous window (Down / Up in stack)
@@ -418,6 +421,12 @@ ${C_BOLD}${C_YELLOW}tilo Default Keybindings inside Xephyr:${C_RESET}
   ${C_CYAN}Mod4 + Shift + q${C_RESET}        Close focused window (graceful ICCCM delete)
   ${C_CYAN}Mod4 + Left Drag${C_RESET}        Move floating window
   ${C_CYAN}Mod4 + Right Drag${C_RESET}       Resize floating window
+
+${C_YELLOW}Tips for Xephyr Testing:${C_RESET}
+  - If your desktop intercepts Super/Mod4, press ${C_CYAN}Ctrl + Shift${C_RESET} inside Xephyr
+    to capture/release the keyboard and mouse from your host OS.
+  - Or simply use ${C_CYAN}Alt + Space${C_RESET} or ${C_CYAN}Mod4 + d${C_RESET} to toggle the launcher!
+  - Or type ${C_CYAN}launcher${C_RESET} in the interactive terminal prompt below!
 EOF
 }
 
@@ -451,12 +460,14 @@ echo -e "${C_BOLD}${C_BLUE}=====================================================
 show_session_info
 echo ""
 echo -e "${C_BOLD}Interactive Prompt Commands:${C_RESET}"
+echo -e "  ${C_CYAN}launcher / app${C_RESET}   Toggle tilo integrated application launcher"
 echo -e "  ${C_CYAN}demo <mode>${C_RESET}      Run demo: ${C_YELLOW}single, master, stack, floating, fullscreen, workspaces, all, tour${C_RESET}"
 echo -e "  ${C_CYAN}term / xterm${C_RESET}     Spawn terminal in Xephyr"
 echo -e "  ${C_CYAN}clock / calc / eyes${C_RESET} Spawn sample app in Xephyr"
 echo -e "  ${C_CYAN}launch <cmd>${C_RESET}     Run arbitrary command in Xephyr (e.g. launch firefox, launch htop)"
 echo -e "  ${C_CYAN}<any-command>${C_RESET}    Directly launch any system command into Xephyr"
 echo -e "  ${C_CYAN}clean / clear${C_RESET}    Close all demo client windows"
+echo -e "  ${C_CYAN}reload${C_RESET}           Reload tilo config (SIGHUP)"
 echo -e "  ${C_CYAN}keys${C_RESET}             Show tilo default keybindings"
 echo -e "  ${C_CYAN}info / status${C_RESET}    Show active session info & clients"
 echo -e "  ${C_CYAN}help / ?${C_RESET}         Show this commands list"
@@ -501,6 +512,7 @@ while true; do
 
         help|\?)
             echo -e "${C_BOLD}Commands:${C_RESET}"
+            echo -e "  ${C_CYAN}launcher / app${C_RESET}     Toggle integrated application launcher"
             echo -e "  ${C_CYAN}demo <single|master|stack|floating|fullscreen|workspaces|all|tour>${C_RESET}"
             echo -e "  ${C_CYAN}term / xterm${C_RESET}       Spawn terminal"
             echo -e "  ${C_CYAN}clock / xclock${C_RESET}     Spawn clock"
@@ -508,9 +520,28 @@ while true; do
             echo -e "  ${C_CYAN}eyes / xeyes${C_RESET}       Spawn xeyes"
             echo -e "  ${C_CYAN}launch <cmd>${C_RESET}       Launch any command with DISPLAY=${XEPHYR_DISPLAY}"
             echo -e "  ${C_CYAN}clean / clear${C_RESET}      Close all demo clients"
+            echo -e "  ${C_CYAN}reload${C_RESET}             Reload tilo config (SIGHUP)"
             echo -e "  ${C_CYAN}keys${C_RESET}               Show tilo keybindings"
             echo -e "  ${C_CYAN}info / status${C_RESET}      Show session status"
             echo -e "  ${C_CYAN}quit / exit / q${C_RESET}    Quit"
+            ;;
+
+        launcher|app|dmenu|rofi)
+            if [[ -n "${TILO_PID}" ]] && kill -0 "${TILO_PID}" 2>/dev/null; then
+                kill -USR1 "${TILO_PID}"
+                echo -e "${C_GREEN}  [+] Toggled application launcher (SIGUSR1 -> tilo PID ${TILO_PID})${C_RESET}"
+            else
+                echo -e "${C_RED}  [-] tilo is not running.${C_RESET}"
+            fi
+            ;;
+
+        reload)
+            if [[ -n "${TILO_PID}" ]] && kill -0 "${TILO_PID}" 2>/dev/null; then
+                kill -HUP "${TILO_PID}"
+                echo -e "${C_GREEN}  [+] Sent SIGHUP to tilo PID ${TILO_PID} to reload configuration.${C_RESET}"
+            else
+                echo -e "${C_RED}  [-] tilo is not running.${C_RESET}"
+            fi
             ;;
 
         demo)

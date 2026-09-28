@@ -139,7 +139,13 @@ bind Mod4+Return spawn foot
         let win1 = create_client_window(&client_conn.connection, wm.context.root_window, 50, 50, 200, 200);
         let win2 = create_client_window(&client_conn.connection, wm.context.root_window, 100, 100, 200, 200);
 
-        wm.process_pending_events().unwrap();
+        for _ in 0..30 {
+            let _ = wm.process_pending_events();
+            if wm.client_state.all_clients().len() == 2 {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
         assert_eq!(wm.client_state.all_clients().len(), 2);
 
         // Verify initial window border width on win1

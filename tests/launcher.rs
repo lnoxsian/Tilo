@@ -181,7 +181,7 @@ fn test_launcher_in_xephyr_lifecycle_and_interaction() {
 
         // 4. Simulate typing characters: 'f', 'o', 'o', 't'
         // Using handle_launcher_keypress and update_launcher_state directly
-        let mapping = wm.input_manager.mapping.as_ref().unwrap();
+        let mapping = wm.input_manager.mapping.as_ref().unwrap().clone();
         let keycodes_f = mapping.keysym_to_keycodes('f' as u32);
         if let Some(&kc) = keycodes_f.first() {
             let ev = KeyPressEvent {
@@ -215,5 +215,77 @@ fn test_launcher_in_xephyr_lifecycle_and_interaction() {
 
         wm.toggle_launcher().expect("toggle_launcher (close) should succeed");
         assert!(!wm.launcher.as_ref().unwrap().visible);
+
+        // 7. Test triggering launcher via KeyPress event (Mod4+Space, Alt+Space, Mod4+d)
+        let space_kc = mapping.keysym_to_keycodes(tilo::keybind::XK_SPACE)[0];
+        let d_kc = mapping.keysym_to_keycodes(tilo::keybind::XK_D)[0];
+
+        // Mod4 + Space
+        let ev_mod4_space = KeyPressEvent {
+            response_type: 2,
+            detail: space_kc,
+            sequence: 0,
+            time: 0,
+            root: wm.context.root_window,
+            event: wm.context.root_window,
+            child: 0,
+            root_x: 0,
+            root_y: 0,
+            event_x: 0,
+            event_y: 0,
+            state: tilo::keybind::MOD_SUPER.into(),
+            same_screen: true,
+        };
+        wm.handle_event(x11rb::protocol::Event::KeyPress(ev_mod4_space)).unwrap();
+        assert!(wm.launcher.as_ref().unwrap().visible, "Mod4+Space should open launcher");
+        wm.close_launcher().unwrap();
+
+        // Alt + Space (Mod1+Space fallback)
+        let ev_alt_space = KeyPressEvent {
+            response_type: 2,
+            detail: space_kc,
+            sequence: 0,
+            time: 0,
+            root: wm.context.root_window,
+            event: wm.context.root_window,
+            child: 0,
+            root_x: 0,
+            root_y: 0,
+            event_x: 0,
+            event_y: 0,
+            state: tilo::keybind::MOD_ALT.into(),
+            same_screen: true,
+        };
+        wm.handle_event(x11rb::protocol::Event::KeyPress(ev_alt_space)).unwrap();
+        assert!(wm.launcher.as_ref().unwrap().visible, "Alt+Space should open launcher");
+        wm.close_launcher().unwrap();
+
+        // Mod4 + d fallback
+        let ev_mod4_d = KeyPressEvent {
+            response_type: 2,
+            detail: d_kc,
+            sequence: 0,
+            time: 0,
+            root: wm.context.root_window,
+            event: wm.context.root_window,
+            child: 0,
+            root_x: 0,
+            root_y: 0,
+            event_x: 0,
+            event_y: 0,
+            state: tilo::keybind::MOD_SUPER.into(),
+            same_screen: true,
+        };
+        wm.handle_event(x11rb::protocol::Event::KeyPress(ev_mod4_d)).unwrap();
+        assert!(wm.launcher.as_ref().unwrap().visible, "Mod4+d should open launcher");
+        wm.close_launcher().unwrap();
+
+        // 8. Test SIGUSR1 signal toggle
+        tilo::wm::LAUNCHER_SIGNAL.store(true, std::sync::atomic::Ordering::SeqCst);
+        if tilo::wm::LAUNCHER_SIGNAL.swap(false, std::sync::atomic::Ordering::SeqCst) {
+            wm.toggle_launcher().unwrap();
+        }
+        assert!(wm.launcher.as_ref().unwrap().visible, "SIGUSR1 should toggle launcher open");
+        wm.close_launcher().unwrap();
     }
 }

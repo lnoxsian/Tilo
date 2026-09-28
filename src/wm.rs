@@ -35,7 +35,29 @@ use x11rb::protocol::xproto::{
     ConfigWindow, ConfigureRequestEvent, ConfigureWindowAux, ConnectionExt, EventMask, InputFocus,
     KeyPressEvent, PropertyNotifyEvent, StackMode, Window,
 };
+use std::sync::atomic::{AtomicBool, Ordering};
 use x11rb::protocol::Event;
+
+/// Global flag for SIGUSR1 signal (toggles launcher).
+pub static LAUNCHER_SIGNAL: AtomicBool = AtomicBool::new(false);
+/// Global flag for SIGHUP signal (reloads config).
+pub static RELOAD_SIGNAL: AtomicBool = AtomicBool::new(false);
+
+extern "C" fn sigusr1_handler(_: libc::c_int) {
+    LAUNCHER_SIGNAL.store(true, Ordering::SeqCst);
+}
+
+extern "C" fn sighup_handler(_: libc::c_int) {
+    RELOAD_SIGNAL.store(true, Ordering::SeqCst);
+}
+
+/// Registers POSIX signal handlers for runtime control.
+pub fn setup_signal_handlers() {
+    unsafe {
+        libc::signal(libc::SIGUSR1, sigusr1_handler as *const () as usize);
+        libc::signal(libc::SIGHUP, sighup_handler as *const () as usize);
+    }
+}
 
 /// Statistics on events processed by the window manager.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -399,14 +421,30 @@ impl WindowManager {
                 .stack_mode(x11rb::protocol::xproto::StackMode::ABOVE),
         )?;
 
-        // Grab keyboard to route all keystrokes directly to launcher
-        let _ = self.context.connection.grab_keyboard(
-            false,
+        // Set input focus directly to launcher window
+        let _ = self.context.connection.set_input_focus(
+            InputFocus::POINTER_ROOT,
             launcher.window_id,
             x11rb::CURRENT_TIME,
-            x11rb::protocol::xproto::GrabMode::ASYNC,
-            x11rb::protocol::xproto::GrabMode::ASYNC,
-        )?;
+        );
+
+        // Grab keyboard with small retries to ensure grab succeeds if another key grab was released
+        for _ in 0..10 {
+            if let Ok(cookie) = self.context.connection.grab_keyboard(
+                false,
+                launcher.window_id,
+                x11rb::CURRENT_TIME,
+                x11rb::protocol::xproto::GrabMode::ASYNC,
+                x11rb::protocol::xproto::GrabMode::ASYNC,
+            ) {
+                if let Ok(reply) = cookie.reply() {
+                    if reply.status == x11rb::protocol::xproto::GrabStatus::SUCCESS {
+                        break;
+                    }
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
 
         launcher.visible = true;
         launcher.query.clear();
@@ -428,9 +466,16 @@ impl WindowManager {
                 let _ = self.context.connection.unmap_window(launcher.window_id);
                 self.context.flush()?;
 
-                // Restore focus to active client window
+                // Restore focus to active client window or root
                 if let Some(focused) = self.client_state.focused_window() {
                     let _ = self.focus_client(focused);
+                } else {
+                    let _ = self.context.connection.set_input_focus(
+                        InputFocus::POINTER_ROOT,
+                        self.context.root_window,
+                        x11rb::CURRENT_TIME,
+                    );
+                    let _ = self.context.flush();
                 }
             }
         }
@@ -549,9 +594,17 @@ impl WindowManager {
 
     /// Starts the main event loop, blocking the thread and waiting for X11 events.
     pub fn run(&mut self) -> Result<(), X11Error> {
+        setup_signal_handlers();
         self.context.flush()?;
         let mut last_status_update = std::time::Instant::now();
         while self.running {
+            if LAUNCHER_SIGNAL.swap(false, Ordering::SeqCst) {
+                let _ = self.toggle_launcher();
+            }
+            if RELOAD_SIGNAL.swap(false, Ordering::SeqCst) {
+                let _ = self.reload_config();
+            }
+
             let mut got_event = false;
             while let Some(event) = self.context.connection.poll_for_event()? {
                 self.handle_event(event)?;

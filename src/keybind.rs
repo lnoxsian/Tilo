@@ -224,6 +224,11 @@ pub fn default_keybindings() -> Vec<KeyBind> {
         // Window States & Launcher
         KeyBind::new(MOD_SUPER, XK_F, Action::ToggleFullscreen),
         KeyBind::new(MOD_SUPER, XK_SPACE, Action::Launcher),
+        KeyBind::new(MOD_SUPER, XK_D, Action::Launcher),
+        KeyBind::new(MOD_SUPER, XK_P, Action::Launcher),
+        KeyBind::new(MOD_ALT, XK_SPACE, Action::Launcher),
+        KeyBind::new(MOD_ALT, XK_D, Action::Launcher),
+        KeyBind::new(MOD_ALT, XK_P, Action::Launcher),
         KeyBind::new(MOD_SUPER | MOD_SHIFT, XK_SPACE, Action::ToggleFloating),
         // Workspaces 1-9
         KeyBind::new(MOD_SUPER, XK_1, Action::Workspace(1)),

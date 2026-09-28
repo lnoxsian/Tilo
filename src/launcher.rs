@@ -13,8 +13,8 @@ use std::process::{Command, Stdio};
 
 use crate::input::KeyboardMapping;
 use crate::keybind::{
-    MOD_CONTROL, XK_A, XK_BACKSPACE, XK_DOWN, XK_ESCAPE, XK_P, XK_N,
-    XK_RETURN, XK_U, XK_UP, XK_W,
+    MOD_ALT, MOD_CONTROL, MOD_SUPER, XK_A, XK_BACKSPACE, XK_D, XK_DOWN, XK_ESCAPE, XK_N,
+    XK_P, XK_RETURN, XK_SPACE, XK_U, XK_UP, XK_W,
 };
 use crate::layout::Rect;
 use crate::render::Renderer;
@@ -466,6 +466,14 @@ pub fn handle_launcher_keypress(
 ) -> Option<LauncherAction> {
     let keysym = mapping.keycode_to_keysym(keycode, modifiers);
     let ctrl = (modifiers & MOD_CONTROL) != 0;
+
+    let is_mod = (modifiers & (MOD_SUPER | MOD_ALT)) != 0;
+    if is_mod {
+        if keysym == XK_SPACE || keysym == XK_D || keysym == XK_P || keysym == XK_ESCAPE {
+            return Some(LauncherAction::Cancel);
+        }
+        return None;
+    }
 
     if ctrl {
         match keysym {
