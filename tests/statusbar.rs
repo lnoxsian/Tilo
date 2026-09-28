@@ -351,3 +351,50 @@ fn test_statusbar_renderer_in_xephyr() {
     }
 }
 
+#[test]
+fn test_statusbar_dynamic_screen_resize() {
+    let server = match XephyrServer::start(169) {
+        Some(s) => s,
+        None => {
+            eprintln!("Xephyr not available on :169, skipping integration test");
+            return;
+        }
+    };
+
+    let ctx = X11Context::connect_to(Some(&server.display)).expect("Failed to connect to Xephyr");
+    let mut wm = WindowManager::new(ctx).expect("Failed to create WindowManager");
+    let root_depth = wm.context.connection.setup().roots[wm.context.screen_num].root_depth;
+
+    // 1. Enable statusbar with initial width (1000px)
+    let bar_win = wm.enable_statusbar(26).expect("Failed to enable statusbar");
+    let initial_geom = wm.context.connection.get_geometry(bar_win).unwrap().reply().unwrap();
+    assert_eq!(initial_geom.width, 1000);
+    assert_eq!(wm.statusbar.as_ref().unwrap().rect.width, 1000);
+    assert_eq!(wm.statusbar.as_ref().unwrap().renderer.as_ref().unwrap().width, 1000);
+
+    // 2. Perform dynamic resize to a new resolution (1366x768)
+    let new_rect = Rect::new(0, 0, 1366, 26);
+    wm.statusbar.as_mut().unwrap().resize(&wm.context.connection, new_rect, root_depth).expect("Resize should succeed");
+
+    // 3. Verify that the X11 statusbar window and internal renderer were updated
+    let updated_geom = wm.context.connection.get_geometry(bar_win).unwrap().reply().unwrap();
+    assert_eq!(updated_geom.width, 1366);
+    assert_eq!(wm.statusbar.as_ref().unwrap().rect.width, 1366);
+    assert_eq!(wm.statusbar.as_ref().unwrap().renderer.as_ref().unwrap().width, 1366);
+
+    // 4. Verify statusbar re-renders cleanly at the new width without errors
+    let render_res = wm.render_statusbar();
+    assert!(render_res.is_ok());
+
+    // 5. Test another resize to 1920x1080
+    let fhd_rect = Rect::new(0, 0, 1920, 26);
+    wm.statusbar.as_mut().unwrap().resize(&wm.context.connection, fhd_rect, root_depth).expect("FHD resize should succeed");
+    let fhd_geom = wm.context.connection.get_geometry(bar_win).unwrap().reply().unwrap();
+    assert_eq!(fhd_geom.width, 1920);
+    assert_eq!(wm.statusbar.as_ref().unwrap().rect.width, 1920);
+    assert_eq!(wm.statusbar.as_ref().unwrap().renderer.as_ref().unwrap().width, 1920);
+
+    wm.disable_statusbar().expect("disable_statusbar should succeed");
+}
+
+

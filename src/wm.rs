@@ -23,7 +23,7 @@ use crate::icccm::{
     set_wm_state as icccm_set_wm_state, IcccmAtoms, WmState,
 };
 use crate::input::InputManager;
-use crate::keybind::Action;
+use crate::keybind::{parse_modifier, Action, MOD_LOCK, MOD_SUPER};
 use crate::layout::{apply_layout_with_border, calculate_master_stack, LayoutConfig, Rect};
 use crate::rules::{apply_rules as apply_window_rules, RuleAction, WindowRule};
 use crate::statusbar::{create_statusbar_window, Statusbar, StatusbarError};
@@ -31,12 +31,13 @@ use crate::workspace::{WorkspaceId, WorkspaceManager};
 use crate::x11::{X11Context, X11Error};
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::{
-    AtomEnum, ButtonPressEvent, ChangeWindowAttributesAux, ClientMessageEvent,
-    ConfigWindow, ConfigureRequestEvent, ConfigureWindowAux, ConnectionExt, EventMask, InputFocus,
-    KeyPressEvent, PropertyNotifyEvent, StackMode, Window,
+    Allow, AtomEnum, ButtonPressEvent, ButtonReleaseEvent, ChangeWindowAttributesAux, ClientMessageEvent,
+    ConfigWindow, ConfigureRequestEvent, ConfigureWindowAux, ConnectionExt, EventMask, GrabMode, InputFocus,
+    KeyPressEvent, MotionNotifyEvent, PropertyNotifyEvent, StackMode, Window,
 };
 use std::sync::atomic::{AtomicBool, Ordering};
 use x11rb::protocol::Event;
+use x11rb::wrapper::ConnectionExt as _;
 
 /// Global flag for SIGUSR1 signal (toggles launcher).
 pub static LAUNCHER_SIGNAL: AtomicBool = AtomicBool::new(false);
@@ -121,6 +122,12 @@ pub struct WindowManager {
     pub statusbar: Option<Statusbar>,
     /// Built-in application launcher instance if initialized.
     pub launcher: Option<crate::launcher::Launcher>,
+    /// Dedicated floating scratchpad state (Phase 23).
+    pub scratchpad: crate::scratchpad::Scratchpad,
+    /// Active mouse drag interaction state (Phase 24).
+    pub mouse_action: crate::mouse::MouseAction,
+    /// Registered mouse button bindings (Phase 24).
+    pub mouse_bindings: Vec<crate::mouse::MouseBinding>,
 }
 
 impl WindowManager {
@@ -171,6 +178,9 @@ impl WindowManager {
             let _ = monitor_manager.reconcile_monitors(randr_monitors);
         }
 
+        let mod_mask = parse_modifier(&config.mod_key).unwrap_or(MOD_SUPER);
+        let mouse_bindings = crate::mouse::default_mouse_bindings(mod_mask);
+
         Ok(Self {
             context,
             client_state: ClientState::new(),
@@ -190,6 +200,9 @@ impl WindowManager {
             config,
             statusbar: None,
             launcher: Some(crate::launcher::Launcher::new()),
+            scratchpad: crate::scratchpad::Scratchpad::default(),
+            mouse_action: crate::mouse::MouseAction::None,
+            mouse_bindings,
         })
     }
 
@@ -207,6 +220,17 @@ impl WindowManager {
             self.context.root_window,
             config.bindings.clone(),
         )?;
+
+        let mod_mask = parse_modifier(&config.mod_key).unwrap_or(MOD_SUPER);
+        self.mouse_bindings = crate::mouse::default_mouse_bindings(mod_mask);
+        for &win in &self.client_state.all_clients() {
+            let _ = crate::mouse::grab_client_buttons(
+                &self.context.connection,
+                win,
+                &self.mouse_bindings,
+                self.input_manager.num_lock_mask,
+            );
+        }
 
         self.config = config;
 
@@ -323,17 +347,36 @@ impl WindowManager {
         Ok(())
     }
 
-    /// Updates all statusbar modules and re-renders if metrics or text changed.
+    /// Checks if screen dimensions or statusbar width have changed, triggering refresh if needed.
+    pub fn check_screen_resize(&mut self) -> bool {
+        let (geom_w, geom_h) = match self.context.connection.get_geometry(self.context.root_window) {
+            Ok(cookie) => match cookie.reply() {
+                Ok(geom) => (geom.width, geom.height),
+                Err(_) => return false,
+            },
+            Err(_) => return false,
+        };
+
+        let bar_mismatch = self.statusbar.as_ref().map(|b| b.rect.width != geom_w as u32).unwrap_or(false);
+        if geom_w != self.context.screen_width || geom_h != self.context.screen_height || bar_mismatch {
+            let _ = self.refresh_monitors();
+            return true;
+        }
+        false
+    }
+
+    /// Updates all statusbar modules and re-renders if metrics, text, or resolution changed.
     pub fn update_statusbar(&mut self) -> bool {
+        let resized = self.check_screen_resize();
         let changed = if let Some(ref mut bar) = self.statusbar {
             bar.update_all()
         } else {
             false
         };
-        if changed {
+        if changed || resized {
             let _ = self.render_statusbar();
         }
-        changed
+        changed || resized
     }
 
     /// Redraws the statusbar UI using the attached renderer.
@@ -562,6 +605,111 @@ impl WindowManager {
         Ok(())
     }
 
+    // -- Scratchpad (Phase 23) --
+
+    /// Assigns a client window to be the scratchpad, ensuring it floats.
+    pub fn set_scratchpad_client(&mut self, window: Window) {
+        crate::scratchpad::set_scratchpad_client(&mut self.scratchpad, window);
+        if let Some(c) = self.client_state.get_client_mut(window) {
+            c.floating = true;
+        }
+        self.scratchpad.is_visible = true;
+    }
+
+    /// Toggles the scratchpad window between hidden and centered visible floating state.
+    ///
+    /// Follows Phase 23:
+    /// - If no scratchpad is set, spawns the default terminal emulator.
+    /// - If visible: unmaps window, marks iconic, restores previous focus.
+    /// - If hidden: moves to current workspace, centers on active monitor, maps, raises ABOVE, focuses.
+    pub fn toggle_scratchpad(&mut self) -> Result<(), X11Error> {
+        if let Some(win) = self.scratchpad.client {
+            if !self.client_state.contains(win) {
+                self.scratchpad.clear_client();
+            }
+        }
+
+        if self.scratchpad.client.is_none() {
+            // Spawn default terminal emulator as scratchpad
+            let _ = crate::launcher::spawn_app(&self.config.terminal);
+            return Ok(());
+        }
+
+        let win = self.scratchpad.client.unwrap();
+        if self.scratchpad.is_visible {
+            // Hide: unmap window
+            let _ = self.context.connection.unmap_window(win);
+            self.scratchpad.is_visible = false;
+            if let Some(client) = self.client_state.get_client_mut(win) {
+                client.mapped = false;
+            }
+            let _ = self.set_wm_state(win, WmState::Iconic);
+
+            // Restore focus if scratchpad had focus
+            if self.client_state.focused_window() == Some(win) {
+                let focus_candidate = self
+                    .workspace_manager
+                    .get(self.current_workspace)
+                    .and_then(|ws| ws.clients.iter().copied().find(|&w| w != win));
+
+                if let Some(next_focus) = focus_candidate {
+                    let _ = self.focus_client(next_focus);
+                } else {
+                    let _ = self.context.connection.set_input_focus(
+                        x11rb::protocol::xproto::InputFocus::POINTER_ROOT,
+                        self.context.root_window,
+                        x11rb::CURRENT_TIME,
+                    );
+                    let _ = self.update_ewmh_active_window();
+                }
+            }
+        } else {
+            // Show: center on active monitor, map, raise ABOVE, focus
+            let mon = self.monitor_manager.active_monitor().clone();
+            let geom = crate::scratchpad::calculate_scratchpad_geometry(
+                mon.x,
+                mon.y,
+                mon.width,
+                mon.height,
+            );
+
+            if let Some(client) = self.client_state.get_client_mut(win) {
+                client.workspace = self.current_workspace;
+                client.mapped = true;
+                client.floating = true;
+                client.floating_geometry = Some(crate::floating::FloatingGeometry::new(
+                    geom.x,
+                    geom.y,
+                    geom.width,
+                    geom.height,
+                ));
+            }
+
+            self.workspace_manager.add_client(win, self.current_workspace);
+
+            let aux = ConfigureWindowAux::new()
+                .x(geom.x)
+                .y(geom.y)
+                .width(geom.width)
+                .height(geom.height)
+                .stack_mode(StackMode::ABOVE);
+            let _ = self.context.connection.configure_window(win, &aux);
+            let _ = self.context.connection.map_window(win);
+            let _ = self.set_wm_state(win, WmState::Normal);
+            let _ = update_net_wm_state_above(
+                &self.context.connection,
+                win,
+                true,
+                &self.ewmh_atoms,
+            );
+            let _ = self.focus_client(win);
+            self.scratchpad.is_visible = true;
+        }
+
+        self.context.flush()?;
+        Ok(())
+    }
+
     /// Updates the root window's `_NET_ACTIVE_WINDOW` property.
     pub fn update_ewmh_active_window(&self) -> Result<(), X11Error> {
         let focused = self.client_state.focused_window();
@@ -695,9 +843,20 @@ impl WindowManager {
                 self.stats.button_presses += 1;
                 self.handle_button_press(&ev)?;
             }
+            Event::MotionNotify(ev) => {
+                self.handle_motion_notify(&ev)?;
+            }
+            Event::ButtonRelease(ev) => {
+                self.handle_button_release(&ev)?;
+            }
             Event::ClientMessage(ev) => {
                 self.stats.client_messages += 1;
                 self.handle_client_message(&ev)?;
+            }
+            Event::ConfigureNotify(ev) => {
+                if ev.window == self.context.root_window || ev.event == self.context.root_window {
+                    let _ = self.refresh_monitors();
+                }
             }
             Event::RandrScreenChangeNotify(_) | Event::RandrNotify(_) => {
                 let _ = self.refresh_monitors();
@@ -858,6 +1017,12 @@ impl WindowManager {
             let _ = self.set_wm_state(window, WmState::Withdrawn);
         }
 
+        let _ = crate::mouse::grab_client_buttons(
+            &self.context.connection,
+            window,
+            &self.mouse_bindings,
+            self.input_manager.num_lock_mask,
+        );
         let _ = self.update_ewmh_client_list();
         Ok(true)
     }
@@ -876,6 +1041,9 @@ impl WindowManager {
         self.workspace_focus.remove_window_all(window);
 
         let removed = self.client_state.remove_client(window);
+        if self.scratchpad.client == Some(window) {
+            self.scratchpad.clear_client();
+        }
         let _ = self.set_wm_state(window, WmState::Withdrawn);
         let _ = self.update_ewmh_client_list();
         if removed.is_some() {
@@ -1146,6 +1314,21 @@ impl WindowManager {
             }
             let _ = self.context.connection.map_window(win);
             let _ = self.set_wm_state(win, WmState::Normal);
+        }
+
+        // If scratchpad is currently visible, ensure it remains visible on target workspace
+        if let Some(scratch_win) = self.scratchpad.client {
+            if self.scratchpad.is_visible {
+                self.workspace_manager.move_client(scratch_win, target_id);
+                if let Some(c) = self.client_state.get_client_mut(scratch_win) {
+                    c.workspace = target_id;
+                    c.mapped = true;
+                }
+                let _ = self.context.connection.map_window(scratch_win);
+                let aux = ConfigureWindowAux::new().stack_mode(StackMode::ABOVE);
+                let _ = self.context.connection.configure_window(scratch_win, &aux);
+                let _ = self.set_wm_state(scratch_win, WmState::Normal);
+            }
         }
 
         self.monitor_manager.active_monitor_mut().workspace = target_id;
@@ -1595,6 +1778,15 @@ impl WindowManager {
 
     /// Refreshes monitor geometry by querying XRandR and reconciles state.
     pub fn refresh_monitors(&mut self) -> Result<(), X11Error> {
+        // 1. Query the live root window geometry to get the actual current resolution
+        if let Ok(reply) = self.context.connection.get_geometry(self.context.root_window) {
+            if let Ok(geom) = reply.reply() {
+                self.context.screen_width = geom.width;
+                self.context.screen_height = geom.height;
+            }
+        }
+
+        // 2. Query updated monitors from XRandR (using the updated screen dimensions as fallback)
         let new_monitors = query_monitors(
             &self.context.connection,
             self.context.root_window,
@@ -1617,6 +1809,71 @@ impl WindowManager {
                     }
                     let _ = self.context.connection.map_window(win);
                     let _ = self.set_wm_state(win, WmState::Normal);
+                }
+            }
+        }
+
+        // 3. Update EWMH _NET_DESKTOP_GEOMETRY
+        let desktop_geom = [self.context.screen_width as u32, self.context.screen_height as u32];
+        let _ = self.context.connection.change_property32(
+            x11rb::protocol::xproto::PropMode::REPLACE,
+            self.context.root_window,
+            self.ewmh_atoms.net_desktop_geometry,
+            x11rb::protocol::xproto::AtomEnum::CARDINAL,
+            &desktop_geom,
+        );
+
+        // 4. Update the Statusbar size and position to match the primary monitor (or new screen resolution)
+        if let Some(ref mut bar) = self.statusbar {
+            let primary_mon = self.monitor_manager.monitors.iter().find(|m| m.is_primary)
+                .or_else(|| self.monitor_manager.monitors.first());
+            let (bar_x, bar_y, bar_w) = if let Some(m) = primary_mon {
+                (m.x, m.y, m.width)
+            } else {
+                (0, 0, self.context.screen_width as u32)
+            };
+            let new_bar_rect = Rect::new(bar_x, bar_y, bar_w, bar.rect.height);
+            let screen = &self.context.connection.setup().roots[self.context.screen_num];
+            let _ = bar.resize(&self.context.connection, new_bar_rect, screen.root_depth);
+            let _ = self.render_statusbar();
+        }
+
+        // 5. If the application launcher is open, re-center it on the active monitor
+        if let Some(ref mut launcher) = self.launcher {
+            if launcher.visible {
+                let active_mon = self.monitor_manager.active_monitor().clone();
+                let width = launcher.rect.width as u16;
+                let height = launcher.rect.height as u16;
+                let x = (active_mon.x + (active_mon.width as i32 - width as i32) / 2).max(active_mon.x) as i16;
+                let y = (active_mon.y + (active_mon.height as i32 - height as i32) / 3).max(active_mon.y) as i16;
+                launcher.rect.x = x as i32;
+                launcher.rect.y = y as i32;
+                let _ = self.context.connection.configure_window(
+                    launcher.window_id,
+                    &x11rb::protocol::xproto::ConfigureWindowAux::new().x(x as i32).y(y as i32),
+                );
+                let _ = launcher.render(&self.context.connection);
+            }
+        }
+
+        // 6. Clamp floating windows to new screen dimensions
+        for client in self.client_state.clients.values_mut() {
+            if client.floating {
+                if let Some(geom) = client.floating_geometry {
+                    let clamped = clamp_floating_geometry(
+                        geom,
+                        self.context.screen_width,
+                        self.context.screen_height,
+                    );
+                    client.floating_geometry = Some(clamped);
+                    if client.mapped {
+                        let aux = ConfigureWindowAux::new()
+                            .x(clamped.x)
+                            .y(clamped.y)
+                            .width(clamped.width)
+                            .height(clamped.height);
+                        let _ = self.context.connection.configure_window(client.window, &aux);
+                    }
                 }
             }
         }
@@ -1864,6 +2121,9 @@ impl WindowManager {
                 return Ok(());
             }
         }
+        if self.scratchpad.client == Some(window) {
+            self.scratchpad.is_visible = false;
+        }
         let _ = self.unmap_client(window);
         Ok(())
     }
@@ -1964,6 +2224,14 @@ impl WindowManager {
             Action::Launcher => {
                 let _ = self.toggle_launcher();
             }
+            Action::ToggleScratchpad => {
+                let _ = self.toggle_scratchpad();
+            }
+            Action::SetScratchpad => {
+                if let Some(focused) = self.client_state.focused_window() {
+                    self.set_scratchpad_client(focused);
+                }
+            }
             Action::Exit => {
                 self.stop();
             }
@@ -2008,8 +2276,189 @@ impl WindowManager {
         Ok(None)
     }
 
-    /// Handles mouse button press.
-    pub fn handle_button_press(&mut self, _event: &ButtonPressEvent) -> Result<(), X11Error> {
+    /// Raises a window to the top of the stack.
+    pub fn raise_window(&self, window: Window) -> Result<(), X11Error> {
+        let aux = ConfigureWindowAux::new().stack_mode(StackMode::ABOVE);
+        self.context.connection.configure_window(window, &aux)?;
+        self.context.flush()?;
+        Ok(())
+    }
+
+    /// Handles mouse button press events on client windows.
+    ///
+    /// Supports Phase 24:
+    /// - Mod + Left Click: focus and drag window to move.
+    /// - Mod + Right Click: focus and drag window to resize.
+    /// - Normal Left Click: focus clicked window and replay event to client.
+    pub fn handle_button_press(&mut self, event: &ButtonPressEvent) -> Result<(), X11Error> {
+        let window = if self.client_state.contains(event.child) {
+            event.child
+        } else if self.client_state.contains(event.event) {
+            event.event
+        } else {
+            let _ = self.context.connection.allow_events(Allow::REPLAY_POINTER, x11rb::CURRENT_TIME);
+            let _ = self.context.flush();
+            return Ok(());
+        };
+
+        // Always focus and raise the clicked client window
+        let _ = self.focus_client(window);
+        let _ = self.raise_window(window);
+
+        let clean_modifiers = u16::from(event.state) & !(self.input_manager.num_lock_mask | MOD_LOCK);
+        let matching_binding = self.mouse_bindings.iter().find(|b| {
+            b.button == event.detail && b.modifiers == clean_modifiers
+        });
+
+        match matching_binding.map(|b| b.action_type) {
+            Some(crate::mouse::MouseActionType::Move) => {
+                let geom = if let Some(client) = self.client_state.get_client_mut(window) {
+                    if !client.floating {
+                        client.floating = true;
+                    }
+                    if client.floating_geometry.is_none() {
+                        let init_x = event.root_x as i32 - event.event_x as i32;
+                        let init_y = event.root_y as i32 - event.event_y as i32;
+                        client.floating_geometry = Some(crate::floating::FloatingGeometry::new(init_x, init_y, 400, 300));
+                    }
+                    client.floating_geometry.unwrap()
+                } else {
+                    crate::floating::FloatingGeometry::new(
+                        event.root_x as i32 - event.event_x as i32,
+                        event.root_y as i32 - event.event_y as i32,
+                        400,
+                        300,
+                    )
+                };
+
+                self.mouse_action = crate::mouse::MouseAction::Moving {
+                    window,
+                    start_x: event.root_x as i32,
+                    start_y: event.root_y as i32,
+                    start_win_x: geom.x,
+                    start_win_y: geom.y,
+                };
+
+                let _ = self.context.connection.grab_pointer(
+                    false,
+                    self.context.root_window,
+                    EventMask::BUTTON_RELEASE | EventMask::POINTER_MOTION,
+                    GrabMode::ASYNC,
+                    GrabMode::ASYNC,
+                    x11rb::NONE,
+                    x11rb::NONE,
+                    x11rb::CURRENT_TIME,
+                );
+                let _ = self.context.connection.allow_events(Allow::ASYNC_POINTER, x11rb::CURRENT_TIME);
+                self.context.flush()?;
+            }
+            Some(crate::mouse::MouseActionType::Resize) => {
+                let geom = if let Some(client) = self.client_state.get_client_mut(window) {
+                    if !client.floating {
+                        client.floating = true;
+                    }
+                    if client.floating_geometry.is_none() {
+                        let init_x = event.root_x as i32 - event.event_x as i32;
+                        let init_y = event.root_y as i32 - event.event_y as i32;
+                        client.floating_geometry = Some(crate::floating::FloatingGeometry::new(init_x, init_y, 400, 300));
+                    }
+                    client.floating_geometry.unwrap()
+                } else {
+                    crate::floating::FloatingGeometry::new(
+                        event.root_x as i32 - event.event_x as i32,
+                        event.root_y as i32 - event.event_y as i32,
+                        400,
+                        300,
+                    )
+                };
+
+                self.mouse_action = crate::mouse::MouseAction::Resizing {
+                    window,
+                    start_x: event.root_x as i32,
+                    start_y: event.root_y as i32,
+                    start_width: geom.width,
+                    start_height: geom.height,
+                };
+
+                let _ = self.context.connection.grab_pointer(
+                    false,
+                    self.context.root_window,
+                    EventMask::BUTTON_RELEASE | EventMask::POINTER_MOTION,
+                    GrabMode::ASYNC,
+                    GrabMode::ASYNC,
+                    x11rb::NONE,
+                    x11rb::NONE,
+                    x11rb::CURRENT_TIME,
+                );
+                let _ = self.context.connection.allow_events(Allow::ASYNC_POINTER, x11rb::CURRENT_TIME);
+                self.context.flush()?;
+            }
+            None => {
+                let _ = self.context.connection.allow_events(Allow::REPLAY_POINTER, x11rb::CURRENT_TIME);
+                self.context.flush()?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Handles pointer motion events during a mouse drag operation.
+    pub fn handle_motion_notify(&mut self, event: &MotionNotifyEvent) -> Result<(), X11Error> {
+        crate::mouse::handle_motion_notify(event, &self.mouse_action, &self.context.connection)?;
+
+        match self.mouse_action {
+            crate::mouse::MouseAction::Moving {
+                window,
+                start_x,
+                start_y,
+                start_win_x,
+                start_win_y,
+            } => {
+                let delta_x = event.root_x as i32 - start_x;
+                let delta_y = event.root_y as i32 - start_y;
+                let new_x = start_win_x + delta_x;
+                let new_y = start_win_y + delta_y;
+                if let Some(client) = self.client_state.get_client_mut(window) {
+                    if let Some(ref mut fg) = client.floating_geometry {
+                        fg.x = new_x;
+                        fg.y = new_y;
+                    } else {
+                        client.floating_geometry = Some(crate::floating::FloatingGeometry::new(new_x, new_y, 400, 300));
+                    }
+                }
+            }
+            crate::mouse::MouseAction::Resizing {
+                window,
+                start_x,
+                start_y,
+                start_width,
+                start_height,
+            } => {
+                let delta_x = event.root_x as i32 - start_x;
+                let delta_y = event.root_y as i32 - start_y;
+                let new_w = (start_width as i32 + delta_x).max(100) as u32;
+                let new_h = (start_height as i32 + delta_y).max(80) as u32;
+                if let Some(client) = self.client_state.get_client_mut(window) {
+                    if let Some(ref mut fg) = client.floating_geometry {
+                        fg.width = new_w;
+                        fg.height = new_h;
+                    } else {
+                        client.floating_geometry = Some(crate::floating::FloatingGeometry::new(0, 0, new_w, new_h));
+                    }
+                }
+            }
+            crate::mouse::MouseAction::None => {}
+        }
+        Ok(())
+    }
+
+    /// Handles mouse button release events, terminating drag operations and ungrabbing the pointer.
+    pub fn handle_button_release(&mut self, _event: &ButtonReleaseEvent) -> Result<(), X11Error> {
+        if self.mouse_action.is_active() {
+            let _ = self.context.connection.ungrab_pointer(x11rb::CURRENT_TIME);
+            self.context.flush()?;
+            self.mouse_action = crate::mouse::MouseAction::None;
+        }
         Ok(())
     }
 

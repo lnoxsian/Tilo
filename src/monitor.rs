@@ -248,16 +248,22 @@ pub fn setup_randr_events(
     conn: &impl Connection,
     root: Window,
 ) -> Result<(), X11Error> {
-    // Check if XRandR extension is present
-    let version = conn.randr_query_version(1, 4)?.reply()?;
+    // Check if XRandR extension is present (try 1.4 down to 1.1)
+    let version = conn.randr_query_version(1, 4)
+        .or_else(|_| conn.randr_query_version(1, 1))?
+        .reply()?;
     if version.major_version < 1 {
         return Err(X11Error::RandrNotSupported);
     }
 
     let mask = randr::NotifyMask::SCREEN_CHANGE
         | randr::NotifyMask::OUTPUT_CHANGE
-        | randr::NotifyMask::CRTC_CHANGE;
-    conn.randr_select_input(root, mask)?;
+        | randr::NotifyMask::CRTC_CHANGE
+        | randr::NotifyMask::RESOURCE_CHANGE;
+    if conn.randr_select_input(root, mask).is_err() {
+        let _ = conn.randr_select_input(root, randr::NotifyMask::SCREEN_CHANGE);
+    }
+    let _ = conn.flush();
     Ok(())
 }
 
@@ -271,7 +277,8 @@ pub fn query_monitors(
     fallback_width: u32,
     fallback_height: u32,
 ) -> Result<Vec<Monitor>, X11Error> {
-    let version_reply = conn.randr_query_version(1, 4);
+    let version_reply = conn.randr_query_version(1, 4)
+        .or_else(|_| conn.randr_query_version(1, 1));
     if version_reply.is_err() {
         return Ok(vec![Monitor::new(
             0,
@@ -290,9 +297,10 @@ pub fn query_monitors(
         .map(|r| r.output)
         .unwrap_or(0);
 
-    let (outputs, config_timestamp) = match conn.randr_get_screen_resources_current(root)?.reply() {
+    // Call randr_get_screen_resources first to force driver hardware refresh
+    let (outputs, config_timestamp) = match conn.randr_get_screen_resources(root)?.reply() {
         Ok(res) => (res.outputs, res.config_timestamp),
-        Err(_) => match conn.randr_get_screen_resources(root)?.reply() {
+        Err(_) => match conn.randr_get_screen_resources_current(root)?.reply() {
             Ok(res) => (res.outputs, res.config_timestamp),
             Err(_) => {
                 return Ok(vec![Monitor::new(
@@ -361,6 +369,14 @@ pub fn query_monitors(
             1,
             true,
         ));
+    } else if monitors.len() == 1 {
+        // In a single-monitor setup, ensure the monitor matches the root screen dimensions
+        if let Some(m) = monitors.first_mut() {
+            m.x = 0;
+            m.y = 0;
+            m.width = fallback_width;
+            m.height = fallback_height;
+        }
     }
 
     // Sort by X coordinate

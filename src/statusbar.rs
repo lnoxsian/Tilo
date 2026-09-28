@@ -272,6 +272,35 @@ impl Statusbar {
         Ok(())
     }
 
+    /// Resizes the statusbar window, updates _NET_WM_STRUT properties, and resizes the off-screen pixmap.
+    pub fn resize(
+        &mut self,
+        conn: &impl Connection,
+        new_rect: Rect,
+        root_depth: u8,
+    ) -> Result<(), StatusbarError> {
+        self.rect = new_rect;
+
+        // 1. Configure the X11 statusbar window geometry
+        let aux = x11rb::protocol::xproto::ConfigureWindowAux::new()
+            .x(new_rect.x)
+            .y(new_rect.y)
+            .width(new_rect.width)
+            .height(new_rect.height);
+        conn.configure_window(self.window_id, &aux)?;
+
+        // 2. Update EWMH strut reservation for the new geometry
+        let _ = set_statusbar_struts(conn, self.window_id, new_rect);
+
+        // 3. Resize the off-screen pixmap in the renderer
+        if let Some(ref mut renderer) = self.renderer {
+            renderer.resize(conn, self.window_id, new_rect.width as u16, new_rect.height as u16, root_depth)?;
+        }
+
+        conn.flush()?;
+        Ok(())
+    }
+
     /// Unmaps and destroys the statusbar window on the X server.
     pub fn destroy<C: Connection>(&self, conn: &C) -> Result<(), X11Error> {
         conn.unmap_window(self.window_id)?;
@@ -284,6 +313,44 @@ impl Statusbar {
 // ---------------------------------------------------------------------------
 // Window Creation with override_redirect, _NET_WM_WINDOW_TYPE, and struts
 // ---------------------------------------------------------------------------
+
+/// Sets the EWMH strut properties on the statusbar window to reserve screen space.
+pub fn set_statusbar_struts(
+    conn: &impl Connection,
+    window_id: u32,
+    rect: Rect,
+) -> Result<(), StatusbarError> {
+    let top_strut = if rect.y == 0 { rect.height } else { 0 };
+    let bottom_strut = if rect.y > 0 { rect.height } else { 0 };
+    let net_wm_strut = conn.intern_atom(false, b"_NET_WM_STRUT")?.reply()?.atom;
+    conn.change_property32(
+        PropMode::REPLACE,
+        window_id,
+        net_wm_strut,
+        AtomEnum::CARDINAL,
+        &[0, 0, top_strut, bottom_strut],
+    )?;
+
+    let net_wm_strut_partial = conn.intern_atom(false, b"_NET_WM_STRUT_PARTIAL")?.reply()?.atom;
+    let strut_partial: [u32; 12] = [
+        0,                                                  // left
+        0,                                                  // right
+        top_strut,                                          // top
+        bottom_strut,                                       // bottom
+        0, 0,                                               // left_start_y, left_end_y
+        0, 0,                                               // right_start_y, right_end_y
+        rect.x as u32, (rect.x + rect.width as i32) as u32, // top_start_x, top_end_x
+        rect.x as u32, (rect.x + rect.width as i32) as u32, // bottom_start_x, bottom_end_x
+    ];
+    conn.change_property32(
+        PropMode::REPLACE,
+        window_id,
+        net_wm_strut_partial,
+        AtomEnum::CARDINAL,
+        &strut_partial,
+    )?;
+    Ok(())
+}
 
 /// Creates and maps the statusbar window using the X11 `override_redirect` attribute.
 ///
@@ -349,39 +416,10 @@ pub fn create_statusbar_window_with_color(
         &[net_wm_window_type_dock],
     )?;
 
-    // 2. Set _NET_WM_STRUT = [left, right, top, bottom]
-    let top_strut = if rect.y == 0 { rect.height } else { 0 };
-    let bottom_strut = if rect.y > 0 { rect.height } else { 0 };
-    let net_wm_strut = conn.intern_atom(false, b"_NET_WM_STRUT")?.reply()?.atom;
-    conn.change_property32(
-        PropMode::REPLACE,
-        window_id,
-        net_wm_strut,
-        AtomEnum::CARDINAL,
-        &[0, 0, top_strut, bottom_strut],
-    )?;
+    // 2. Set _NET_WM_STRUT and _NET_WM_STRUT_PARTIAL
+    set_statusbar_struts(conn, window_id, rect)?;
 
-    // 3. Set _NET_WM_STRUT_PARTIAL = 12 cardinals
-    let net_wm_strut_partial = conn.intern_atom(false, b"_NET_WM_STRUT_PARTIAL")?.reply()?.atom;
-    let strut_partial: [u32; 12] = [
-        0,                                                  // left
-        0,                                                  // right
-        top_strut,                                          // top
-        bottom_strut,                                       // bottom
-        0, 0,                                               // left_start_y, left_end_y
-        0, 0,                                               // right_start_y, right_end_y
-        rect.x as u32, (rect.x + rect.width as i32) as u32, // top_start_x, top_end_x
-        rect.x as u32, (rect.x + rect.width as i32) as u32, // bottom_start_x, bottom_end_x
-    ];
-    conn.change_property32(
-        PropMode::REPLACE,
-        window_id,
-        net_wm_strut_partial,
-        AtomEnum::CARDINAL,
-        &strut_partial,
-    )?;
-
-    // 4. Map window
+    // 3. Map window
     conn.map_window(window_id)?;
     conn.flush()?;
 

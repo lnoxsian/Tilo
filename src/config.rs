@@ -484,6 +484,8 @@ fn parse_action(tokens: &[&Token], line: usize, config: &Config) -> Result<Actio
         }
         "toggle_floating" | "floating" => Ok(Action::ToggleFloating),
         "toggle_fullscreen" | "fullscreen" => Ok(Action::ToggleFullscreen),
+        "scratchpad" | "toggle_scratchpad" => Ok(Action::ToggleScratchpad),
+        "set_scratchpad" => Ok(Action::SetScratchpad),
         "focus_monitor" => {
             if tokens.len() < 2 {
                 return Err(ConfigError::ParseError {

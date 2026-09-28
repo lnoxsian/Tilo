@@ -27,6 +27,8 @@ pub const XK_SPACE: Keysym = 0x0020;
 pub const XK_DELETE: Keysym = 0xffff;
 pub const XK_COMMA: Keysym = 0x002c;
 pub const XK_PERIOD: Keysym = 0x002e;
+pub const XK_GRAVE: Keysym = 0x0060; // ` (grave accent / backtick)
+pub const XK_ASCIITILDE: Keysym = 0x007e; // ~ (tilde)
 
 pub const XK_HOME: Keysym = 0xff50;
 pub const XK_LEFT: Keysym = 0xff51;
@@ -104,6 +106,10 @@ pub enum Action {
     Reload,
     /// Toggle the integrated application launcher.
     Launcher,
+    /// Toggle the scratchpad window visibility (Phase 23).
+    ToggleScratchpad,
+    /// Assign the currently focused window as the scratchpad.
+    SetScratchpad,
     /// Exit the window manager gracefully.
     Exit,
 }
@@ -160,6 +166,8 @@ pub fn parse_keysym(name: &str) -> Option<Keysym> {
         "Down" => Some(XK_DOWN),
         "comma" | "," => Some(XK_COMMA),
         "period" | "." => Some(XK_PERIOD),
+        "grave" | "`" => Some(XK_GRAVE),
+        "asciitilde" | "~" | "tilde" => Some(XK_ASCIITILDE),
         "Num_Lock" | "NumLock" => Some(XK_NUM_LOCK),
         s if s.len() == 1 => {
             let c = s.chars().next().unwrap();
@@ -223,10 +231,12 @@ pub fn default_keybindings() -> Vec<KeyBind> {
         KeyBind::new(MOD_SUPER | MOD_SHIFT, XK_J, Action::Move(Direction::Down)),
         KeyBind::new(MOD_SUPER | MOD_SHIFT, XK_K, Action::Move(Direction::Up)),
         KeyBind::new(MOD_SUPER | MOD_SHIFT, XK_L, Action::Move(Direction::Right)),
-        // Window States & Launcher
+        // Window States & Launcher & Scratchpad
         KeyBind::new(MOD_SUPER, XK_F, Action::ToggleFullscreen),
         KeyBind::new(MOD_SUPER, XK_D, Action::Launcher),
         KeyBind::new(MOD_SUPER | MOD_SHIFT, XK_SPACE, Action::ToggleFloating),
+        KeyBind::new(MOD_SUPER, XK_GRAVE, Action::ToggleScratchpad),
+        KeyBind::new(MOD_SUPER | MOD_SHIFT, XK_GRAVE, Action::SetScratchpad),
         // Workspaces 1-9
         KeyBind::new(MOD_SUPER, XK_1, Action::Workspace(1)),
         KeyBind::new(MOD_SUPER, XK_2, Action::Workspace(2)),

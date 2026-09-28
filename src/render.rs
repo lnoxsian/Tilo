@@ -223,6 +223,33 @@ impl Renderer {
         y_offset + self.font_ascent
     }
 
+    /// Resizes the off-screen double-buffer pixmap to match the new dimensions.
+    pub fn resize(
+        &mut self,
+        conn: &impl Connection,
+        drawable: u32,
+        new_width: u16,
+        new_height: u16,
+        depth: u8,
+    ) -> Result<(), StatusbarError> {
+        if self.width == new_width && self.height == new_height {
+            return Ok(());
+        }
+
+        // Free the previous pixmap
+        let _ = conn.free_pixmap(self.pixmap);
+
+        // Allocate a new pixmap with the updated dimensions
+        let new_pixmap = conn.generate_id()?;
+        conn.create_pixmap(depth, new_pixmap, drawable, new_width, new_height)?;
+        conn.flush()?;
+
+        self.pixmap = new_pixmap;
+        self.width = new_width;
+        self.height = new_height;
+        Ok(())
+    }
+
     /// Blits the fully rendered off-screen pixmap onto the target window in a single atomic frame.
     pub fn flush_to_window(&self, conn: &impl Connection, window: u32) -> Result<(), StatusbarError> {
         self.flush_area_to_window(conn, window, self.width, self.height)
