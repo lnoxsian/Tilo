@@ -56,6 +56,7 @@ pub fn setup_signal_handlers() {
     unsafe {
         libc::signal(libc::SIGUSR1, sigusr1_handler as *const () as usize);
         libc::signal(libc::SIGHUP, sighup_handler as *const () as usize);
+        libc::signal(libc::SIGCHLD, libc::SIG_IGN);
     }
 }
 
@@ -594,9 +595,15 @@ impl WindowManager {
         )
     }
 
+    /// Executes configured autostart commands in the background without blocking.
+    pub fn run_autostart(&self) -> Result<(), crate::autostart::AutostartError> {
+        crate::autostart::run_autostart_commands(&self.config.autostart)
+    }
+
     /// Starts the main event loop, blocking the thread and waiting for X11 events.
     pub fn run(&mut self) -> Result<(), X11Error> {
         setup_signal_handlers();
+        let _ = self.run_autostart();
         self.context.flush()?;
         let mut last_status_update = std::time::Instant::now();
         while self.running {

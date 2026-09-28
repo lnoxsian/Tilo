@@ -1,6 +1,7 @@
 //! tilo - Minimal Rust X11 Tiling Window Manager
 
 pub mod atoms;
+pub mod autostart;
 pub mod client;
 pub mod config;
 pub mod ewmh;

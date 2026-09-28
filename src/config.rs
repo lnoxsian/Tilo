@@ -6,6 +6,7 @@
 //! - Lexical tokenizer ([`tokenize`]), recursive-descent parser ([`parse`]), and disk loader ([`load_config`]).
 //! - Safe configuration reload without restarting the window manager ([`ReloadError`]).
 
+use crate::autostart::AutostartCmd;
 use crate::focus::Direction;
 use crate::keybind::{default_keybindings, parse_keybind, Action, KeyBind};
 use crate::x11::X11Error;
@@ -78,6 +79,8 @@ pub struct Config {
     pub terminal: String,
     /// A list of defined keybindings.
     pub bindings: Vec<KeyBind>,
+    /// Optional startup/autostart commands.
+    pub autostart: Vec<AutostartCmd>,
 }
 
 impl Default for Config {
@@ -91,6 +94,7 @@ impl Default for Config {
             master_ratio: 0.60,
             terminal: "foot".to_string(),
             bindings: default_keybindings(),
+            autostart: Vec::new(),
         }
     }
 }
@@ -354,6 +358,19 @@ fn parse_line(
                         message: format!("Failed to parse keybind '{}': {}", resolved_combo, err),
                     });
                 }
+            }
+        }
+        "autostart" => {
+            if line.len() < 2 {
+                return Err(ConfigError::ParseError {
+                    line: line_number,
+                    message: "Directive 'autostart' requires a command argument".to_string(),
+                });
+            }
+            let words: Vec<String> = line[1..].iter().map(|t| token_to_string(t)).collect();
+            let full_cmd = words.join(" ");
+            if let Some(cmd) = AutostartCmd::from_command_line(&full_cmd) {
+                config.autostart.push(cmd);
             }
         }
         unknown => {
@@ -671,5 +688,30 @@ bind Mod4+Shift+2 move_workspace 2
     fn test_default_config_font_is_monospace() {
         let config = Config::default();
         assert_eq!(config.font, "monospace");
+    }
+
+    #[test]
+    fn test_parse_autostart_directives() {
+        let input = r#"
+autostart "nm-applet"
+autostart "dunst"
+autostart "feh --bg-fill /path/to/wallpaper.jpg"
+autostart picom -b
+"#;
+        let tokens = tokenize(input).unwrap();
+        let config = parse(&tokens).unwrap();
+
+        assert_eq!(config.autostart.len(), 4);
+        assert_eq!(config.autostart[0].program, "nm-applet");
+        assert!(config.autostart[0].args.is_empty());
+
+        assert_eq!(config.autostart[1].program, "dunst");
+        assert!(config.autostart[1].args.is_empty());
+
+        assert_eq!(config.autostart[2].program, "feh");
+        assert_eq!(config.autostart[2].args, vec!["--bg-fill", "/path/to/wallpaper.jpg"]);
+
+        assert_eq!(config.autostart[3].program, "picom");
+        assert_eq!(config.autostart[3].args, vec!["-b"]);
     }
 }
