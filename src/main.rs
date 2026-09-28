@@ -42,6 +42,9 @@ fn main() {
             std::process::exit(1);
         }
     };
+    if let Err(err) = wm.enable_statusbar(24) {
+        eprintln!("[WARN  tilo::wm] Failed to enable statusbar: {}", err);
+    }
     println!("[INFO  tilo::wm] Entering X11 event loop...");
     if let Err(err) = wm.run() {
         eprintln!("[ERROR tilo::wm] Event loop error: {}", err);
