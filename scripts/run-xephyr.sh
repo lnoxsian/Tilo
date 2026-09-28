@@ -408,8 +408,7 @@ show_keybindings() {
     cat << EOF
 ${C_BOLD}${C_YELLOW}tilo Default Keybindings inside Xephyr:${C_RESET}
   ${C_CYAN}Mod4 + Return${C_RESET}           Spawn terminal (xterm / alacritty / kitty)
-  ${C_CYAN}Mod4 + Space${C_RESET}            Toggle Application Launcher (search & spawn apps)
-  ${C_CYAN}Alt + Space / Mod4 + d${C_RESET}  Alternative shortcuts to toggle Launcher (if host captures Super)
+  ${C_CYAN}Mod4 + d${C_RESET}                Toggle Application Launcher (search & spawn apps)
   ${C_CYAN}Mod4 + Shift + Space${C_RESET}    Toggle Tiled <-> Floating mode for focused window
   ${C_CYAN}Mod4 + f${C_RESET}                Toggle Fullscreen mode for focused window
   ${C_CYAN}Mod4 + j / k${C_RESET}            Focus Next / Previous window (Down / Up in stack)
@@ -425,7 +424,6 @@ ${C_BOLD}${C_YELLOW}tilo Default Keybindings inside Xephyr:${C_RESET}
 ${C_YELLOW}Tips for Xephyr Testing:${C_RESET}
   - If your desktop intercepts Super/Mod4, press ${C_CYAN}Ctrl + Shift${C_RESET} inside Xephyr
     to capture/release the keyboard and mouse from your host OS.
-  - Or simply use ${C_CYAN}Alt + Space${C_RESET} or ${C_CYAN}Mod4 + d${C_RESET} to toggle the launcher!
   - Or type ${C_CYAN}launcher${C_RESET} in the interactive terminal prompt below!
 EOF
 }
