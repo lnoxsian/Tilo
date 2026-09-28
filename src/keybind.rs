@@ -4,7 +4,7 @@
 //! structure, standard keysym and modifier constants, and default keybinding configurations.
 
 use crate::focus::Direction;
-use x11rb::protocol::xproto::Keysym;
+pub use x11rb::protocol::xproto::Keysym;
 
 // Standard Modifier Masks
 pub const MOD_SHIFT: u16 = 0x0001;
@@ -160,10 +160,10 @@ pub fn parse_keysym(name: &str) -> Option<Keysym> {
         "Tab" => Some(XK_TAB),
         "Space" | "space" => Some(XK_SPACE),
         "Delete" => Some(XK_DELETE),
-        "Left" => Some(XK_LEFT),
-        "Up" => Some(XK_UP),
-        "Right" => Some(XK_RIGHT),
-        "Down" => Some(XK_DOWN),
+        "Left" | "left" => Some(XK_LEFT),
+        "Up" | "up" => Some(XK_UP),
+        "Right" | "right" => Some(XK_RIGHT),
+        "Down" | "down" => Some(XK_DOWN),
         "comma" | "," => Some(XK_COMMA),
         "period" | "." => Some(XK_PERIOD),
         "grave" | "`" => Some(XK_GRAVE),
@@ -231,6 +231,11 @@ pub fn default_keybindings() -> Vec<KeyBind> {
         KeyBind::new(MOD_SUPER | MOD_SHIFT, XK_J, Action::Move(Direction::Down)),
         KeyBind::new(MOD_SUPER | MOD_SHIFT, XK_K, Action::Move(Direction::Up)),
         KeyBind::new(MOD_SUPER | MOD_SHIFT, XK_L, Action::Move(Direction::Right)),
+        // Window Movement (Arrow keys)
+        KeyBind::new(MOD_SUPER | MOD_SHIFT, XK_LEFT, Action::Move(Direction::Left)),
+        KeyBind::new(MOD_SUPER | MOD_SHIFT, XK_DOWN, Action::Move(Direction::Down)),
+        KeyBind::new(MOD_SUPER | MOD_SHIFT, XK_UP, Action::Move(Direction::Up)),
+        KeyBind::new(MOD_SUPER | MOD_SHIFT, XK_RIGHT, Action::Move(Direction::Right)),
         // Window States & Launcher & Scratchpad
         KeyBind::new(MOD_SUPER, XK_F, Action::ToggleFullscreen),
         KeyBind::new(MOD_SUPER, XK_D, Action::Launcher),

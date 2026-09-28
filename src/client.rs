@@ -32,6 +32,8 @@ pub struct Client {
     pub layout_state: ClientLayoutState,
     /// The last saved floating geometry for restoring when un-tiled.
     pub floating_geometry: Option<FloatingGeometry>,
+    /// Currently applied border color (RGB/hex).
+    pub border_color: Option<u32>,
 }
 
 impl Client {
@@ -48,6 +50,7 @@ impl Client {
             focused: false,
             layout_state: ClientLayoutState::Tiled,
             floating_geometry: None,
+            border_color: None,
         }
     }
 

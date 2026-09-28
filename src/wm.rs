@@ -262,6 +262,9 @@ impl WindowManager {
                     self.border_config.normal_color
                 };
                 let _ = set_window_border_color(&self.context.connection, win, border_color);
+                if let Some(c) = self.client_state.get_client_mut(win) {
+                    c.border_color = Some(border_color);
+                }
             }
         }
 
@@ -990,6 +993,7 @@ impl WindowManager {
             window,
             self.border_config.normal_color,
         );
+        client.border_color = Some(self.border_config.normal_color);
 
         let is_current_ws = target_ws == self.current_workspace;
         let is_floating = client.floating;
@@ -1017,6 +1021,7 @@ impl WindowManager {
             client.mapped = false;
             self.workspace_manager.add_client(window, target_ws);
             self.client_state.add_client(window, client);
+            self.client_state.focus_stack.retain(|&w| w != window);
             if is_floating {
                 let _ = update_net_wm_state_above(&self.context.connection, window, true, &self.ewmh_atoms);
             }
@@ -1035,6 +1040,7 @@ impl WindowManager {
             is_focused,
         );
         let _ = self.update_ewmh_client_list();
+        self.context.flush()?;
         Ok(true)
     }
 
@@ -1135,17 +1141,31 @@ impl WindowManager {
 
     /// Sets input focus to a specific client window, raises it, and updates border colors.
     pub fn focus_client(&mut self, window: Window) -> Result<(), X11Error> {
-        let prev_focused = self.client_state.focused_window();
+        // 1. Reset all other windows' borders to normal color and configure passive click-to-focus grabs
+        let other_windows: Vec<Window> = self
+            .client_state
+            .clients
+            .keys()
+            .copied()
+            .filter(|&w| w != window)
+            .collect();
 
-        // 1. Reset previous window's border to normal color
-        if let Some(prev) = prev_focused {
-            if prev != window && self.client_state.contains(prev) {
-                let _ = set_window_border_color(
-                    &self.context.connection,
-                    prev,
-                    self.border_config.normal_color,
-                );
+        for w in other_windows {
+            let _ = set_window_border_color(
+                &self.context.connection,
+                w,
+                self.border_config.normal_color,
+            );
+            if let Some(c) = self.client_state.get_client_mut(w) {
+                c.border_color = Some(self.border_config.normal_color);
             }
+            let _ = crate::mouse::update_client_button_grabs(
+                &self.context.connection,
+                w,
+                &self.mouse_bindings,
+                self.input_manager.num_lock_mask,
+                false,
+            );
         }
 
         // 2. Set new window's border to active focused color
@@ -1154,13 +1174,23 @@ impl WindowManager {
             window,
             self.border_config.focused_color,
         );
+        if let Some(c) = self.client_state.get_client_mut(window) {
+            c.border_color = Some(self.border_config.focused_color);
+        }
 
         // 3. Set X11 input focus
-        self.context.connection.set_input_focus(
-            InputFocus::POINTER_ROOT,
-            window,
-            x11rb::CURRENT_TIME,
-        )?;
+        let hints = crate::icccm::get_wm_hints(&self.context.connection, window)
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+
+        if hints.input {
+            let _ = self.context.connection.set_input_focus(
+                InputFocus::POINTER_ROOT,
+                window,
+                x11rb::CURRENT_TIME,
+            );
+        }
 
         // 4. Raise window in stacking order
         let aux = ConfigureWindowAux::default().stack_mode(StackMode::ABOVE);
@@ -1188,18 +1218,7 @@ impl WindowManager {
         }
         let _ = self.render_statusbar();
 
-        // 9. Update mouse button grabs for click-to-focus management
-        if let Some(prev) = prev_focused {
-            if prev != window && self.client_state.contains(prev) {
-                let _ = crate::mouse::update_client_button_grabs(
-                    &self.context.connection,
-                    prev,
-                    &self.mouse_bindings,
-                    self.input_manager.num_lock_mask,
-                    false,
-                );
-            }
-        }
+        // 9. Update mouse button grabs for focused window (transparent clicks)
         let _ = crate::mouse::update_client_button_grabs(
             &self.context.connection,
             window,
@@ -1243,13 +1262,30 @@ impl WindowManager {
             return Ok(None);
         }
 
-        let screen_rect = Rect::new(
-            0,
-            0,
-            self.context.screen_width as u32,
-            self.context.screen_height as u32,
-        );
-        let rects = calculate_master_stack(&visible_tiled, &screen_rect, &self.layout_config);
+        let mon = self
+            .monitor_manager
+            .monitor_for_workspace(current_ws)
+            .cloned()
+            .unwrap_or_else(|| self.monitor_manager.active_monitor().clone());
+        let monitor_rect = mon.rect();
+        let usable_rect = if let Some(ref bar) = self.statusbar {
+            if bar.rect.y as i32 <= mon.y
+                && (bar.rect.y as i32 + bar.rect.height as i32) > mon.y
+            {
+                let offset = (bar.rect.y as i32 + bar.rect.height as i32) - mon.y;
+                Rect::new(
+                    monitor_rect.x,
+                    monitor_rect.y + offset,
+                    monitor_rect.width,
+                    monitor_rect.height.saturating_sub(offset as u32),
+                )
+            } else {
+                monitor_rect
+            }
+        } else {
+            monitor_rect
+        };
+        let rects = calculate_master_stack(&visible_tiled, &usable_rect, &self.layout_config);
         let pairs: Vec<(Window, Rect)> = visible_tiled
             .into_iter()
             .zip(rects.into_iter())
@@ -2095,6 +2131,13 @@ impl WindowManager {
 
     /// Handles a request from a client to map (show) its window.
     pub fn handle_map_request(&mut self, window: Window) -> Result<(), X11Error> {
+        if self.client_state.contains(window) {
+            self.map_client(window)?;
+            let _ = self.set_wm_state(window, WmState::Normal);
+            self.retile()?;
+            self.focus_client(window)?;
+            return Ok(());
+        }
         let _ = self.manage_window(window)?;
         Ok(())
     }
@@ -2306,23 +2349,51 @@ impl WindowManager {
             return Ok(None);
         }
 
-        let screen_rect = Rect::new(
-            0,
-            0,
-            self.context.screen_width as u32,
-            self.context.screen_height as u32,
-        );
-        let rects = calculate_master_stack(&visible_tiled, &screen_rect, &self.layout_config);
+        let mon = self
+            .monitor_manager
+            .monitor_for_workspace(current_ws)
+            .cloned()
+            .unwrap_or_else(|| self.monitor_manager.active_monitor().clone());
+        let monitor_rect = mon.rect();
+        let usable_rect = if let Some(ref bar) = self.statusbar {
+            if bar.rect.y as i32 <= mon.y
+                && (bar.rect.y as i32 + bar.rect.height as i32) > mon.y
+            {
+                let offset = (bar.rect.y as i32 + bar.rect.height as i32) - mon.y;
+                Rect::new(
+                    monitor_rect.x,
+                    monitor_rect.y + offset,
+                    monitor_rect.width,
+                    monitor_rect.height.saturating_sub(offset as u32),
+                )
+            } else {
+                monitor_rect
+            }
+        } else {
+            monitor_rect
+        };
+
+        let rects = calculate_master_stack(&visible_tiled, &usable_rect, &self.layout_config);
         let pairs: Vec<(Window, Rect)> = visible_tiled
             .into_iter()
             .zip(rects.into_iter())
             .collect();
 
-        if let Some(target) = find_neighbor(direction, Some(current), &pairs, false) {
+        let neighbor = find_neighbor(direction, Some(current), &pairs, false)
+            .or_else(|| find_neighbor(direction, Some(current), &pairs, true));
+
+        if let Some(target) = neighbor {
             let idx_a = self.client_state.client_order.iter().position(|&w| w == current);
             let idx_b = self.client_state.client_order.iter().position(|&w| w == target);
             if let (Some(a), Some(b)) = (idx_a, idx_b) {
                 self.client_state.client_order.swap(a, b);
+                if let Some(ws) = self.workspace_manager.get_mut(current_ws) {
+                    let ws_idx_a = ws.clients.iter().position(|&w| w == current);
+                    let ws_idx_b = ws.clients.iter().position(|&w| w == target);
+                    if let (Some(wa), Some(wb)) = (ws_idx_a, ws_idx_b) {
+                        ws.clients.swap(wa, wb);
+                    }
+                }
                 self.retile()?;
                 self.focus_client(current)?;
                 return Ok(Some(target));

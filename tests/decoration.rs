@@ -208,3 +208,132 @@ fn test_window_decoration_in_xephyr() {
     assert_eq!(geom1_after_apply.border_width, 7);
     assert_eq!(geom2_after_apply.border_width, 7);
 }
+
+#[test]
+fn test_newly_spawned_window_focus_and_border_highlight_in_xephyr() {
+    if !Command::new("which")
+        .arg("Xephyr")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+    {
+        return;
+    }
+
+    let xephyr = match XephyrServer::start(144) {
+        Some(x) => x,
+        None => return,
+    };
+
+    let context = X11Context::connect_to(Some(&xephyr.display)).unwrap();
+    let root = context.root_window;
+
+    let config = Config {
+        border_width: 3,
+        focused_color: 0x00bd93f9,
+        normal_color: 0x0044475a,
+        ..Default::default()
+    };
+
+    let mut wm = WindowManager::new_with_config(context, config).expect("WM should init");
+
+    // 1. Create and manage window 1
+    let win1 = create_client_window(&wm.context.connection, root, 50, 50, 200, 150);
+    wm.context.connection.map_window(win1).unwrap();
+    wm.context.connection.flush().unwrap();
+    wm.manage_window(win1).unwrap();
+
+    // Verify window 1 has full focus and focused border color
+    assert_eq!(wm.client_state.focused_window(), Some(win1));
+    assert!(wm.client_state.get_client(win1).unwrap().focused);
+    assert_eq!(
+        wm.client_state.get_client(win1).unwrap().border_color,
+        Some(0x00bd93f9)
+    );
+    let focus1 = wm.context.connection.get_input_focus().unwrap().reply().unwrap().focus;
+    assert_eq!(focus1, win1);
+
+    // 2. Spawn and manage window 2
+    let win2 = create_client_window(&wm.context.connection, root, 300, 50, 200, 150);
+    wm.context.connection.map_window(win2).unwrap();
+    wm.context.connection.flush().unwrap();
+    wm.manage_window(win2).unwrap();
+
+    // Verify window 2 has full on focus and focused border highlight
+    assert_eq!(wm.client_state.focused_window(), Some(win2));
+    assert!(wm.client_state.get_client(win2).unwrap().focused);
+    assert_eq!(
+        wm.client_state.get_client(win2).unwrap().border_color,
+        Some(0x00bd93f9)
+    );
+    let focus2 = wm.context.connection.get_input_focus().unwrap().reply().unwrap().focus;
+    assert_eq!(focus2, win2);
+
+    // Crucially verify window 1's highlight did NOT persist: it is normal color and unfocused!
+    assert!(!wm.client_state.get_client(win1).unwrap().focused);
+    assert_eq!(
+        wm.client_state.get_client(win1).unwrap().border_color,
+        Some(0x0044475a)
+    );
+
+    // 3. Spawn and manage window 3
+    let win3 = create_client_window(&wm.context.connection, root, 500, 50, 200, 150);
+    wm.context.connection.map_window(win3).unwrap();
+    wm.context.connection.flush().unwrap();
+    wm.manage_window(win3).unwrap();
+
+    // Window 3 has full focus
+    assert_eq!(wm.client_state.focused_window(), Some(win3));
+    assert!(wm.client_state.get_client(win3).unwrap().focused);
+    assert_eq!(
+        wm.client_state.get_client(win3).unwrap().border_color,
+        Some(0x00bd93f9)
+    );
+    let focus3 = wm.context.connection.get_input_focus().unwrap().reply().unwrap().focus;
+    assert_eq!(focus3, win3);
+
+    // Both window 1 and window 2 are unhighlighted
+    assert!(!wm.client_state.get_client(win1).unwrap().focused);
+    assert_eq!(
+        wm.client_state.get_client(win1).unwrap().border_color,
+        Some(0x0044475a)
+    );
+    assert!(!wm.client_state.get_client(win2).unwrap().focused);
+    assert_eq!(
+        wm.client_state.get_client(win2).unwrap().border_color,
+        Some(0x0044475a)
+    );
+
+    // 4. Test click-to-focus on window 1 transfers full focus back to window 1
+    let ev_click = x11rb::protocol::xproto::ButtonPressEvent {
+        response_type: 4,
+        detail: 1, // Button 1
+        sequence: 1,
+        time: 0,
+        root,
+        event: win1,
+        child: win1,
+        root_x: 60,
+        root_y: 60,
+        event_x: 10,
+        event_y: 10,
+        state: x11rb::protocol::xproto::KeyButMask::from(0u16),
+        same_screen: true,
+    };
+    wm.handle_button_press(&ev_click).unwrap();
+
+    assert_eq!(wm.client_state.focused_window(), Some(win1));
+    assert!(wm.client_state.get_client(win1).unwrap().focused);
+    assert_eq!(
+        wm.client_state.get_client(win1).unwrap().border_color,
+        Some(0x00bd93f9)
+    );
+    assert!(!wm.client_state.get_client(win3).unwrap().focused);
+    assert_eq!(
+        wm.client_state.get_client(win3).unwrap().border_color,
+        Some(0x0044475a)
+    );
+    let focus_back = wm.context.connection.get_input_focus().unwrap().reply().unwrap().focus;
+    assert_eq!(focus_back, win1);
+}
+

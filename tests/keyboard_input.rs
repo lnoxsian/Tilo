@@ -1,7 +1,8 @@
 use std::process::{Child, Command};
 use tilo::focus::Direction;
 use tilo::keybind::{
-    Action, MOD_SHIFT, MOD_SUPER, XK_Q, XK_1, XK_2, XK_3, XK_4, XK_5, XK_6, XK_7, XK_8, XK_9,
+    Action, Keysym, MOD_SHIFT, MOD_SUPER, XK_DOWN, XK_H, XK_J, XK_K, XK_L, XK_LEFT, XK_Q, XK_RIGHT,
+    XK_UP, XK_1, XK_2, XK_3, XK_4, XK_5, XK_6, XK_7, XK_8, XK_9,
 };
 use tilo::wm::WindowManager;
 use tilo::x11::X11Context;
@@ -379,4 +380,185 @@ fn test_mod4_shift_numbers_move_focused_window_in_xephyr() {
         assert_eq!(wm.workspace_manager.find_workspace_for(win2), Some(1));
     }
 }
+
+#[test]
+fn test_window_movement_and_focus_with_vim_and_arrow_keys_in_xephyr() {
+    if !Command::new("which")
+        .arg("Xephyr")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+    {
+        return;
+    }
+
+    let xephyr = XephyrServer::start(99);
+    if let Some(server) = xephyr {
+        let wm_ctx = X11Context::connect_to(Some(&server.display))
+            .expect("WM context connect failed");
+        assert!(wm_ctx.become_wm().is_ok());
+
+        let mut wm = WindowManager::new(wm_ctx).expect("Failed to initialize WM");
+
+        // Client connection to create windows
+        let (client_conn, screen_num) =
+            x11rb::connect(Some(&server.display)).expect("Client connect failed");
+        let screen = &client_conn.setup().roots[screen_num];
+        let root = screen.root;
+
+        let create_win = || {
+            let win = client_conn.generate_id().expect("Failed XID");
+            client_conn
+                .create_window(
+                    x11rb::COPY_DEPTH_FROM_PARENT,
+                    win,
+                    root,
+                    0,
+                    0,
+                    200,
+                    200,
+                    0,
+                    WindowClass::INPUT_OUTPUT,
+                    x11rb::COPY_FROM_PARENT,
+                    &CreateWindowAux::default(),
+                )
+                .expect("Create window failed");
+            client_conn.flush().unwrap();
+            client_conn.sync().unwrap();
+            win
+        };
+
+        let win1 = create_win();
+        let win2 = create_win();
+        let win3 = create_win();
+
+        wm.manage_window(win1).unwrap();
+        wm.manage_window(win2).unwrap();
+        wm.manage_window(win3).unwrap();
+
+        // win1 is Master (left), win2 is Stack Top (right), win3 is Stack Bottom (right)
+        assert_eq!(wm.client_state.focused_window(), Some(win3));
+
+        let send_key = |wm: &mut WindowManager, keysym: Keysym, shift: bool| {
+            let mapping = wm.input_manager.mapping.clone().expect("Mapping missing");
+            let kc = mapping.keysym_to_keycodes(keysym)[0];
+            let mut state = MOD_SUPER;
+            if shift {
+                state |= MOD_SHIFT;
+            }
+            let ev = KeyPressEvent {
+                response_type: 2,
+                detail: kc,
+                sequence: 1,
+                time: 0,
+                root: wm.context.root_window,
+                event: wm.context.root_window,
+                child: 0,
+                root_x: 0,
+                root_y: 0,
+                event_x: 0,
+                event_y: 0,
+                state: KeyButMask::from(state),
+                same_screen: true,
+            };
+            wm.handle_key_press(&ev).unwrap();
+        };
+
+        // 1. Test focus navigation with Vim keys (Mod + [h, j, k, l])
+        // Move Up from win3 -> focuses win2
+        send_key(&mut wm, XK_K, false);
+        assert_eq!(wm.client_state.focused_window(), Some(win2));
+
+        // Move Left from win2 -> focuses win1
+        send_key(&mut wm, XK_H, false);
+        assert_eq!(wm.client_state.focused_window(), Some(win1));
+
+        // Move Right from win1 -> focuses stack window (win2)
+        send_key(&mut wm, XK_L, false);
+        assert_eq!(wm.client_state.focused_window(), Some(win2));
+
+        // Move Down from win2 -> focuses win3
+        send_key(&mut wm, XK_J, false);
+        assert_eq!(wm.client_state.focused_window(), Some(win3));
+
+        // 2. Test focus navigation with Arrow keys (Mod + [Left, Down, Up, Right])
+        // Move Up from win3 -> focuses win2
+        send_key(&mut wm, XK_UP, false);
+        assert_eq!(wm.client_state.focused_window(), Some(win2));
+
+        // Move Left from win2 -> focuses win1
+        send_key(&mut wm, XK_LEFT, false);
+        assert_eq!(wm.client_state.focused_window(), Some(win1));
+
+        // Move Right from win1 -> focuses win2
+        send_key(&mut wm, XK_RIGHT, false);
+        assert_eq!(wm.client_state.focused_window(), Some(win2));
+
+        // Move Down from win2 -> focuses win3
+        send_key(&mut wm, XK_DOWN, false);
+        assert_eq!(wm.client_state.focused_window(), Some(win3));
+
+        // 3. Test window reordering/swapping with Vim keys (Mod + Shift + [h, j, k, l])
+        // Currently win3 is focused at bottom-right stack
+        assert_eq!(wm.client_state.client_order, vec![win1, win2, win3]);
+
+        // Move Up (Mod + Shift + k): swaps win3 with win2 in stack
+        send_key(&mut wm, XK_K, true);
+        assert_eq!(wm.client_state.focused_window(), Some(win3));
+        assert_eq!(wm.client_state.client_order, vec![win1, win3, win2]);
+        assert_eq!(wm.workspace_manager.get(1).unwrap().clients, vec![win1, win3, win2]);
+
+        // Move Left (Mod + Shift + h): swaps win3 into Master position with win1
+        send_key(&mut wm, XK_H, true);
+        assert_eq!(wm.client_state.focused_window(), Some(win3));
+        assert_eq!(wm.client_state.client_order, vec![win3, win1, win2]);
+        assert_eq!(wm.workspace_manager.get(1).unwrap().clients, vec![win3, win1, win2]);
+
+        // Move Right (Mod + Shift + l): swaps win3 back into Stack with win1
+        send_key(&mut wm, XK_L, true);
+        assert_eq!(wm.client_state.focused_window(), Some(win3));
+        assert_eq!(wm.client_state.client_order, vec![win1, win3, win2]);
+        assert_eq!(wm.workspace_manager.get(1).unwrap().clients, vec![win1, win3, win2]);
+
+        // Move Down (Mod + Shift + j): swaps win3 back to bottom of stack
+        send_key(&mut wm, XK_J, true);
+        assert_eq!(wm.client_state.focused_window(), Some(win3));
+        assert_eq!(wm.client_state.client_order, vec![win1, win2, win3]);
+        assert_eq!(wm.workspace_manager.get(1).unwrap().clients, vec![win1, win2, win3]);
+
+        // 4. Test window reordering/swapping with Arrow keys (Mod + Shift + [Left, Down, Up, Right])
+        // Move focus to win1 in master pane
+        send_key(&mut wm, XK_LEFT, false);
+        assert_eq!(wm.client_state.focused_window(), Some(win1));
+
+        // Move Right (Mod + Shift + Right): swaps win1 to stack
+        send_key(&mut wm, XK_RIGHT, true);
+        assert_eq!(wm.client_state.focused_window(), Some(win1));
+        assert_eq!(wm.client_state.client_order, vec![win2, win1, win3]);
+        assert_eq!(wm.workspace_manager.get(1).unwrap().clients, vec![win2, win1, win3]);
+
+        // Move Left (Mod + Shift + Left): swaps win1 back to Master
+        send_key(&mut wm, XK_LEFT, true);
+        assert_eq!(wm.client_state.focused_window(), Some(win1));
+        assert_eq!(wm.client_state.client_order, vec![win1, win2, win3]);
+        assert_eq!(wm.workspace_manager.get(1).unwrap().clients, vec![win1, win2, win3]);
+
+        // Move focus to win2 (top stack)
+        send_key(&mut wm, XK_RIGHT, false);
+        assert_eq!(wm.client_state.focused_window(), Some(win2));
+
+        // Move Down (Mod + Shift + Down): swaps win2 with win3
+        send_key(&mut wm, XK_DOWN, true);
+        assert_eq!(wm.client_state.focused_window(), Some(win2));
+        assert_eq!(wm.client_state.client_order, vec![win1, win3, win2]);
+        assert_eq!(wm.workspace_manager.get(1).unwrap().clients, vec![win1, win3, win2]);
+
+        // Move Up (Mod + Shift + Up): swaps win2 back with win3
+        send_key(&mut wm, XK_UP, true);
+        assert_eq!(wm.client_state.focused_window(), Some(win2));
+        assert_eq!(wm.client_state.client_order, vec![win1, win2, win3]);
+        assert_eq!(wm.workspace_manager.get(1).unwrap().clients, vec![win1, win2, win3]);
+    }
+}
+
 
