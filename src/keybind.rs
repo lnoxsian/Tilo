@@ -25,6 +25,8 @@ pub const XK_RETURN: Keysym = 0xff0d;
 pub const XK_ESCAPE: Keysym = 0xff1b;
 pub const XK_SPACE: Keysym = 0x0020;
 pub const XK_DELETE: Keysym = 0xffff;
+pub const XK_COMMA: Keysym = 0x002c;
+pub const XK_PERIOD: Keysym = 0x002e;
 
 pub const XK_LEFT: Keysym = 0xff51;
 pub const XK_UP: Keysym = 0xff52;
@@ -90,6 +92,12 @@ pub enum Action {
     ToggleFloating,
     /// Toggle fullscreen state for the focused window.
     ToggleFullscreen,
+    /// Focus the monitor visually to the left of the active monitor.
+    FocusMonitorLeft,
+    /// Focus the monitor visually to the right of the active monitor.
+    FocusMonitorRight,
+    /// Move the currently focused window to the specified monitor ID.
+    MoveToMonitor(u32),
     /// Reload the window manager configuration.
     Reload,
     /// Exit the window manager gracefully.
@@ -232,6 +240,9 @@ pub fn default_keybindings() -> Vec<KeyBind> {
         KeyBind::new(MOD_SUPER | MOD_SHIFT, XK_7, Action::MoveToWorkspace(7)),
         KeyBind::new(MOD_SUPER | MOD_SHIFT, XK_8, Action::MoveToWorkspace(8)),
         KeyBind::new(MOD_SUPER | MOD_SHIFT, XK_9, Action::MoveToWorkspace(9)),
+        // Multi-Monitor Focus
+        KeyBind::new(MOD_SUPER, XK_COMMA, Action::FocusMonitorLeft),
+        KeyBind::new(MOD_SUPER, XK_PERIOD, Action::FocusMonitorRight),
         // WM Controls
         KeyBind::new(MOD_SUPER | MOD_SHIFT, XK_R, Action::Reload),
         KeyBind::new(MOD_SUPER | MOD_SHIFT, XK_E, Action::Exit),

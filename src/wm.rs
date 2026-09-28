@@ -15,7 +15,8 @@ use crate::focus::{
     find_neighbor, set_window_border_color, set_window_border_width, BorderConfig, Direction,
     WorkspaceFocus,
 };
-use crate::fullscreen::{fullscreen_configure_aux, restore_configure_aux, Geometry, Monitor};
+use crate::fullscreen::{fullscreen_configure_aux, restore_configure_aux, Geometry};
+use crate::monitor::{query_monitors, setup_randr_events, MonitorId, MonitorManager};
 use crate::icccm::{
     get_wm_hints, get_wm_normal_hints, get_wm_state, send_wm_delete as icccm_send_wm_delete,
     set_wm_state as icccm_set_wm_state, IcccmAtoms, WmState,
@@ -87,6 +88,8 @@ pub struct WindowManager {
     pub ewmh_atoms: EwmhAtoms,
     /// Window ID of the hidden child window used for `_NET_SUPPORTING_WM_CHECK`.
     pub supporting_window: Window,
+    /// Multi-monitor manager tracking geometry and active workspaces per monitor.
+    pub monitor_manager: MonitorManager,
 }
 
 impl WindowManager {
@@ -110,6 +113,20 @@ impl WindowManager {
         let _ = input_manager.setup(&context.connection, context.root_window);
         let workspace_manager = WorkspaceManager::new();
 
+        let mut monitor_manager = MonitorManager::new(
+            context.screen_width as u32,
+            context.screen_height as u32,
+        );
+        let _ = setup_randr_events(&context.connection, context.root_window);
+        if let Ok(randr_monitors) = query_monitors(
+            &context.connection,
+            context.root_window,
+            context.screen_width as u32,
+            context.screen_height as u32,
+        ) {
+            let _ = monitor_manager.reconcile_monitors(randr_monitors);
+        }
+
         Ok(Self {
             context,
             client_state: ClientState::new(),
@@ -125,6 +142,7 @@ impl WindowManager {
             rules: Vec::new(),
             ewmh_atoms,
             supporting_window,
+            monitor_manager,
         })
     }
 
@@ -237,6 +255,9 @@ impl WindowManager {
                 self.stats.client_messages += 1;
                 self.handle_client_message(&ev)?;
             }
+            Event::RandrScreenChangeNotify(_) | Event::RandrNotify(_) => {
+                let _ = self.refresh_monitors();
+            }
             _ => {}
         }
         Ok(())
@@ -289,18 +310,32 @@ impl WindowManager {
 
         // Evaluate window rules before finalizing client state
         let rule_action = self.evaluate_window_rules(window)?;
-        let target_ws = rule_action.target_workspace.unwrap_or(self.current_workspace);
+        let active_mon = self.monitor_manager.active_monitor();
+        let target_ws = rule_action.target_workspace.unwrap_or(active_mon.workspace);
         self.workspace_manager.get_or_create(target_ws);
+
+        let target_mon_id = self
+            .monitor_manager
+            .monitor_for_workspace(target_ws)
+            .map(|m| m.id)
+            .unwrap_or(active_mon.id);
 
         // Construct client state
         let mut client = Client::new(window);
         client.workspace = target_ws;
+        client.monitor = target_mon_id;
 
         if rule_action.floating == Some(true) {
-            let geom = calculate_default_floating_geometry(
-                self.context.screen_width,
-                self.context.screen_height,
+            let target_mon = self
+                .monitor_manager
+                .get_monitor(target_mon_id)
+                .unwrap_or(active_mon);
+            let mut geom = calculate_default_floating_geometry(
+                target_mon.width as u16,
+                target_mon.height as u16,
             );
+            geom.x += target_mon.x;
+            geom.y += target_mon.y;
             client.set_floating(geom);
 
             let aux = ConfigureWindowAux::new()
@@ -401,46 +436,37 @@ impl WindowManager {
         removed
     }
 
-    /// Recalculates and applies the tiling layout to all visible managed clients on the active workspace.
+    /// Recalculates and applies the tiling layout to all visible managed clients on each monitor's active workspace.
     pub fn retile(&mut self) -> Result<(), X11Error> {
-        let current_ws = self.current_workspace;
-        let visible_tiled = self.client_state.visible_tiled_clients_on_workspace(current_ws);
-        if !visible_tiled.is_empty() {
-            let screen_rect = Rect::new(
-                0,
-                0,
-                self.context.screen_width as u32,
-                self.context.screen_height as u32,
-            );
+        let monitors = self.monitor_manager.monitors.clone();
+        for monitor in &monitors {
+            let mon_ws = monitor.workspace;
+            let monitor_rect = monitor.rect();
+            let visible_tiled = self.client_state.visible_tiled_clients_on_workspace(mon_ws);
 
-            let rects = calculate_master_stack(&visible_tiled, &screen_rect, &self.layout_config);
-            apply_layout_with_border(
-                &self.context.connection,
-                &visible_tiled,
-                &rects,
-                self.layout_config.border_width,
-            )?;
-        }
+            if !visible_tiled.is_empty() {
+                let rects = calculate_master_stack(&visible_tiled, &monitor_rect, &self.layout_config);
+                apply_layout_with_border(
+                    &self.context.connection,
+                    &visible_tiled,
+                    &rects,
+                    self.layout_config.border_width,
+                )?;
+            }
 
-        // Keep all mapped floating windows on the active workspace stacked above tiled windows
-        for &w in &self.client_state.floating_clients_on_workspace(current_ws) {
-            let _ = self.context.connection.configure_window(
-                w,
-                &ConfigureWindowAux::new().stack_mode(StackMode::ABOVE),
-            );
-        }
+            // Keep all mapped floating windows on this monitor's workspace stacked above tiled windows
+            for &w in &self.client_state.floating_clients_on_workspace(mon_ws) {
+                let _ = self.context.connection.configure_window(
+                    w,
+                    &ConfigureWindowAux::new().stack_mode(StackMode::ABOVE),
+                );
+            }
 
-        // Keep all mapped fullscreen windows on the active workspace filling the screen and above
-        let monitor = Monitor::new(
-            0,
-            0,
-            0,
-            self.context.screen_width as u32,
-            self.context.screen_height as u32,
-        );
-        for &w in &self.client_state.fullscreen_clients_on_workspace(current_ws) {
-            let aux = fullscreen_configure_aux(&monitor);
-            let _ = self.context.connection.configure_window(w, &aux);
+            // Keep all mapped fullscreen windows on this monitor's workspace filling this monitor and above
+            for &w in &self.client_state.fullscreen_clients_on_workspace(mon_ws) {
+                let aux = fullscreen_configure_aux(monitor);
+                let _ = self.context.connection.configure_window(w, &aux);
+            }
         }
 
         self.context.flush()?;
@@ -551,7 +577,44 @@ impl WindowManager {
             return Ok(());
         }
 
-        // 1. Unmap all windows on current workspace
+        // 1. If target workspace is already assigned to a different monitor, switch focus to that monitor
+        let target_mon_id = self
+            .monitor_manager
+            .monitor_for_workspace(target_id)
+            .map(|m| m.id);
+
+        if let Some(target_mon_id) = target_mon_id {
+            if target_mon_id != self.monitor_manager.active_monitor_id {
+                self.monitor_manager.active_monitor_id = target_mon_id;
+                self.workspace_manager.current_workspace_id = target_id;
+                self.current_workspace = target_id;
+                let _ = self.update_ewmh_current_desktop();
+
+                let target_focus = self
+                    .workspace_focus
+                    .focused_window_on(target_id)
+                    .or_else(|| self.workspace_manager.get(target_id).and_then(|ws| ws.focused_client))
+                    .or_else(|| self.workspace_manager.get(target_id).and_then(|ws| ws.clients.first().copied()));
+
+                if let Some(focus_win) = target_focus {
+                    if self.client_state.contains(focus_win) {
+                        self.focus_client(focus_win)?;
+                    }
+                } else {
+                    let _ = self.context.connection.set_input_focus(
+                        InputFocus::POINTER_ROOT,
+                        self.context.root_window,
+                        x11rb::CURRENT_TIME,
+                    );
+                    let _ = self.update_ewmh_active_window();
+                }
+                self.context.flush()?;
+                return Ok(());
+            }
+        }
+
+        // 2. Target workspace is not on any other monitor.
+        // Active monitor replaces its workspace from current_id to target_id.
         let current_windows = self
             .workspace_manager
             .get(current_id)
@@ -566,7 +629,6 @@ impl WindowManager {
             let _ = self.set_wm_state(win, WmState::Iconic);
         }
 
-        // 2. Map all windows on target workspace
         self.workspace_manager.get_or_create(target_id);
         let target_windows = self
             .workspace_manager
@@ -574,23 +636,24 @@ impl WindowManager {
             .map(|ws| ws.clients.clone())
             .unwrap_or_default();
 
+        let active_mon_id = self.monitor_manager.active_monitor_id;
         for &win in &target_windows {
             if let Some(client) = self.client_state.get_client_mut(win) {
                 client.mapped = true;
+                client.workspace = target_id;
+                client.monitor = active_mon_id;
             }
             let _ = self.context.connection.map_window(win);
             let _ = self.set_wm_state(win, WmState::Normal);
         }
 
-        // 3. Update active workspace IDs
+        self.monitor_manager.active_monitor_mut().workspace = target_id;
         self.workspace_manager.current_workspace_id = target_id;
         self.current_workspace = target_id;
         let _ = self.update_ewmh_current_desktop();
 
-        // 4. Retile target workspace
         self.retile()?;
 
-        // 5. Restore focus
         let target_focus = self
             .workspace_focus
             .focused_window_on(target_id)
@@ -615,7 +678,7 @@ impl WindowManager {
     }
 
     /// Moves a client window to a target workspace, hiding it from the screen
-    /// and retiling the remaining windows on the active workspace.
+    /// if the target workspace is inactive, or displaying it if active on another monitor.
     pub fn move_to_workspace(
         &mut self,
         window: Window,
@@ -628,13 +691,24 @@ impl WindowManager {
 
         self.workspace_manager.move_client(window, target_id);
 
+        let target_mon = self.monitor_manager.monitor_for_workspace(target_id).cloned();
+        let target_is_visible = target_mon.is_some();
+
         if let Some(client) = self.client_state.get_client_mut(window) {
             client.workspace = target_id;
-            client.mapped = false;
+            if let Some(ref m) = target_mon {
+                client.monitor = m.id;
+            }
+            client.mapped = target_is_visible;
         }
 
-        // Unmap moved window from screen
-        let _ = self.context.connection.unmap_window(window);
+        if target_is_visible {
+            let _ = self.context.connection.map_window(window);
+            let _ = self.set_wm_state(window, WmState::Normal);
+        } else {
+            let _ = self.context.connection.unmap_window(window);
+            let _ = self.set_wm_state(window, WmState::Iconic);
+        }
 
         // Restore focus on current workspace
         let next_focus = self.workspace_focus.remove_window(current_id, window);
@@ -656,7 +730,7 @@ impl WindowManager {
             );
         }
 
-        // Retile active workspace
+        // Retile all workspaces
         self.retile()?;
         self.context.flush()?;
         Ok(())
@@ -817,13 +891,14 @@ impl WindowManager {
             return Ok(());
         }
 
-        let monitor = Monitor::new(
-            0,
-            0,
-            0,
-            self.context.screen_width as u32,
-            self.context.screen_height as u32,
-        );
+        let monitor = if let Some(client) = self.client_state.get_client(window) {
+            self.monitor_manager
+                .monitor_for_workspace(client.workspace)
+                .cloned()
+                .unwrap_or_else(|| self.monitor_manager.active_monitor().clone())
+        } else {
+            self.monitor_manager.active_monitor().clone()
+        };
 
         if fullscreen {
             // Save client's current x, y, width, height and border_width
@@ -872,6 +947,175 @@ impl WindowManager {
         // Recalculate layout for the active workspace
         self.retile()?;
         self.focus_client(window)?;
+        self.context.flush()?;
+        Ok(())
+    }
+
+    /// Focuses the monitor visually to the left of the active monitor.
+    pub fn focus_monitor_left(&mut self) -> Result<(), X11Error> {
+        if let Some(target_id) = self.monitor_manager.focus_monitor_left() {
+            if let Some(mon) = self.monitor_manager.get_monitor(target_id) {
+                let ws = mon.workspace;
+                self.current_workspace = ws;
+                self.workspace_manager.current_workspace_id = ws;
+                let _ = self.update_ewmh_current_desktop();
+
+                let target_focus = self
+                    .workspace_focus
+                    .focused_window_on(ws)
+                    .or_else(|| self.workspace_manager.get(ws).and_then(|w| w.focused_client))
+                    .or_else(|| self.workspace_manager.get(ws).and_then(|w| w.clients.first().copied()));
+
+                if let Some(w) = target_focus {
+                    if self.client_state.contains(w) {
+                        self.focus_client(w)?;
+                    }
+                } else {
+                    let _ = self.context.connection.set_input_focus(
+                        InputFocus::POINTER_ROOT,
+                        self.context.root_window,
+                        x11rb::CURRENT_TIME,
+                    );
+                    let _ = self.update_ewmh_active_window();
+                }
+            }
+        }
+        self.context.flush()?;
+        Ok(())
+    }
+
+    /// Focuses the monitor visually to the right of the active monitor.
+    pub fn focus_monitor_right(&mut self) -> Result<(), X11Error> {
+        if let Some(target_id) = self.monitor_manager.focus_monitor_right() {
+            if let Some(mon) = self.monitor_manager.get_monitor(target_id) {
+                let ws = mon.workspace;
+                self.current_workspace = ws;
+                self.workspace_manager.current_workspace_id = ws;
+                let _ = self.update_ewmh_current_desktop();
+
+                let target_focus = self
+                    .workspace_focus
+                    .focused_window_on(ws)
+                    .or_else(|| self.workspace_manager.get(ws).and_then(|w| w.focused_client))
+                    .or_else(|| self.workspace_manager.get(ws).and_then(|w| w.clients.first().copied()));
+
+                if let Some(w) = target_focus {
+                    if self.client_state.contains(w) {
+                        self.focus_client(w)?;
+                    }
+                } else {
+                    let _ = self.context.connection.set_input_focus(
+                        InputFocus::POINTER_ROOT,
+                        self.context.root_window,
+                        x11rb::CURRENT_TIME,
+                    );
+                    let _ = self.update_ewmh_active_window();
+                }
+            }
+        }
+        self.context.flush()?;
+        Ok(())
+    }
+
+    /// Moves the currently focused client to the specified monitor.
+    pub fn move_to_monitor(&mut self, target_monitor_id: MonitorId) -> Result<(), X11Error> {
+        let win = match self.client_state.focused_window() {
+            Some(w) => w,
+            None => return Ok(()),
+        };
+
+        let target_ws = match self.monitor_manager.get_monitor(target_monitor_id) {
+            Some(m) => m.workspace,
+            None => return Ok(()),
+        };
+
+        let current_ws = self.current_workspace;
+        if current_ws == target_ws {
+            return Ok(());
+        }
+
+        self.workspace_manager.move_client(win, target_ws);
+
+        if let Some(client) = self.client_state.get_client_mut(win) {
+            client.workspace = target_ws;
+            client.monitor = target_monitor_id;
+            client.mapped = true;
+        }
+
+        if let Some(client) = self.client_state.get_client(win) {
+            if client.is_floating() {
+                if let Some(target_mon) = self.monitor_manager.get_monitor(target_monitor_id) {
+                    let mut geom = client.floating_geometry.unwrap_or_else(|| {
+                        calculate_default_floating_geometry(
+                            target_mon.width as u16,
+                            target_mon.height as u16,
+                        )
+                    });
+                    geom.x = target_mon.x + ((target_mon.width as i32 - geom.width as i32) / 2).max(0);
+                    geom.y = target_mon.y + ((target_mon.height as i32 - geom.height as i32) / 2).max(0);
+                    let aux = ConfigureWindowAux::new().x(geom.x).y(geom.y);
+                    let _ = self.context.connection.configure_window(win, &aux);
+                    if let Some(c_mut) = self.client_state.get_client_mut(win) {
+                        c_mut.set_floating(geom);
+                    }
+                }
+            }
+        }
+
+        let next_focus = self.workspace_focus.remove_window(current_ws, win);
+        if let Some(next_win) = next_focus {
+            if self.client_state.contains(next_win) {
+                let _ = self.focus_client(next_win);
+            }
+        } else if let Some(&first) = self
+            .workspace_manager
+            .get(current_ws)
+            .and_then(|ws| ws.clients.first())
+        {
+            let _ = self.focus_client(first);
+        } else {
+            let _ = self.context.connection.set_input_focus(
+                InputFocus::POINTER_ROOT,
+                self.context.root_window,
+                x11rb::CURRENT_TIME,
+            );
+            let _ = self.update_ewmh_active_window();
+        }
+
+        self.retile()?;
+        self.context.flush()?;
+        Ok(())
+    }
+
+    /// Refreshes monitor geometry by querying XRandR and reconciles state.
+    pub fn refresh_monitors(&mut self) -> Result<(), X11Error> {
+        let new_monitors = query_monitors(
+            &self.context.connection,
+            self.context.root_window,
+            self.context.screen_width as u32,
+            self.context.screen_height as u32,
+        )?;
+
+        let disconnected = self.monitor_manager.reconcile_monitors(new_monitors);
+
+        // For disconnected monitors, migrate their clients to the primary monitor's workspace
+        let primary_ws = self.monitor_manager.active_monitor().workspace;
+        for (_disc_id, old_ws) in disconnected {
+            if old_ws != primary_ws {
+                let clients = self.workspace_manager.get(old_ws).map(|ws| ws.clients.clone()).unwrap_or_default();
+                for win in clients {
+                    self.workspace_manager.move_client(win, primary_ws);
+                    if let Some(client) = self.client_state.get_client_mut(win) {
+                        client.workspace = primary_ws;
+                        client.mapped = true;
+                    }
+                    let _ = self.context.connection.map_window(win);
+                    let _ = self.set_wm_state(win, WmState::Normal);
+                }
+            }
+        }
+
+        self.retile()?;
         self.context.flush()?;
         Ok(())
     }
@@ -1185,6 +1429,15 @@ impl WindowManager {
                 if let Some(win) = self.client_state.focused_window() {
                     let _ = self.toggle_fullscreen(win);
                 }
+            }
+            Action::FocusMonitorLeft => {
+                let _ = self.focus_monitor_left()?;
+            }
+            Action::FocusMonitorRight => {
+                let _ = self.focus_monitor_right()?;
+            }
+            Action::MoveToMonitor(mon_id) => {
+                let _ = self.move_to_monitor(mon_id)?;
             }
             Action::Reload => {
                 let _ = self.input_manager.setup(&self.context.connection, self.context.root_window);

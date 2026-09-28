@@ -76,33 +76,7 @@ impl From<Geometry> for FloatingGeometry {
     }
 }
 
-/// Represents a physical or virtual monitor screen.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Monitor {
-    /// Unique internal identifier for the monitor.
-    pub id: u32,
-    /// The X coordinate of the monitor.
-    pub x: i32,
-    /// The Y coordinate of the monitor.
-    pub y: i32,
-    /// The width of the monitor in pixels.
-    pub width: u32,
-    /// The height of the monitor in pixels.
-    pub height: u32,
-}
-
-impl Monitor {
-    /// Creates a new `Monitor`.
-    pub const fn new(id: u32, x: i32, y: i32, width: u32, height: u32) -> Self {
-        Self {
-            id,
-            x,
-            y,
-            width,
-            height,
-        }
-    }
-}
+pub use crate::monitor::{Monitor, MonitorId};
 
 /// The fullscreen state of a client window.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]

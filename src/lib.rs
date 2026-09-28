@@ -11,6 +11,7 @@ pub mod input;
 pub mod keybind;
 pub mod layout;
 pub mod rules;
+pub mod monitor;
 pub mod wm;
 pub mod workspace;
 pub mod x11;

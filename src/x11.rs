@@ -38,6 +38,10 @@ pub enum X11Error {
     /// Another window manager is already managing this display/root window.
     #[error("Another window manager is already running")]
     AnotherWmRunning,
+
+    /// XRandR extension is not supported by the X server.
+    #[error("XRandR extension is not supported")]
+    RandrNotSupported,
 }
 
 /// Manages the underlying X11 connection and root screen details.
