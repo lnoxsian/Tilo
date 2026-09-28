@@ -163,6 +163,22 @@ pub fn ungrab_keys<C: Connection>(conn: &C, root: Window) -> Result<(), X11Error
     Ok(())
 }
 
+/// Un-registers all current keybindings and registers the new ones with the X server.
+///
+/// # Arguments
+/// * `conn` - The active X11 connection.
+/// * `bindings` - The list of new parsed keybindings.
+/// * `root` - The root window ID.
+pub fn re_register_keybindings<C: Connection>(
+    conn: &C,
+    bindings: &[KeyBind],
+    root: Window,
+) -> Result<(), X11Error> {
+    let _ = ungrab_keys(conn, root);
+    grab_keys(conn, root, bindings)?;
+    Ok(())
+}
+
 /// Translates a raw X11 `KeyPressEvent` into an actionable [`Action`].
 pub fn handle_key_press(
     event: &KeyPressEvent,
@@ -221,9 +237,12 @@ impl InputManager {
         root: Window,
         new_bindings: Vec<KeyBind>,
     ) -> Result<(), X11Error> {
-        let _ = ungrab_keys(conn, root);
+        let setup = conn.setup();
+        let mapping = KeyboardMapping::query(conn, setup.min_keycode, setup.max_keycode)?;
+        self.num_lock_mask = detect_num_lock_mask(conn, &mapping);
+        self.mapping = Some(mapping);
         self.bindings = new_bindings;
-        self.setup(conn, root)
+        re_register_keybindings(conn, &self.bindings, root)
     }
 
     /// Processes an incoming `KeyPressEvent` and returns the matching action, if any.

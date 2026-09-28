@@ -6,7 +6,7 @@
 
 use crate::atoms::Atoms;
 use crate::client::{Client, ClientState};
-use crate::config::{load_config, load_config_or_default, Config};
+use crate::config::{load_config, load_config_or_default, Config, ReloadError};
 use crate::ewmh::{
     init_ewmh, update_net_active_window, update_net_client_list, update_net_current_desktop,
     update_net_wm_state_above, update_net_wm_state_fullscreen, EwmhAtoms, NetWmStateAction,
@@ -172,12 +172,76 @@ impl WindowManager {
         self.layout_config.outer_gap = config.outer_gap;
         self.layout_config.master_ratio = config.master_ratio;
 
-        self.input_manager = InputManager::new(config.bindings.clone());
-        let _ = self.input_manager.setup(&self.context.connection, self.context.root_window);
+        self.input_manager.re_register(
+            &self.context.connection,
+            self.context.root_window,
+            config.bindings.clone(),
+        )?;
 
         self.config = config;
+
+        // Apply updated border width and colors to all existing client windows
+        let focused = self.client_state.focused_window();
+        for &win in &self.client_state.all_clients() {
+            let is_fullscreen = self
+                .client_state
+                .get_client(win)
+                .map(|c| c.fullscreen)
+                .unwrap_or(false);
+            if !is_fullscreen {
+                let _ = set_window_border_width(
+                    &self.context.connection,
+                    win,
+                    self.border_config.width,
+                );
+                let border_color = if focused == Some(win) {
+                    self.border_config.focused_color
+                } else {
+                    self.border_config.normal_color
+                };
+                let _ = set_window_border_color(&self.context.connection, win, border_color);
+            }
+        }
+
         self.retile()?;
         self.context.flush()?;
+        Ok(())
+    }
+
+    /// Reloads the configuration from disk while the window manager is running.
+    ///
+    /// If loading or parsing fails, the previous configuration is retained and
+    /// an error is logged to stderr.
+    pub fn reload_config(&mut self) -> Result<(), ReloadError> {
+        let new_cfg = match load_config() {
+            Ok(cfg) => cfg,
+            Err(err) => {
+                eprintln!("[ERROR tilo::wm] Failed to reload config: {}", err);
+                return Err(ReloadError::ConfigInvalid(err));
+            }
+        };
+        self.apply_config(new_cfg)?;
+        println!("[INFO  tilo::wm] Configuration reloaded successfully.");
+        Ok(())
+    }
+
+    /// Reloads configuration from a specific file path on disk.
+    ///
+    /// If loading or parsing fails, the previous configuration is retained and
+    /// an error is logged to stderr.
+    pub fn reload_config_from_path<P: AsRef<std::path::Path>>(
+        &mut self,
+        path: P,
+    ) -> Result<(), ReloadError> {
+        let new_cfg = match crate::config::load_config_from_path(path) {
+            Ok(cfg) => cfg,
+            Err(err) => {
+                eprintln!("[ERROR tilo::wm] Failed to reload config: {}", err);
+                return Err(ReloadError::ConfigInvalid(err));
+            }
+        };
+        self.apply_config(new_cfg)?;
+        println!("[INFO  tilo::wm] Configuration reloaded successfully.");
         Ok(())
     }
 
@@ -1475,11 +1539,11 @@ impl WindowManager {
                 let _ = self.move_to_monitor(mon_id)?;
             }
             Action::Reload => {
-                if let Ok(new_cfg) = load_config() {
-                    let _ = self.apply_config(new_cfg);
-                } else {
-                    let _ = self.input_manager.setup(&self.context.connection, self.context.root_window);
-                    let _ = self.retile();
+                if let Err(err) = self.reload_config() {
+                    eprintln!(
+                        "[WARN  tilo::wm] Config reload aborted, keeping previous configuration: {}",
+                        err
+                    );
                 }
             }
             Action::Exit => {
@@ -1598,6 +1662,17 @@ impl WindowManager {
 
         Ok(())
     }
+}
+
+/// Reloads the configuration from disk while the window manager is running.
+///
+/// # Arguments
+/// * `state` - The mutable window manager state containing the current configuration.
+///
+/// # Returns
+/// * `Result<(), ReloadError>` - Success or failure reason.
+pub fn reload_config(state: &mut WindowManager) -> Result<(), ReloadError> {
+    state.reload_config()
 }
 
 #[cfg(test)]

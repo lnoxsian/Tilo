@@ -1,12 +1,14 @@
 //! Configuration system for tilo.
 //!
-//! Implements Phase 15 of Plan.md:
+//! Implements Phase 15 & 16 of Plan.md:
 //! - Custom line-oriented, whitespace-delimited configuration syntax.
 //! - Directives for modifiers, fonts, border widths, inner/outer gaps, master ratios, and keybindings.
 //! - Lexical tokenizer ([`tokenize`]), recursive-descent parser ([`parse`]), and disk loader ([`load_config`]).
+//! - Safe configuration reload without restarting the window manager ([`ReloadError`]).
 
 use crate::focus::Direction;
 use crate::keybind::{default_keybindings, parse_keybind, Action, KeyBind};
+use crate::x11::X11Error;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
@@ -43,6 +45,18 @@ impl From<std::io::Error> for ConfigError {
     fn from(err: std::io::Error) -> Self {
         ConfigError::IoError(err.to_string())
     }
+}
+
+/// Errors that can occur during a hot configuration reload.
+#[derive(Debug, Error)]
+pub enum ReloadError {
+    /// The configuration file was invalid. The previous configuration was kept.
+    #[error("Invalid configuration: {0}")]
+    ConfigInvalid(#[from] ConfigError),
+
+    /// Failed to update X11 state (e.g., grabbing keys).
+    #[error("X11 error during reload: {0}")]
+    X11Error(#[from] X11Error),
 }
 
 /// Represents a parsed user configuration.
