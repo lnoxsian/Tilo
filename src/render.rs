@@ -37,6 +37,29 @@ pub struct Renderer {
 }
 
 impl Renderer {
+    /// Attempts to open an X11 font and verifies its existence via `query_font`.
+    fn try_open_font(conn: &impl Connection, font_name: &str) -> Result<(u32, i16, i16, u16), ()> {
+        let font_id = conn.generate_id().map_err(|_| ())?;
+        if conn.open_font(font_id, font_name.as_bytes()).is_err() {
+            return Err(());
+        }
+        // query_font round-trips to X server, ensuring the font name is valid
+        if let Ok(cookie) = conn.query_font(font_id) {
+            if let Ok(reply) = cookie.reply() {
+                let ascent = reply.font_ascent;
+                let descent = reply.font_descent;
+                let width = if reply.max_bounds.character_width > 0 {
+                    reply.max_bounds.character_width as u16
+                } else {
+                    8
+                };
+                return Ok((font_id, ascent, descent, width));
+            }
+        }
+        let _ = conn.close_font(font_id);
+        Err(())
+    }
+
     /// Loads an X11 font by name with automatic fallback to standard monospace fonts.
     ///
     /// # Arguments
@@ -46,29 +69,15 @@ impl Renderer {
     /// # Returns
     /// A font ID, or a [`TiloError::FontLoadError`] if no font can be loaded.
     pub fn load_font(conn: &impl Connection, font_name: &str) -> Result<u32, TiloError> {
-        let font_id = conn.generate_id()?;
-
-        // 1. Try requested font name
-        if conn.open_font(font_id, font_name.as_bytes()).is_ok() && conn.flush().is_ok() {
+        if let Ok((font_id, _, _, _)) = Self::try_open_font(conn, font_name) {
             return Ok(font_id);
         }
 
-        // 2. Try standard X11 "fixed" font
-        let fallback_fixed = conn.generate_id()?;
-        if conn.open_font(fallback_fixed, b"fixed").is_ok() && conn.flush().is_ok() {
-            return Ok(fallback_fixed);
-        }
-
-        // 3. Try standard X11 "9x15" font
-        let fallback_9x15 = conn.generate_id()?;
-        if conn.open_font(fallback_9x15, b"9x15").is_ok() && conn.flush().is_ok() {
-            return Ok(fallback_9x15);
-        }
-
-        // 4. Try standard X11 "6x13" font
-        let fallback_6x13 = conn.generate_id()?;
-        if conn.open_font(fallback_6x13, b"6x13").is_ok() && conn.flush().is_ok() {
-            return Ok(fallback_6x13);
+        // Standard core X11 fonts that are guaranteed to exist on any X11 server
+        for fallback in &["fixed", "6x13", "9x15", "-misc-fixed-medium-r-*-*-13-*-*-*-*-*-*-*"] {
+            if let Ok((font_id, _, _, _)) = Self::try_open_font(conn, fallback) {
+                return Ok(font_id);
+            }
         }
 
         Err(StatusbarError::FontLoadError(format!(
@@ -94,20 +103,24 @@ impl Renderer {
         depth: u8,
         font_name: &str,
     ) -> Result<Self, StatusbarError> {
-        let font_id = Self::load_font(conn, font_name)?;
-
-        let (font_ascent, font_descent, char_width) = if let Ok(reply) = conn.query_font(font_id)?.reply() {
-            let ascent = reply.font_ascent;
-            let descent = reply.font_descent;
-            let width = if reply.max_bounds.character_width > 0 {
-                reply.max_bounds.character_width as u16
+        let (font_id, font_ascent, font_descent, char_width) =
+            if let Ok(res) = Self::try_open_font(conn, font_name) {
+                res
             } else {
-                8
+                let mut loaded = None;
+                for fallback in &["fixed", "6x13", "9x15", "-misc-fixed-medium-r-*-*-13-*-*-*-*-*-*-*"] {
+                    if let Ok(res) = Self::try_open_font(conn, fallback) {
+                        loaded = Some(res);
+                        break;
+                    }
+                }
+                loaded.ok_or_else(|| {
+                    StatusbarError::FontLoadError(format!(
+                        "Failed to load font '{}' and all fallbacks",
+                        font_name
+                    ))
+                })?
             };
-            (ascent, descent, width)
-        } else {
-            (11, 3, 7)
-        };
 
         let gc = conn.generate_id()?;
         let gc_aux = CreateGCAux::new()
@@ -154,7 +167,21 @@ impl Renderer {
         }
         let aux = ChangeGCAux::new().foreground(color);
         conn.change_gc(self.gc, &aux)?;
-        conn.image_text8(drawable, self.gc, x, y, text.as_bytes())?;
+
+        // Try poly_text8 first so background is transparent / preserved
+        let mut drew_poly = false;
+        if text.len() <= 254 {
+            let mut item = Vec::with_capacity(text.len() + 2);
+            item.push(text.len() as u8);
+            item.push(0u8); // 0 horizontal delta
+            item.extend_from_slice(text.as_bytes());
+            if conn.poly_text8(drawable, self.gc, x, y, &item).is_ok() {
+                drew_poly = true;
+            }
+        }
+        if !drew_poly {
+            conn.image_text8(drawable, self.gc, x, y, text.as_bytes())?;
+        }
         Ok(())
     }
 

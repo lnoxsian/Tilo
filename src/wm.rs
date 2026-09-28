@@ -280,6 +280,7 @@ impl WindowManager {
         ) {
             bar.attach_renderer(renderer);
         }
+        let _ = bar.update_all();
 
         self.statusbar = Some(bar);
         let _ = self.render_statusbar();
@@ -367,16 +368,24 @@ impl WindowManager {
     /// Starts the main event loop, blocking the thread and waiting for X11 events.
     pub fn run(&mut self) -> Result<(), X11Error> {
         self.context.flush()?;
+        let mut last_status_update = std::time::Instant::now();
         while self.running {
-            let event = self.context.connection.wait_for_event()?;
-            self.handle_event(event)?;
-
-            // Drain any pending events in the queue to minimize latency and batch flushes
+            let mut got_event = false;
             while let Some(event) = self.context.connection.poll_for_event()? {
                 self.handle_event(event)?;
+                got_event = true;
             }
 
-            self.context.flush()?;
+            if last_status_update.elapsed() >= std::time::Duration::from_millis(250) {
+                self.update_statusbar();
+                last_status_update = std::time::Instant::now();
+            }
+
+            if got_event {
+                self.context.flush()?;
+            } else {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
         }
         Ok(())
     }

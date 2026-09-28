@@ -328,6 +328,24 @@ fn test_statusbar_renderer_in_xephyr() {
         // Module update re-render
         let _ = wm.update_statusbar();
 
+        // 7. Verify actual rendered pixels on statusbar window using get_image
+        let img = wm.context.connection.get_image(
+            x11rb::protocol::xproto::ImageFormat::Z_PIXMAP,
+            bar_win,
+            0,
+            0,
+            200,
+            26,
+            !0,
+        ).unwrap().reply().unwrap();
+        // Check that pixels with color scheme active_bg (0x7aa2f7) or fg (0xc0caf5) were actually written
+        // In 32-bit/24-bit visual, pixels are stored in BGR or RGB format
+        let has_colored_pixels = img.data.chunks_exact(4).any(|p| {
+            let color = (p[2] as u32) << 16 | (p[1] as u32) << 8 | (p[0] as u32);
+            color == 0x7aa2f7 || color == 0xc0caf5 || color == 0x15161e
+        });
+        assert!(has_colored_pixels, "Statusbar window must contain rendered text / pill pixels");
+
         // Disable statusbar
         wm.disable_statusbar().expect("disable_statusbar should succeed");
     }
