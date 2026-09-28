@@ -1,6 +1,11 @@
 use std::os::unix::fs::PermissionsExt;
 use std::process::{Child, Command};
-use tilo::launcher::{filter_executables, scan_desktop_dirs, scan_path_from, spawn_app, Launcher};
+use tilo::input::KeyboardMapping;
+use tilo::keybind::{default_keybindings, Action, MOD_CONTROL, MOD_SHIFT, XK_Q};
+use tilo::launcher::{
+    filter_executables, handle_launcher_keypress, scan_desktop_dirs, scan_path_from, spawn_app,
+    Launcher, LauncherAction, LauncherMode,
+};
 use tilo::wm::WindowManager;
 use tilo::x11::X11Context;
 use x11rb::protocol::xproto::{ConnectionExt, KeyPressEvent};
@@ -317,3 +322,69 @@ NoDisplay=false
 
     let _ = std::fs::remove_dir_all(&temp_desktop_dir);
 }
+
+#[test]
+fn test_exit_menu_options_and_filtering() {
+    let mut launcher = Launcher::new();
+    launcher.mode = LauncherMode::Exit;
+
+    // 1. When query is empty, all three exit options are presented in order
+    let default_options = launcher.filtered_results(8);
+    assert_eq!(default_options, vec!["Logout", "Reboot", "Poweroff"]);
+
+    // 2. Exact and prefix searches
+    launcher.query = "log".to_string();
+    assert_eq!(launcher.filtered_results(8), vec!["Logout"]);
+
+    launcher.query = "reb".to_string();
+    assert_eq!(launcher.filtered_results(8), vec!["Reboot"]);
+
+    launcher.query = "pow".to_string();
+    assert_eq!(launcher.filtered_results(8), vec!["Poweroff"]);
+
+    // 3. Synonym searches
+    launcher.query = "shutdown".to_string();
+    assert_eq!(launcher.filtered_results(8), vec!["Poweroff"]);
+
+    launcher.query = "quit".to_string();
+    assert_eq!(launcher.filtered_results(8), vec!["Logout"]);
+
+    launcher.query = "exit".to_string();
+    assert_eq!(launcher.filtered_results(8), vec!["Logout"]);
+
+    launcher.query = "restart".to_string();
+    assert_eq!(launcher.filtered_results(8), vec!["Reboot"]);
+}
+
+#[test]
+fn test_ctrl_shift_q_keybinding_and_cancel() {
+    // 1. Default keybindings should include Ctrl+Shift+Q -> Action::Exit
+    let binds = default_keybindings();
+    let has_ctrl_shift_q = binds.iter().any(|b| {
+        b.modifiers == (MOD_CONTROL | MOD_SHIFT) && b.keysym == XK_Q && b.action == Action::Exit
+    });
+    assert!(has_ctrl_shift_q, "Default keybindings must include Ctrl+Shift+Q -> Action::Exit");
+
+    // And verify unnecessary Mod+Shift+E keybinding is removed
+    let has_super_shift_e = binds.iter().any(|b| {
+        b.modifiers == (tilo::keybind::MOD_SUPER | MOD_SHIFT) && b.keysym == tilo::keybind::XK_E
+    });
+    assert!(!has_super_shift_e, "Unnecessary Mod+Shift+E keybinding must be removed");
+
+    // 2. Pressing Ctrl+Shift+Q while launcher is open should emit Cancel action
+    let mapping = KeyboardMapping {
+        min_keycode: 8,
+        max_keycode: 60,
+        keysyms_per_keycode: 2,
+        keysyms: {
+            let mut v = vec![0; (60 - 8 + 1) * 2];
+            v[(24 - 8) * 2] = XK_Q;
+            v[(24 - 8) * 2 + 1] = XK_Q;
+            v
+        },
+    };
+
+    let action = handle_launcher_keypress(24, MOD_CONTROL | MOD_SHIFT, &mapping);
+    assert_eq!(action, Some(LauncherAction::Cancel));
+}
+

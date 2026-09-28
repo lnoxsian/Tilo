@@ -128,6 +128,8 @@ pub struct WindowManager {
     pub mouse_action: crate::mouse::MouseAction,
     /// Registered mouse button bindings (Phase 24).
     pub mouse_bindings: Vec<crate::mouse::MouseBinding>,
+    /// Cursors for pointer interactions (normal arrow, move fleur, resize sizing).
+    pub cursor_manager: crate::cursor::CursorManager,
 }
 
 impl WindowManager {
@@ -184,6 +186,9 @@ impl WindowManager {
         let mod_mask = parse_modifier(&config.mod_key).unwrap_or(MOD_SUPER);
         let mouse_bindings = crate::mouse::default_mouse_bindings(mod_mask);
 
+        let cursor_manager = crate::cursor::CursorManager::new(&context.connection, context.screen_num);
+        let _ = cursor_manager.apply_root(&context.connection, context.root_window);
+
         Ok(Self {
             context,
             client_state: ClientState::new(),
@@ -206,6 +211,7 @@ impl WindowManager {
             scratchpad: crate::scratchpad::Scratchpad::default(),
             mouse_action: crate::mouse::MouseAction::None,
             mouse_bindings,
+            cursor_manager,
         })
     }
 
@@ -321,6 +327,7 @@ impl WindowManager {
         let rect = Rect::new(0, 0, self.context.screen_width as u32, height);
         let screen = &self.context.connection.setup().roots[self.context.screen_num];
         let win_id = create_statusbar_window(&self.context.connection, screen, rect)?;
+        let _ = self.cursor_manager.apply_window(&self.context.connection, win_id);
         let mut bar = Statusbar::default_with_window(win_id, rect);
         let occupied = self.workspace_manager.occupied_workspaces();
         bar.set_workspace(self.current_workspace, &occupied);
@@ -415,8 +422,23 @@ impl WindowManager {
 
     // -- Application Launcher (Phase 19, 20, 21) --
 
-    /// Opens the application launcher overlay, centering it on the active monitor and grabbing keyboard.
+    /// Opens the application launcher overlay in normal App mode.
     pub fn open_launcher(&mut self) -> Result<(), StatusbarError> {
+        self.open_launcher_with_mode(crate::launcher::LauncherMode::App)
+    }
+
+    /// Opens the application launcher overlay in Exit/Power menu mode (Logout, Reboot, Poweroff).
+    pub fn open_exit_launcher(&mut self) -> Result<(), StatusbarError> {
+        let is_visible_exit = self.launcher.as_ref().map(|l| l.visible && l.mode == crate::launcher::LauncherMode::Exit).unwrap_or(false);
+        if is_visible_exit {
+            self.close_launcher()
+        } else {
+            self.open_launcher_with_mode(crate::launcher::LauncherMode::Exit)
+        }
+    }
+
+    /// Opens the application launcher overlay with the given mode, centering it on the active monitor and grabbing keyboard.
+    pub fn open_launcher_with_mode(&mut self, mode: crate::launcher::LauncherMode) -> Result<(), StatusbarError> {
         let active_mon = self.monitor_manager.active_monitor().clone();
         let width = crate::launcher::LAUNCHER_WIDTH;
         let height = crate::launcher::LAUNCHER_HEIGHT;
@@ -447,6 +469,7 @@ impl WindowManager {
                 launcher.color_scheme.bg,
             )?;
             launcher.window_id = win_id;
+            let _ = self.cursor_manager.apply_window(&self.context.connection, win_id);
 
             if let Ok(renderer) = crate::render::Renderer::new(
                 &self.context.connection,
@@ -503,6 +526,7 @@ impl WindowManager {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
 
+        launcher.mode = mode;
         launcher.visible = true;
         launcher.query.clear();
         launcher.cursor_position = 0;
@@ -518,6 +542,7 @@ impl WindowManager {
         if let Some(ref mut launcher) = self.launcher {
             if launcher.visible {
                 launcher.visible = false;
+                launcher.mode = crate::launcher::LauncherMode::App;
                 launcher.query.clear();
                 launcher.cursor_position = 0;
                 launcher.selected_index = 0;
@@ -538,8 +563,8 @@ impl WindowManager {
 
     /// Toggles the visibility of the application launcher overlay.
     pub fn toggle_launcher(&mut self) -> Result<(), StatusbarError> {
-        let is_visible = self.launcher.as_ref().map(|l| l.visible).unwrap_or(false);
-        if is_visible {
+        let is_visible_app = self.launcher.as_ref().map(|l| l.visible && l.mode == crate::launcher::LauncherMode::App).unwrap_or(false);
+        if is_visible_app {
             self.close_launcher()
         } else {
             self.open_launcher()
@@ -579,57 +604,70 @@ impl WindowManager {
                     let _ = self.render_launcher();
                 }
                 crate::launcher::LauncherAction::Execute => {
-                    let cmd_to_spawn = if let Some(ref launcher) = self.launcher {
-                        let results = launcher.filtered_results(8);
-                        let trimmed = launcher.query.trim();
-                        if trimmed.is_empty() {
-                            results.get(launcher.selected_index).map(|s| launcher.command_for(s))
-                        } else if let Some(selected) = results.get(launcher.selected_index) {
-                            let sel_cmd = launcher.command_for(selected);
-                            if !trimmed.contains(' ') {
-                                // User just typed a single-word filter (e.g. "fire", "vlc", "code")
-                                Some(sel_cmd)
-                            } else {
-                                // Query has spaces. Check if it's arguments or a multi-word search query.
-                                let first_word = trimmed.split_whitespace().next().unwrap_or("");
-                                let sel_binary = sel_cmd.split_whitespace().next().unwrap_or(&sel_cmd);
-                                let sel_bin_name = std::path::Path::new(sel_binary)
-                                    .file_name()
-                                    .and_then(|n| n.to_str())
-                                    .unwrap_or(sel_binary);
+                    let mut power_action: Option<String> = None;
+                    let mut cmd_to_spawn: Option<String> = None;
 
-                                if trimmed.eq_ignore_ascii_case(selected) {
-                                    // User typed the exact full name (e.g. "Visual Studio Code")
+                    if let Some(ref launcher) = self.launcher {
+                        if launcher.mode == crate::launcher::LauncherMode::Exit {
+                            let results = launcher.filtered_results(8);
+                            let selected = results.get(launcher.selected_index).cloned()
+                                .unwrap_or_else(|| launcher.query.trim().to_string());
+                            power_action = Some(selected);
+                        } else {
+                            let results = launcher.filtered_results(8);
+                            let trimmed = launcher.query.trim();
+                            let candidate = if trimmed.is_empty() {
+                                results.get(launcher.selected_index).map(|s| launcher.command_for(s))
+                            } else if let Some(selected) = results.get(launcher.selected_index) {
+                                let sel_cmd = launcher.command_for(selected);
+                                if !trimmed.contains(' ') {
                                     Some(sel_cmd)
-                                } else if first_word.eq_ignore_ascii_case(selected)
-                                    || first_word.eq_ignore_ascii_case(sel_binary)
-                                    || first_word.eq_ignore_ascii_case(sel_bin_name)
-                                {
-                                    // User typed binary followed by args (e.g. "firefox --private-window")
-                                    let args_part = &trimmed[first_word.len()..];
-                                    Some(format!("{}{}", sel_cmd, args_part))
-                                } else if trimmed.to_lowercase().starts_with(&selected.to_lowercase())
-                                    && trimmed.len() > selected.len()
-                                    && trimmed[selected.len()..].starts_with(' ')
-                                {
-                                    // User typed selected name followed by args
-                                    let args_part = &trimmed[selected.len()..];
-                                    Some(format!("{}{}", sel_cmd, args_part))
                                 } else {
-                                    // Multi-word search query matching the selected item (e.g. "Visual Studio")
-                                    Some(sel_cmd)
+                                    let first_word = trimmed.split_whitespace().next().unwrap_or("");
+                                    let sel_binary = sel_cmd.split_whitespace().next().unwrap_or(&sel_cmd);
+                                    let sel_bin_name = std::path::Path::new(sel_binary)
+                                        .file_name()
+                                        .and_then(|n| n.to_str())
+                                        .unwrap_or(sel_binary);
+
+                                    if trimmed.eq_ignore_ascii_case(selected) {
+                                        Some(sel_cmd)
+                                    } else if first_word.eq_ignore_ascii_case(selected)
+                                        || first_word.eq_ignore_ascii_case(sel_binary)
+                                        || first_word.eq_ignore_ascii_case(sel_bin_name)
+                                    {
+                                        let args_part = &trimmed[first_word.len()..];
+                                        Some(format!("{}{}", sel_cmd, args_part))
+                                    } else if trimmed.to_lowercase().starts_with(&selected.to_lowercase())
+                                        && trimmed.len() > selected.len()
+                                        && trimmed[selected.len()..].starts_with(' ')
+                                    {
+                                        let args_part = &trimmed[selected.len()..];
+                                        Some(format!("{}{}", sel_cmd, args_part))
+                                    } else {
+                                        Some(sel_cmd)
+                                    }
+                                }
+                            } else {
+                                Some(trimmed.to_string())
+                            };
+
+                            if let Some(ref c) = candidate {
+                                let c_lower = c.trim().to_lowercase();
+                                if c_lower == "logout" || c_lower == "reboot" || c_lower == "poweroff" || c_lower == "shutdown" {
+                                    power_action = Some(c.clone());
+                                } else {
+                                    cmd_to_spawn = candidate;
                                 }
                             }
-                        } else {
-                            Some(trimmed.to_string())
                         }
-                    } else {
-                        None
-                    };
+                    }
 
                     let _ = self.close_launcher();
 
-                    if let Some(cmd) = cmd_to_spawn {
+                    if let Some(action) = power_action {
+                        self.execute_power_action(&action);
+                    } else if let Some(cmd) = cmd_to_spawn {
                         if let Err(e) = crate::launcher::spawn_app(&cmd) {
                             eprintln!("[WARN  tilo::launcher] {}", e);
                         }
@@ -644,6 +682,31 @@ impl WindowManager {
             }
         }
         Ok(())
+    }
+
+    /// Executes a system power / exit action (Logout, Reboot, Poweroff).
+    pub fn execute_power_action(&mut self, action_name: &str) {
+        let lower = action_name.trim().to_lowercase();
+        match lower.as_str() {
+            "logout" | "exit" | "quit" => {
+                self.stop();
+            }
+            "reboot" | "restart" => {
+                let _ = std::process::Command::new("systemctl")
+                    .arg("reboot")
+                    .spawn()
+                    .or_else(|_| std::process::Command::new("reboot").spawn());
+            }
+            "poweroff" | "power off" | "shutdown" => {
+                let _ = std::process::Command::new("systemctl")
+                    .arg("poweroff")
+                    .spawn()
+                    .or_else(|_| std::process::Command::new("poweroff").spawn());
+            }
+            other => {
+                eprintln!("[WARN  tilo::wm] Unknown power action: {}", other);
+            }
+        }
     }
 
     // -- Scratchpad (Phase 23) --
@@ -2358,8 +2421,8 @@ impl WindowManager {
                     self.set_scratchpad_client(focused);
                 }
             }
-            Action::Exit => {
-                self.stop();
+            Action::ExitMenu | Action::Exit => {
+                let _ = self.open_exit_launcher();
             }
         }
         Ok(())
@@ -2501,7 +2564,7 @@ impl WindowManager {
                     GrabMode::ASYNC,
                     GrabMode::ASYNC,
                     x11rb::NONE,
-                    x11rb::NONE,
+                    self.cursor_manager.move_cursor,
                     event_time,
                 );
                 self.context.flush()?;
@@ -2538,7 +2601,7 @@ impl WindowManager {
                     GrabMode::ASYNC,
                     GrabMode::ASYNC,
                     x11rb::NONE,
-                    x11rb::NONE,
+                    self.cursor_manager.resize_cursor,
                     event_time,
                 );
                 self.context.flush()?;

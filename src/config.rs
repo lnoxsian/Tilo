@@ -600,6 +600,7 @@ fn parse_action(tokens: &[&Token], line: usize, config: &Config) -> Result<Actio
             Ok(Action::MoveToMonitor(mon_id))
         }
         "reload" => Ok(Action::Reload),
+        "exit_menu" | "powermenu" | "power_menu" => Ok(Action::ExitMenu),
         "exit" | "quit" => Ok(Action::Exit),
         unknown => Err(ConfigError::InvalidValue {
             line,

@@ -412,3 +412,43 @@ fn test_click_to_focus_and_tiled_drag_in_xephyr() {
     assert!(wm.client_state.get_client(w2).unwrap().floating);
 }
 
+#[test]
+fn test_cursor_initialization_and_application_in_xephyr() {
+    let _server = match XephyrServer::start(149) {
+        Some(s) => s,
+        None => {
+            eprintln!("Xephyr not available on :149, skipping test");
+            return;
+        }
+    };
+
+    let ctx = X11Context::connect_to(Some(":149")).expect("Connect to Xephyr");
+    let wm = WindowManager::new(ctx).expect("Create WM");
+
+    // Verify cursors are created with valid X11 IDs
+    assert_ne!(wm.cursor_manager.normal, 0, "Normal pointer cursor must not be 0");
+    assert_ne!(wm.cursor_manager.move_cursor, 0, "Move cursor must not be 0");
+    assert_ne!(wm.cursor_manager.resize_cursor, 0, "Resize cursor must not be 0");
+
+    // Verify applying cursor to a new window succeeds without error
+    let test_win = wm.context.connection.generate_id().unwrap();
+    let screen = &wm.context.connection.setup().roots[wm.context.screen_num];
+    wm.context.connection.create_window(
+        screen.root_depth,
+        test_win,
+        wm.context.root_window,
+        10,
+        10,
+        100,
+        100,
+        0,
+        WindowClass::INPUT_OUTPUT,
+        screen.root_visual,
+        &CreateWindowAux::new(),
+    ).unwrap();
+
+    assert!(wm.cursor_manager.apply_window(&wm.context.connection, test_win).is_ok());
+    assert!(wm.cursor_manager.apply_root(&wm.context.connection, wm.context.root_window).is_ok());
+}
+
+

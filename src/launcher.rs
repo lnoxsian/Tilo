@@ -15,8 +15,8 @@ use std::time::SystemTime;
 
 use crate::input::KeyboardMapping;
 use crate::keybind::{
-    MOD_CONTROL, MOD_SUPER, XK_A, XK_B, XK_BACKSPACE, XK_C, XK_D, XK_DOWN, XK_E,
-    XK_END, XK_ESCAPE, XK_F, XK_F5, XK_HOME, XK_LEFT, XK_N, XK_P, XK_R, XK_RETURN, XK_RIGHT,
+    MOD_CONTROL, MOD_SHIFT, MOD_SUPER, XK_A, XK_B, XK_BACKSPACE, XK_C, XK_D, XK_DOWN, XK_E,
+    XK_END, XK_ESCAPE, XK_F, XK_F5, XK_HOME, XK_LEFT, XK_N, XK_P, XK_Q, XK_R, XK_RETURN, XK_RIGHT,
     XK_TAB, XK_U, XK_UP, XK_W,
 };
 use crate::layout::Rect;
@@ -51,6 +51,16 @@ pub struct DirCacheEntry {
     pub commands: HashMap<String, String>,
 }
 
+/// Operating mode for the launcher overlay.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LauncherMode {
+    /// Normal application launcher searching $PATH binaries and desktop entries.
+    #[default]
+    App,
+    /// Power / Exit menu offering Logout, Reboot, and Poweroff options.
+    Exit,
+}
+
 /// Core configuration and state for the application launcher.
 #[derive(Debug)]
 pub struct Launcher {
@@ -66,6 +76,8 @@ pub struct Launcher {
     pub selected_index: usize,
     /// Whether the launcher is currently active and mapped on screen.
     pub visible: bool,
+    /// Operating mode of the launcher (App search or Exit menu).
+    pub mode: LauncherMode,
     /// The geometric bounds of the launcher window.
     pub rect: Rect,
     /// Double-buffered graphics renderer.
@@ -96,6 +108,7 @@ impl Launcher {
             cursor_position: 0,
             selected_index: 0,
             visible: false,
+            mode: LauncherMode::App,
             rect: Rect::new(0, 0, LAUNCHER_WIDTH as u32, LAUNCHER_HEIGHT as u32),
             renderer: None,
             color_scheme: ColorScheme::default(),
@@ -115,6 +128,9 @@ impl Launcher {
     /// If the item is an application display name, returns its associated clean command.
     /// Otherwise returns the item name itself as fallback.
     pub fn command_for(&self, name: &str) -> String {
+        if self.mode == LauncherMode::Exit {
+            return name.to_string();
+        }
         self.app_commands
             .get(name)
             .cloned()
@@ -273,9 +289,46 @@ impl Launcher {
         self.renderer = Some(renderer);
     }
 
+    /// Filters the power/exit menu options based on user query.
+    pub fn filter_exit_options(query: &str) -> Vec<String> {
+        let options = ["Logout", "Reboot", "Poweroff"];
+        let trimmed = query.trim();
+        if trimmed.is_empty() {
+            return options.iter().map(|s| s.to_string()).collect();
+        }
+
+        let mut scored: Vec<(i32, String)> = Vec::new();
+        for opt in &options {
+            let opt_lower = opt.to_lowercase();
+            let q_lower = trimmed.to_lowercase();
+            if opt_lower == q_lower {
+                scored.push((1000, opt.to_string()));
+            } else if opt_lower.starts_with(&q_lower) {
+                scored.push((800, opt.to_string()));
+            } else if opt_lower.contains(&q_lower) {
+                scored.push((500, opt.to_string()));
+            } else if (q_lower == "shutdown" && *opt == "Poweroff")
+                || (q_lower == "quit" && *opt == "Logout")
+                || (q_lower == "exit" && *opt == "Logout")
+                || (q_lower == "restart" && *opt == "Reboot")
+            {
+                scored.push((900, opt.to_string()));
+            } else if let Some(score) = fuzzy_match(opt, trimmed) {
+                scored.push((score, opt.to_string()));
+            }
+        }
+
+        scored.sort_by(|a, b| b.0.cmp(&a.0));
+        scored.into_iter().map(|(_, name)| name).collect()
+    }
+
     /// Returns the top filtered executable results matching the current query.
     pub fn filtered_results(&self, max_results: usize) -> Vec<String> {
-        filter_executables(&self.executable_cache, &self.query, max_results)
+        if self.mode == LauncherMode::Exit {
+            Self::filter_exit_options(&self.query)
+        } else {
+            filter_executables(&self.executable_cache, &self.query, max_results)
+        }
     }
 
     /// Renders the launcher UI into its off-screen pixmap and copies it to the window.
@@ -322,7 +375,11 @@ impl Launcher {
 
         // 3. Draw input prompt box
         let input_baseline = 24i16;
-        let prompt_prefix = "> ";
+        let prompt_prefix = if self.mode == LauncherMode::Exit {
+            "Exit > "
+        } else {
+            "> "
+        };
         renderer.draw_text(
             conn,
             renderer.pixmap,
@@ -334,7 +391,11 @@ impl Launcher {
 
         let prefix_width = renderer.text_width(prompt_prefix);
         let query_text = if self.query.is_empty() {
-            "Type application name..."
+            if self.mode == LauncherMode::Exit {
+                "Select action: Logout, Reboot, Poweroff..."
+            } else {
+                "Type application name..."
+            }
         } else {
             &self.query
         };
@@ -421,9 +482,13 @@ impl Launcher {
             cur_y += row_height;
         }
 
-        // If no results and query is non-empty, indicate direct command execution mode
+        // If no results and query is non-empty, indicate notice / direct command execution mode
         if results.is_empty() && !self.query.is_empty() {
-            let notice = format!("Run: '{}'", self.query);
+            let notice = if self.mode == LauncherMode::Exit {
+                format!("Unknown action: '{}' (options: Logout, Reboot, Poweroff)", self.query)
+            } else {
+                format!("Run: '{}'", self.query)
+            };
             renderer.draw_text(
                 conn,
                 renderer.pixmap,
@@ -1070,6 +1135,7 @@ pub fn handle_launcher_keypress(
 ) -> Option<LauncherAction> {
     let keysym = mapping.keycode_to_keysym(keycode, modifiers);
     let ctrl = (modifiers & MOD_CONTROL) != 0;
+    let shift = (modifiers & MOD_SHIFT) != 0;
 
     let is_mod = (modifiers & MOD_SUPER) != 0;
     if is_mod {
@@ -1077,6 +1143,10 @@ pub fn handle_launcher_keypress(
             return Some(LauncherAction::Cancel);
         }
         return None;
+    }
+
+    if ctrl && shift && keysym == XK_Q {
+        return Some(LauncherAction::Cancel);
     }
 
     if ctrl {

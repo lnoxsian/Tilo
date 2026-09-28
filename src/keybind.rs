@@ -112,6 +112,8 @@ pub enum Action {
     ToggleScratchpad,
     /// Assign the currently focused window as the scratchpad.
     SetScratchpad,
+    /// Open the integrated exit/power menu (Logout, Reboot, Poweroff).
+    ExitMenu,
     /// Exit the window manager gracefully.
     Exit,
 }
@@ -270,7 +272,7 @@ pub fn default_keybindings() -> Vec<KeyBind> {
         KeyBind::new(MOD_SUPER, XK_PERIOD, Action::FocusMonitorRight),
         // WM Controls
         KeyBind::new(MOD_SUPER | MOD_SHIFT, XK_R, Action::Reload),
-        KeyBind::new(MOD_SUPER | MOD_SHIFT, XK_E, Action::Exit),
+        KeyBind::new(MOD_CONTROL | MOD_SHIFT, XK_Q, Action::Exit),
     ]
 }
 

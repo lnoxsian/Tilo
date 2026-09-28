@@ -137,9 +137,14 @@ fn test_keyboard_input_and_actions_in_xephyr() {
         wm.execute_action(Action::ToggleFloating).unwrap();
         assert!(!wm.client_state.get_client(win1).unwrap().floating);
 
-        // 6. Action::Exit stops the WM
+        // 6. Action::Exit opens exit launcher menu with Logout, Reboot, Poweroff
         assert!(wm.running);
         wm.execute_action(Action::Exit).unwrap();
+        assert!(wm.launcher.as_ref().unwrap().visible);
+        assert_eq!(wm.launcher.as_ref().unwrap().mode, tilo::launcher::LauncherMode::Exit);
+        assert_eq!(wm.launcher.as_ref().unwrap().filtered_results(8), vec!["Logout", "Reboot", "Poweroff"]);
+        // Executing Logout stops the WM
+        wm.execute_power_action("logout");
         assert!(!wm.running);
     }
 }

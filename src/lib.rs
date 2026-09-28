@@ -4,6 +4,7 @@ pub mod atoms;
 pub mod autostart;
 pub mod client;
 pub mod config;
+pub mod cursor;
 pub mod decoration;
 pub mod ewmh;
 pub mod floating;

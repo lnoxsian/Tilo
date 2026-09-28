@@ -1086,7 +1086,7 @@ impl ClockModule {
             let mut tm = std::mem::MaybeUninit::<libc::tm>::zeroed();
             if !libc::localtime_r(&now, tm.as_mut_ptr()).is_null() {
                 let tm = tm.assume_init();
-                const DAYS: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+                const DAYS: [&str; 7] = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"];
                 let day_name = DAYS.get(tm.tm_wday.clamp(0, 6) as usize).unwrap_or(&"---");
                 let year = 1900 + tm.tm_year;
                 let month = tm.tm_mon + 1;
