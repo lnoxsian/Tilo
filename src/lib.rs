@@ -5,6 +5,7 @@ pub mod client;
 pub mod ewmh;
 pub mod floating;
 pub mod focus;
+pub mod fullscreen;
 pub mod icccm;
 pub mod input;
 pub mod keybind;

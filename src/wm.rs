@@ -15,6 +15,7 @@ use crate::focus::{
     find_neighbor, set_window_border_color, set_window_border_width, BorderConfig, Direction,
     WorkspaceFocus,
 };
+use crate::fullscreen::{fullscreen_configure_aux, restore_configure_aux, Geometry, Monitor};
 use crate::icccm::{
     get_wm_hints, get_wm_normal_hints, get_wm_state, send_wm_delete as icccm_send_wm_delete,
     set_wm_state as icccm_set_wm_state, IcccmAtoms, WmState,
@@ -429,6 +430,19 @@ impl WindowManager {
             );
         }
 
+        // Keep all mapped fullscreen windows on the active workspace filling the screen and above
+        let monitor = Monitor::new(
+            0,
+            0,
+            0,
+            self.context.screen_width as u32,
+            self.context.screen_height as u32,
+        );
+        for &w in &self.client_state.fullscreen_clients_on_workspace(current_ws) {
+            let aux = fullscreen_configure_aux(&monitor);
+            let _ = self.context.connection.configure_window(w, &aux);
+        }
+
         self.context.flush()?;
         Ok(())
     }
@@ -782,6 +796,86 @@ impl WindowManager {
         Ok(())
     }
 
+    /// Toggles the fullscreen state of a specific window.
+    pub fn toggle_fullscreen(&mut self, window: Window) -> Result<(), X11Error> {
+        let is_fs = self
+            .client_state
+            .get_client(window)
+            .map(|c| c.is_fullscreen())
+            .unwrap_or(false);
+        self.set_fullscreen(window, !is_fs)
+    }
+
+    /// Explicitly sets the fullscreen state of a window.
+    pub fn set_fullscreen(&mut self, window: Window, fullscreen: bool) -> Result<(), X11Error> {
+        let current_fs = match self.client_state.get_client(window) {
+            Some(c) => c.is_fullscreen(),
+            None => return Ok(()),
+        };
+
+        if current_fs == fullscreen {
+            return Ok(());
+        }
+
+        let monitor = Monitor::new(
+            0,
+            0,
+            0,
+            self.context.screen_width as u32,
+            self.context.screen_height as u32,
+        );
+
+        if fullscreen {
+            // Save client's current x, y, width, height and border_width
+            let geom_reply = self.context.connection.get_geometry(window)?.reply()?;
+            let prev_geom = Geometry::new(
+                geom_reply.x as i32,
+                geom_reply.y as i32,
+                geom_reply.width as u32,
+                geom_reply.height as u32,
+            );
+            let prev_border = geom_reply.border_width as u32;
+
+            if let Some(client) = self.client_state.get_client_mut(window) {
+                client.set_fullscreen(prev_geom, prev_border);
+            }
+
+            let aux = fullscreen_configure_aux(&monitor);
+            self.context.connection.configure_window(window, &aux)?;
+            update_net_wm_state_fullscreen(
+                &self.context.connection,
+                window,
+                true,
+                &self.ewmh_atoms,
+            )?;
+        } else {
+            // Restore previous geometry and border width
+            let restored = if let Some(client) = self.client_state.get_client_mut(window) {
+                client.unset_fullscreen()
+            } else {
+                None
+            };
+
+            if let Some((prev_geom, prev_border)) = restored {
+                let aux = restore_configure_aux(prev_geom, prev_border);
+                let _ = self.context.connection.configure_window(window, &aux);
+            }
+
+            update_net_wm_state_fullscreen(
+                &self.context.connection,
+                window,
+                false,
+                &self.ewmh_atoms,
+            )?;
+        }
+
+        // Recalculate layout for the active workspace
+        self.retile()?;
+        self.focus_client(window)?;
+        self.context.flush()?;
+        Ok(())
+    }
+
     /// Moves a floating window to a new absolute position.
     pub fn move_floating(&mut self, window: Window, x: i32, y: i32) -> Result<(), X11Error> {
         let is_tiled = match self.client_state.get_client(window) {
@@ -1089,10 +1183,7 @@ impl WindowManager {
             }
             Action::ToggleFullscreen => {
                 if let Some(win) = self.client_state.focused_window() {
-                    if let Some(client) = self.client_state.get_client_mut(win) {
-                        client.fullscreen = !client.fullscreen;
-                    }
-                    let _ = self.retile();
+                    let _ = self.toggle_fullscreen(win);
                 }
             }
             Action::Reload => {
@@ -1186,21 +1277,17 @@ impl WindowManager {
                 let is_above_target = prop1 == atoms.net_wm_state_above || prop2 == atoms.net_wm_state_above;
 
                 if is_fullscreen_target {
-                    if let Some(client) = self.client_state.get_client_mut(window) {
-                        let new_fullscreen = match action {
-                            NetWmStateAction::Remove => false,
-                            NetWmStateAction::Add => true,
-                            NetWmStateAction::Toggle => !client.fullscreen,
-                        };
-                        client.fullscreen = new_fullscreen;
-                        let _ = update_net_wm_state_fullscreen(
-                            &self.context.connection,
-                            window,
-                            new_fullscreen,
-                            &atoms,
-                        );
-                    }
-                    self.retile()?;
+                    let current_fullscreen = self
+                        .client_state
+                        .get_client(window)
+                        .map(|c| c.is_fullscreen())
+                        .unwrap_or(false);
+                    let new_fullscreen = match action {
+                        NetWmStateAction::Remove => false,
+                        NetWmStateAction::Add => true,
+                        NetWmStateAction::Toggle => !current_fullscreen,
+                    };
+                    self.set_fullscreen(window, new_fullscreen)?;
                 }
 
                 if is_above_target {

@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use x11rb::protocol::xproto::Window;
 
 use crate::floating::{ClientLayoutState, FloatingGeometry};
+use crate::fullscreen::{FullscreenState, Geometry};
 
 /// Represents a single tracked application window.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -21,6 +22,8 @@ pub struct Client {
     pub floating: bool,
     /// True if the window is in fullscreen mode.
     pub fullscreen: bool,
+    /// Fullscreen state tracking previous geometry and borders.
+    pub fullscreen_state: FullscreenState,
     /// True if the window is currently mapped (visible) to the screen.
     pub mapped: bool,
     /// True if the window currently has input focus.
@@ -40,6 +43,7 @@ impl Client {
             monitor: 0,
             floating: false,
             fullscreen: false,
+            fullscreen_state: FullscreenState::None,
             mapped: false,
             focused: false,
             layout_state: ClientLayoutState::Tiled,
@@ -50,6 +54,32 @@ impl Client {
     /// Returns true if this client is in a floating state.
     pub fn is_floating(&self) -> bool {
         self.floating || matches!(self.layout_state, ClientLayoutState::Floating(_))
+    }
+
+    /// Returns true if this client is in fullscreen mode.
+    pub fn is_fullscreen(&self) -> bool {
+        self.fullscreen || matches!(self.fullscreen_state, FullscreenState::Fullscreen { .. })
+    }
+
+    /// Sets the client to fullscreen mode, saving its previous geometry and border width.
+    pub fn set_fullscreen(&mut self, prev_geom: Geometry, prev_border_width: u32) {
+        self.fullscreen = true;
+        self.fullscreen_state = FullscreenState::Fullscreen {
+            previous_geometry: prev_geom,
+            previous_border_width: prev_border_width,
+        };
+    }
+
+    /// Unsets fullscreen mode and returns the saved previous geometry and border width, if any.
+    pub fn unset_fullscreen(&mut self) -> Option<(Geometry, u32)> {
+        self.fullscreen = false;
+        match std::mem::take(&mut self.fullscreen_state) {
+            FullscreenState::Fullscreen {
+                previous_geometry,
+                previous_border_width,
+            } => Some((previous_geometry, previous_border_width)),
+            FullscreenState::None => None,
+        }
     }
 
     /// Sets the client to floating with the given geometry.
@@ -120,7 +150,7 @@ impl ClientState {
             .filter(|&w| {
                 self.clients
                     .get(&w)
-                    .map(|c| c.mapped && !c.floating && !c.fullscreen)
+                    .map(|c| c.mapped && !c.is_floating() && !c.is_fullscreen())
                     .unwrap_or(false)
             })
             .collect()
@@ -153,13 +183,15 @@ impl ClientState {
             .filter(|&w| {
                 self.clients
                     .get(&w)
-                    .map(|c| c.workspace == workspace && c.mapped && !c.floating && !c.fullscreen)
+                    .map(|c| {
+                        c.workspace == workspace && c.mapped && !c.is_floating() && !c.is_fullscreen()
+                    })
                     .unwrap_or(false)
             })
             .collect()
     }
 
-    /// Returns the window IDs of all mapped floating clients on a given workspace.
+    /// Returns the window IDs of all mapped floating (non-fullscreen) clients on a given workspace.
     pub fn floating_clients_on_workspace(&self, workspace: u32) -> Vec<Window> {
         self.client_order
             .iter()
@@ -167,7 +199,21 @@ impl ClientState {
             .filter(|&w| {
                 self.clients
                     .get(&w)
-                    .map(|c| c.workspace == workspace && c.mapped && c.floating)
+                    .map(|c| c.workspace == workspace && c.mapped && c.is_floating() && !c.is_fullscreen())
+                    .unwrap_or(false)
+            })
+            .collect()
+    }
+
+    /// Returns the window IDs of all mapped fullscreen clients on a given workspace.
+    pub fn fullscreen_clients_on_workspace(&self, workspace: u32) -> Vec<Window> {
+        self.client_order
+            .iter()
+            .copied()
+            .filter(|&w| {
+                self.clients
+                    .get(&w)
+                    .map(|c| c.workspace == workspace && c.mapped && c.is_fullscreen())
                     .unwrap_or(false)
             })
             .collect()
