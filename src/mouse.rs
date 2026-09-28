@@ -12,7 +12,7 @@ use crate::x11::X11Error;
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::{
     ButtonIndex, ButtonPressEvent, ConfigureWindowAux, ConnectionExt, EventMask, GrabMode,
-    ModMask, MotionNotifyEvent, Window,
+    ModMask, MotionNotifyEvent, StackMode, Window,
 };
 
 /// The current mouse interaction state.
@@ -182,7 +182,10 @@ pub fn handle_motion_notify(
             let new_x = start_win_x + delta_x;
             let new_y = start_win_y + delta_y;
 
-            let aux = ConfigureWindowAux::new().x(new_x).y(new_y);
+            let aux = ConfigureWindowAux::new()
+                .x(new_x)
+                .y(new_y)
+                .stack_mode(StackMode::ABOVE);
             conn.configure_window(*window, &aux)?;
             conn.flush()?;
         }
@@ -198,12 +201,78 @@ pub fn handle_motion_notify(
             let new_w = (*start_width as i32 + delta_x).max(100) as u32;
             let new_h = (*start_height as i32 + delta_y).max(80) as u32;
 
-            let aux = ConfigureWindowAux::new().width(new_w).height(new_h);
+            let aux = ConfigureWindowAux::new()
+                .width(new_w)
+                .height(new_h)
+                .stack_mode(StackMode::ABOVE);
             conn.configure_window(*window, &aux)?;
             conn.flush()?;
         }
         MouseAction::None => {}
     }
+    Ok(())
+}
+
+/// Updates mouse button grabs on a client window depending on whether it is focused.
+///
+/// - **Always**: Grabs `Mod + Button1` (Move) and `Mod + Button3` (Resize) in `ASYNC` mode
+///   with `BUTTON_PRESS | BUTTON_RELEASE | POINTER_MOTION`.
+/// - **Unfocused (`focused = false`)**: Additionally grabs `Button 1` (Left Click) in `SYNC` mode
+///   for click-to-focus.
+/// - **Focused (`focused = true`)**: Ungrabs unmodified `Button 1`, allowing the client
+///   application to receive all normal mouse clicks, selections, and drags with zero WM interference.
+pub fn update_client_button_grabs(
+    conn: &impl Connection,
+    window: Window,
+    bindings: &[MouseBinding],
+    num_lock_mask: u16,
+    focused: bool,
+) -> Result<(), X11Error> {
+    // 1. Ungrab all existing buttons first to prevent stale grabs
+    let _ = conn.ungrab_button(ButtonIndex::ANY, window, ModMask::ANY);
+
+    let mut modifier_masks = vec![0u16, MOD_LOCK];
+    if num_lock_mask != 0 {
+        modifier_masks.push(num_lock_mask);
+        modifier_masks.push(num_lock_mask | MOD_LOCK);
+    }
+
+    // 2. Always grab configured Mod + Button shortcuts in ASYNC mode
+    for b in bindings {
+        for &m in &modifier_masks {
+            let mask = b.modifiers | m;
+            let _ = conn.grab_button(
+                false,
+                window,
+                EventMask::BUTTON_PRESS | EventMask::BUTTON_RELEASE | EventMask::POINTER_MOTION,
+                GrabMode::ASYNC,
+                GrabMode::ASYNC,
+                x11rb::NONE,
+                x11rb::NONE,
+                ButtonIndex::from(b.button),
+                ModMask::from(mask),
+            );
+        }
+    }
+
+    // 3. For unfocused windows, grab Button 1 without Mod in SYNC mode for click-to-focus
+    if !focused {
+        for &m in &modifier_masks {
+            let _ = conn.grab_button(
+                false,
+                window,
+                EventMask::BUTTON_PRESS,
+                GrabMode::SYNC,
+                GrabMode::ASYNC,
+                x11rb::NONE,
+                x11rb::NONE,
+                ButtonIndex::M1,
+                ModMask::from(m),
+            );
+        }
+    }
+
+    conn.flush()?;
     Ok(())
 }
 
@@ -214,44 +283,7 @@ pub fn grab_client_buttons(
     bindings: &[MouseBinding],
     num_lock_mask: u16,
 ) -> Result<(), X11Error> {
-    for b in bindings {
-        let base_mask = b.modifiers;
-        let masks = [
-            base_mask,
-            base_mask | num_lock_mask,
-            base_mask | MOD_LOCK,
-            base_mask | num_lock_mask | MOD_LOCK,
-        ];
-        for &mask in &masks {
-            let _ = conn.grab_button(
-                false,
-                window,
-                EventMask::BUTTON_PRESS,
-                GrabMode::SYNC,
-                GrabMode::ASYNC,
-                x11rb::NONE,
-                x11rb::NONE,
-                ButtonIndex::from(b.button),
-                ModMask::from(mask),
-            );
-        }
-    }
-
-    // Grab Button 1 without modifier in SYNC mode for click-to-focus
-    let _ = conn.grab_button(
-        false,
-        window,
-        EventMask::BUTTON_PRESS,
-        GrabMode::SYNC,
-        GrabMode::ASYNC,
-        x11rb::NONE,
-        x11rb::NONE,
-        ButtonIndex::M1,
-        ModMask::ANY,
-    );
-
-    conn.flush()?;
-    Ok(())
+    update_client_button_grabs(conn, window, bindings, num_lock_mask, false)
 }
 
 /// Releases all mouse button grabs on a client window.

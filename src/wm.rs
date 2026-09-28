@@ -229,12 +229,14 @@ impl WindowManager {
 
         let mod_mask = parse_modifier(&config.mod_key).unwrap_or(MOD_SUPER);
         self.mouse_bindings = crate::mouse::default_mouse_bindings(mod_mask);
+        let focused = self.client_state.focused_window();
         for &win in &self.client_state.all_clients() {
-            let _ = crate::mouse::grab_client_buttons(
+            let _ = crate::mouse::update_client_button_grabs(
                 &self.context.connection,
                 win,
                 &self.mouse_bindings,
                 self.input_manager.num_lock_mask,
+                focused == Some(win),
             );
         }
 
@@ -1024,11 +1026,13 @@ impl WindowManager {
             let _ = self.set_wm_state(window, WmState::Withdrawn);
         }
 
-        let _ = crate::mouse::grab_client_buttons(
+        let is_focused = self.client_state.focused_window() == Some(window);
+        let _ = crate::mouse::update_client_button_grabs(
             &self.context.connection,
             window,
             &self.mouse_bindings,
             self.input_manager.num_lock_mask,
+            is_focused,
         );
         let _ = self.update_ewmh_client_list();
         Ok(true)
@@ -1183,6 +1187,26 @@ impl WindowManager {
             bar.set_title(&title);
         }
         let _ = self.render_statusbar();
+
+        // 9. Update mouse button grabs for click-to-focus management
+        if let Some(prev) = prev_focused {
+            if prev != window && self.client_state.contains(prev) {
+                let _ = crate::mouse::update_client_button_grabs(
+                    &self.context.connection,
+                    prev,
+                    &self.mouse_bindings,
+                    self.input_manager.num_lock_mask,
+                    false,
+                );
+            }
+        }
+        let _ = crate::mouse::update_client_button_grabs(
+            &self.context.connection,
+            window,
+            &self.mouse_bindings,
+            self.input_manager.num_lock_mask,
+            true,
+        );
 
         self.context.flush()?;
         Ok(())
@@ -2303,47 +2327,50 @@ impl WindowManager {
         } else if self.client_state.contains(event.event) {
             event.event
         } else {
-            let _ = self.context.connection.allow_events(Allow::REPLAY_POINTER, x11rb::CURRENT_TIME);
+            let event_time = if event.time != 0 { event.time } else { x11rb::CURRENT_TIME };
+            let _ = self.context.connection.allow_events(Allow::REPLAY_POINTER, event_time);
             let _ = self.context.flush();
             return Ok(());
         };
 
-        // Always focus and raise the clicked client window
-        let _ = self.focus_client(window);
-        let _ = self.raise_window(window);
-
-        let clean_modifiers = u16::from(event.state) & !(self.input_manager.num_lock_mask | MOD_LOCK);
+        let event_time = if event.time != 0 { event.time } else { x11rb::CURRENT_TIME };
+        let clean_modifiers = u16::from(event.state) & 0x00FF & !(self.input_manager.num_lock_mask | MOD_LOCK);
         let matching_binding = self.mouse_bindings.iter().find(|b| {
             b.button == event.detail && b.modifiers == clean_modifiers
         });
 
         match matching_binding.map(|b| b.action_type) {
             Some(crate::mouse::MouseActionType::Move) => {
-                let geom = if let Some(client) = self.client_state.get_client_mut(window) {
-                    if !client.floating {
-                        client.floating = true;
-                    }
-                    if client.floating_geometry.is_none() {
-                        let init_x = event.root_x as i32 - event.event_x as i32;
-                        let init_y = event.root_y as i32 - event.event_y as i32;
-                        client.floating_geometry = Some(crate::floating::FloatingGeometry::new(init_x, init_y, 400, 300));
-                    }
-                    client.floating_geometry.unwrap()
+                let _ = self.focus_client(window);
+                let _ = self.raise_window(window);
+
+                let (win_x, win_y, win_w, win_h) = if let Some(reply) = self.context.connection.get_geometry(window).ok().and_then(|c| c.reply().ok()) {
+                    (reply.x as i32, reply.y as i32, reply.width as u32, reply.height as u32)
                 } else {
-                    crate::floating::FloatingGeometry::new(
-                        event.root_x as i32 - event.event_x as i32,
-                        event.root_y as i32 - event.event_y as i32,
-                        400,
-                        300,
-                    )
+                    (event.root_x as i32 - event.event_x as i32, event.root_y as i32 - event.event_y as i32, 400, 300)
                 };
+
+                let was_tiled = if let Some(client) = self.client_state.get_client_mut(window) {
+                    let tiled = !client.floating;
+                    client.floating = true;
+                    let fg = crate::floating::FloatingGeometry::new(win_x, win_y, win_w, win_h);
+                    client.floating_geometry = Some(fg);
+                    client.layout_state = crate::floating::ClientLayoutState::Floating(fg);
+                    tiled
+                } else {
+                    false
+                };
+
+                if was_tiled {
+                    let _ = self.retile();
+                }
 
                 self.mouse_action = crate::mouse::MouseAction::Moving {
                     window,
                     start_x: event.root_x as i32,
                     start_y: event.root_y as i32,
-                    start_win_x: geom.x,
-                    start_win_y: geom.y,
+                    start_win_x: win_x,
+                    start_win_y: win_y,
                 };
 
                 let _ = self.context.connection.grab_pointer(
@@ -2354,37 +2381,41 @@ impl WindowManager {
                     GrabMode::ASYNC,
                     x11rb::NONE,
                     x11rb::NONE,
-                    x11rb::CURRENT_TIME,
+                    event_time,
                 );
-                let _ = self.context.connection.allow_events(Allow::ASYNC_POINTER, x11rb::CURRENT_TIME);
                 self.context.flush()?;
             }
             Some(crate::mouse::MouseActionType::Resize) => {
-                let geom = if let Some(client) = self.client_state.get_client_mut(window) {
-                    if !client.floating {
-                        client.floating = true;
-                    }
-                    if client.floating_geometry.is_none() {
-                        let init_x = event.root_x as i32 - event.event_x as i32;
-                        let init_y = event.root_y as i32 - event.event_y as i32;
-                        client.floating_geometry = Some(crate::floating::FloatingGeometry::new(init_x, init_y, 400, 300));
-                    }
-                    client.floating_geometry.unwrap()
+                let _ = self.focus_client(window);
+                let _ = self.raise_window(window);
+
+                let (win_x, win_y, win_w, win_h) = if let Some(reply) = self.context.connection.get_geometry(window).ok().and_then(|c| c.reply().ok()) {
+                    (reply.x as i32, reply.y as i32, reply.width as u32, reply.height as u32)
                 } else {
-                    crate::floating::FloatingGeometry::new(
-                        event.root_x as i32 - event.event_x as i32,
-                        event.root_y as i32 - event.event_y as i32,
-                        400,
-                        300,
-                    )
+                    (event.root_x as i32 - event.event_x as i32, event.root_y as i32 - event.event_y as i32, 400, 300)
                 };
+
+                let was_tiled = if let Some(client) = self.client_state.get_client_mut(window) {
+                    let tiled = !client.floating;
+                    client.floating = true;
+                    let fg = crate::floating::FloatingGeometry::new(win_x, win_y, win_w, win_h);
+                    client.floating_geometry = Some(fg);
+                    client.layout_state = crate::floating::ClientLayoutState::Floating(fg);
+                    tiled
+                } else {
+                    false
+                };
+
+                if was_tiled {
+                    let _ = self.retile();
+                }
 
                 self.mouse_action = crate::mouse::MouseAction::Resizing {
                     window,
                     start_x: event.root_x as i32,
                     start_y: event.root_y as i32,
-                    start_width: geom.width,
-                    start_height: geom.height,
+                    start_width: win_w,
+                    start_height: win_h,
                 };
 
                 let _ = self.context.connection.grab_pointer(
@@ -2395,13 +2426,14 @@ impl WindowManager {
                     GrabMode::ASYNC,
                     x11rb::NONE,
                     x11rb::NONE,
-                    x11rb::CURRENT_TIME,
+                    event_time,
                 );
-                let _ = self.context.connection.allow_events(Allow::ASYNC_POINTER, x11rb::CURRENT_TIME);
                 self.context.flush()?;
             }
             None => {
-                let _ = self.context.connection.allow_events(Allow::REPLAY_POINTER, x11rb::CURRENT_TIME);
+                let _ = self.focus_client(window);
+                let _ = self.raise_window(window);
+                let _ = self.context.connection.allow_events(Allow::REPLAY_POINTER, event_time);
                 self.context.flush()?;
             }
         }
@@ -2460,9 +2492,10 @@ impl WindowManager {
     }
 
     /// Handles mouse button release events, terminating drag operations and ungrabbing the pointer.
-    pub fn handle_button_release(&mut self, _event: &ButtonReleaseEvent) -> Result<(), X11Error> {
+    pub fn handle_button_release(&mut self, event: &ButtonReleaseEvent) -> Result<(), X11Error> {
         if self.mouse_action.is_active() {
-            let _ = self.context.connection.ungrab_pointer(x11rb::CURRENT_TIME);
+            let event_time = if event.time != 0 { event.time } else { x11rb::CURRENT_TIME };
+            let _ = self.context.connection.ungrab_pointer(event_time);
             self.context.flush()?;
             self.mouse_action = crate::mouse::MouseAction::None;
         }

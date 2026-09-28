@@ -259,3 +259,140 @@ fn test_mouse_interaction_in_xephyr() {
     wm.handle_button_release(&release).unwrap();
     assert!(!wm.mouse_action.is_active());
 }
+
+#[test]
+fn test_click_to_focus_and_tiled_drag_in_xephyr() {
+    let xephyr = match XephyrServer::start(235) {
+        Some(s) => s,
+        None => return,
+    };
+
+    let ctx = X11Context::connect_to(Some(&xephyr.display)).expect("Failed to connect to Xephyr");
+    ctx.become_wm().expect("Failed to become WM in Xephyr");
+
+    let mut wm = WindowManager::new(ctx).expect("Failed to initialize WindowManager");
+    let screen = wm.context.screen();
+
+    let aux = CreateWindowAux::new()
+        .background_pixel(screen.white_pixel)
+        .event_mask(EventMask::STRUCTURE_NOTIFY | EventMask::PROPERTY_CHANGE);
+
+    let w1 = wm.context.connection.generate_id().unwrap();
+    wm.context.connection.create_window(
+        screen.root_depth,
+        w1,
+        wm.context.root_window,
+        50,
+        50,
+        300,
+        200,
+        1,
+        WindowClass::INPUT_OUTPUT,
+        screen.root_visual,
+        &aux,
+    ).unwrap();
+
+    let w2 = wm.context.connection.generate_id().unwrap();
+    wm.context.connection.create_window(
+        screen.root_depth,
+        w2,
+        wm.context.root_window,
+        400,
+        50,
+        300,
+        200,
+        1,
+        WindowClass::INPUT_OUTPUT,
+        screen.root_visual,
+        &aux,
+    ).unwrap();
+
+    wm.manage_window(w1).unwrap();
+    wm.manage_window(w2).unwrap();
+
+    // 1. Focus w1
+    wm.focus_client(w1).unwrap();
+    assert_eq!(wm.client_state.focused_window(), Some(w1));
+
+    // 2. Simulate normal left click (no Mod) on unfocused window w2
+    let click_w2 = ButtonPressEvent {
+        response_type: 4,
+        detail: 1, // Normal Left click
+        sequence: 1,
+        time: 5,
+        root: wm.context.root_window,
+        event: w2,
+        child: 0,
+        root_x: 450,
+        root_y: 100,
+        event_x: 50,
+        event_y: 50,
+        state: KeyButMask::from(0u16), // No modifiers
+        same_screen: true,
+    };
+
+    wm.handle_button_press(&click_w2).unwrap();
+    assert_eq!(wm.client_state.focused_window(), Some(w2), "Clicking unfocused window must focus it");
+    assert!(!wm.client_state.get_client(w2).unwrap().floating, "Normal click must not float window");
+    assert!(!wm.mouse_action.is_active(), "Normal click must not trigger drag action");
+
+    // 3. Simulate Mod + Left Click on tiled window w2 to drag and float it
+    let drag_w2 = ButtonPressEvent {
+        response_type: 4,
+        detail: 1, // Left click
+        sequence: 2,
+        time: 15,
+        root: wm.context.root_window,
+        event: w2,
+        child: 0,
+        root_x: 450,
+        root_y: 100,
+        event_x: 50,
+        event_y: 50,
+        state: KeyButMask::from(MOD_SUPER),
+        same_screen: true,
+    };
+
+    wm.handle_button_press(&drag_w2).unwrap();
+    assert!(wm.mouse_action.is_active());
+    assert!(wm.client_state.get_client(w2).unwrap().floating, "Mod-dragged window must become floating");
+
+    // Motion
+    let motion = MotionNotifyEvent {
+        response_type: 6,
+        detail: Motion::NORMAL,
+        sequence: 3,
+        time: 25,
+        root: wm.context.root_window,
+        event: wm.context.root_window,
+        child: w2,
+        root_x: 500,
+        root_y: 150,
+        event_x: 500,
+        event_y: 150,
+        state: KeyButMask::from(MOD_SUPER),
+        same_screen: true,
+    };
+    wm.handle_motion_notify(&motion).unwrap();
+
+    // Release
+    let release = ButtonReleaseEvent {
+        response_type: 5,
+        detail: 1,
+        sequence: 4,
+        time: 35,
+        root: wm.context.root_window,
+        event: wm.context.root_window,
+        child: 0,
+        root_x: 500,
+        root_y: 150,
+        event_x: 500,
+        event_y: 150,
+        state: KeyButMask::from(MOD_SUPER),
+        same_screen: true,
+    };
+    wm.handle_button_release(&release).unwrap();
+    assert!(!wm.mouse_action.is_active());
+    assert!(wm.client_state.get_client(w2).unwrap().floating);
+}
+
