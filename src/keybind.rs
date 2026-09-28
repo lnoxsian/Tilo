@@ -154,6 +154,8 @@ pub fn parse_keysym(name: &str) -> Option<Keysym> {
         "Up" => Some(XK_UP),
         "Right" => Some(XK_RIGHT),
         "Down" => Some(XK_DOWN),
+        "comma" | "," => Some(XK_COMMA),
+        "period" | "." => Some(XK_PERIOD),
         "Num_Lock" | "NumLock" => Some(XK_NUM_LOCK),
         s if s.len() == 1 => {
             let c = s.chars().next().unwrap();

@@ -6,6 +6,7 @@
 
 use crate::atoms::Atoms;
 use crate::client::{Client, ClientState};
+use crate::config::{load_config, load_config_or_default, Config};
 use crate::ewmh::{
     init_ewmh, update_net_active_window, update_net_client_list, update_net_current_desktop,
     update_net_wm_state_above, update_net_wm_state_fullscreen, EwmhAtoms, NetWmStateAction,
@@ -22,7 +23,7 @@ use crate::icccm::{
     set_wm_state as icccm_set_wm_state, IcccmAtoms, WmState,
 };
 use crate::input::InputManager;
-use crate::keybind::{default_keybindings, Action};
+use crate::keybind::Action;
 use crate::layout::{apply_layout_with_border, calculate_master_stack, LayoutConfig, Rect};
 use crate::rules::{apply_rules as apply_window_rules, RuleAction, WindowRule};
 use crate::workspace::{WorkspaceId, WorkspaceManager};
@@ -90,11 +91,19 @@ pub struct WindowManager {
     pub supporting_window: Window,
     /// Multi-monitor manager tracking geometry and active workspaces per monitor.
     pub monitor_manager: MonitorManager,
+    /// Parsed user configuration.
+    pub config: Config,
 }
 
 impl WindowManager {
-    /// Creates a new `WindowManager` wrapping the provided `X11Context`.
+    /// Creates a new `WindowManager` wrapping the provided `X11Context` with default or loaded config.
     pub fn new(context: X11Context) -> Result<Self, X11Error> {
+        let config = load_config_or_default();
+        Self::new_with_config(context, config)
+    }
+
+    /// Creates a new `WindowManager` wrapping the provided `X11Context` and custom [`Config`].
+    pub fn new_with_config(context: X11Context, config: Config) -> Result<Self, X11Error> {
         let atoms = Atoms::intern(&context.connection)?;
         let ewmh_atoms = EwmhAtoms::intern(&context.connection)?;
         let supporting_window = init_ewmh(
@@ -106,10 +115,17 @@ impl WindowManager {
             9,
             1,
         )?;
-        let border_config = BorderConfig::default();
+
+        let mut border_config = BorderConfig::default();
+        border_config.width = config.border_width;
+
         let mut layout_config = LayoutConfig::default();
-        layout_config.border_width = border_config.width;
-        let mut input_manager = InputManager::new(default_keybindings());
+        layout_config.border_width = config.border_width;
+        layout_config.inner_gap = config.inner_gap;
+        layout_config.outer_gap = config.outer_gap;
+        layout_config.master_ratio = config.master_ratio;
+
+        let mut input_manager = InputManager::new(config.bindings.clone());
         let _ = input_manager.setup(&context.connection, context.root_window);
         let workspace_manager = WorkspaceManager::new();
 
@@ -143,7 +159,26 @@ impl WindowManager {
             ewmh_atoms,
             supporting_window,
             monitor_manager,
+            config,
         })
+    }
+
+    /// Applies a new [`Config`] to the running window manager, updating borders,
+    /// layouts, gaps, and registering the new keybindings.
+    pub fn apply_config(&mut self, config: Config) -> Result<(), X11Error> {
+        self.border_config.width = config.border_width;
+        self.layout_config.border_width = config.border_width;
+        self.layout_config.inner_gap = config.inner_gap;
+        self.layout_config.outer_gap = config.outer_gap;
+        self.layout_config.master_ratio = config.master_ratio;
+
+        self.input_manager = InputManager::new(config.bindings.clone());
+        let _ = self.input_manager.setup(&self.context.connection, self.context.root_window);
+
+        self.config = config;
+        self.retile()?;
+        self.context.flush()?;
+        Ok(())
     }
 
     /// Updates the root window's `_NET_ACTIVE_WINDOW` property.
@@ -1440,8 +1475,12 @@ impl WindowManager {
                 let _ = self.move_to_monitor(mon_id)?;
             }
             Action::Reload => {
-                let _ = self.input_manager.setup(&self.context.connection, self.context.root_window);
-                let _ = self.retile();
+                if let Ok(new_cfg) = load_config() {
+                    let _ = self.apply_config(new_cfg);
+                } else {
+                    let _ = self.input_manager.setup(&self.context.connection, self.context.root_window);
+                    let _ = self.retile();
+                }
             }
             Action::Exit => {
                 self.stop();
