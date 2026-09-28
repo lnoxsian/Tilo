@@ -38,6 +38,10 @@ pub enum StatusbarError {
     /// Parsing failure for system metrics.
     #[error("Parse error: {0}")]
     Parse(String),
+
+    /// Failed to load font.
+    #[error("Failed to load font: {0}")]
+    FontLoadError(String),
 }
 
 impl From<x11rb::errors::ConnectionError> for StatusbarError {
@@ -68,14 +72,23 @@ pub struct ColorScheme {
     pub bg: u32,
     /// Default text foreground color (0xRRGGBB).
     pub fg: u32,
-    /// Focused workspace / highlighted background.
-    pub focused_bg: u32,
-    /// Focused workspace / highlighted text foreground.
-    pub focused_fg: u32,
+    /// Background color for the currently active workspace.
+    pub active_bg: u32,
+    /// Foreground text color for the currently active workspace.
+    pub active_fg: u32,
     /// Urgent workspace background.
     pub urgent_bg: u32,
     /// Urgent workspace foreground.
     pub urgent_fg: u32,
+}
+
+impl ColorScheme {
+    pub fn focused_bg(&self) -> u32 {
+        self.active_bg
+    }
+    pub fn focused_fg(&self) -> u32 {
+        self.active_fg
+    }
 }
 
 impl Default for ColorScheme {
@@ -83,8 +96,8 @@ impl Default for ColorScheme {
         Self {
             bg: 0x1a1b26,
             fg: 0xc0caf5,
-            focused_bg: 0x7aa2f7,
-            focused_fg: 0x15161e,
+            active_bg: 0x7aa2f7,
+            active_fg: 0x15161e,
             urgent_bg: 0xf7768e,
             urgent_fg: 0x15161e,
         }
@@ -133,6 +146,8 @@ pub struct Statusbar {
     pub modules: Vec<Box<dyn StatusModule>>,
     /// Active foreground and background colors.
     pub color_scheme: ColorScheme,
+    /// Optional graphical text and shape renderer.
+    pub renderer: Option<crate::render::Renderer>,
 }
 
 impl Statusbar {
@@ -148,6 +163,7 @@ impl Statusbar {
             rect,
             modules,
             color_scheme,
+            renderer: None,
         }
     }
 
@@ -217,6 +233,35 @@ impl Statusbar {
                 title_mod.set_title(title);
             }
         }
+    }
+
+    /// Attaches an initialized [`crate::render::Renderer`] to this statusbar.
+    pub fn attach_renderer(&mut self, renderer: crate::render::Renderer) {
+        self.renderer = Some(renderer);
+    }
+
+    /// Renders the complete statusbar UI using the attached [`crate::render::Renderer`].
+    pub fn render(
+        &self,
+        conn: &impl Connection,
+        current_ws: u32,
+        occupied_ws: &[u32],
+        layout_symbol: &str,
+        active_title: &str,
+    ) -> Result<(), StatusbarError> {
+        if let Some(ref r) = self.renderer {
+            r.render_statusbar(
+                conn,
+                self.window_id,
+                current_ws,
+                occupied_ws,
+                layout_symbol,
+                active_title,
+                &self.modules,
+                &self.color_scheme,
+            )?;
+        }
+        Ok(())
     }
 
     /// Unmaps and destroys the statusbar window on the X server.

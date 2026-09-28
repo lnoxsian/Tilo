@@ -12,6 +12,7 @@ pub mod input;
 pub mod keybind;
 pub mod layout;
 pub mod monitor;
+pub mod render;
 pub mod rules;
 pub mod statusbar;
 pub mod wm;

@@ -1,5 +1,6 @@
 use std::process::{Child, Command};
 use tilo::layout::Rect;
+use tilo::render::Renderer;
 use tilo::statusbar::{
     create_statusbar_window, ClockModule, CpuModule, LayoutModule, ModuleUpdate, RamModule,
     StatusModule, TitleModule, WorkspaceModule,
@@ -10,6 +11,7 @@ use x11rb::connection::Connection;
 use x11rb::protocol::xproto::{
     AtomEnum, ConnectionExt, CreateWindowAux, EventMask, Window, WindowClass,
 };
+use x11rb::wrapper::ConnectionExt as _;
 
 struct XephyrServer {
     child: Child,
@@ -242,3 +244,92 @@ fn test_wm_statusbar_integration_and_space_reservation_in_xephyr() {
         assert!(geom_after.y < geom.y);
     }
 }
+
+#[test]
+fn test_statusbar_renderer_in_xephyr() {
+    if !Command::new("which")
+        .arg("Xephyr")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+    {
+        return;
+    }
+
+    let xephyr = XephyrServer::start(101);
+    if let Some(server) = xephyr {
+        let wm_ctx = X11Context::connect_to(Some(&server.display))
+            .expect("WM context connect failed");
+        assert!(wm_ctx.become_wm().is_ok());
+
+        let mut wm = WindowManager::new(wm_ctx).expect("Failed to create WM");
+
+        // 1. Test standalone Renderer font fallback and drawing
+        let font_fallback = Renderer::load_font(&wm.context.connection, "non_existent_fancy_font_xyz")
+            .expect("Font fallback should successfully load fixed or core font");
+        assert!(font_fallback > 0);
+
+        // 2. Enable statusbar with height 26
+        let bar_win = wm.enable_statusbar(26).expect("Failed to enable statusbar");
+        let bar = wm.statusbar.as_ref().expect("Statusbar must be present");
+        let renderer = bar.renderer.as_ref().expect("Renderer must be attached");
+
+        assert_eq!(renderer.width, 1000);
+        assert_eq!(renderer.height, 26);
+        assert!(renderer.pixmap > 0);
+        assert!(renderer.gc > 0);
+        assert!(renderer.char_width > 0);
+        assert!(renderer.font_ascent > 0);
+
+        // 3. Test direct rendering functions on pixmap
+        renderer
+            .fill_rect(&wm.context.connection, renderer.pixmap, 0, 0, 100, 26, 0x1a1b26)
+            .expect("fill_rect on pixmap should succeed");
+
+        renderer
+            .draw_text(&wm.context.connection, renderer.pixmap, 10, 16, "Statusbar Test", 0xc0caf5)
+            .expect("draw_text on pixmap should succeed");
+
+        // 4. Test blitting to statusbar window (double buffering)
+        renderer
+            .flush_to_window(&wm.context.connection, bar_win)
+            .expect("flush_to_window should succeed");
+
+        // 5. Test statusbar rendering through WindowManager
+        wm.render_statusbar().expect("render_statusbar should succeed");
+
+        // 6. Test active window title and workspace switching re-renders
+        let client_conn = X11Context::connect_to(Some(&server.display)).unwrap();
+        let win = create_client_window(&client_conn.connection, wm.context.root_window, 20, 40, 200, 200);
+
+        // Set window name
+        let net_wm_name = client_conn.connection.intern_atom(false, b"_NET_WM_NAME").unwrap().reply().unwrap().atom;
+        let utf8_string = client_conn.connection.intern_atom(false, b"UTF8_STRING").unwrap().reply().unwrap().atom;
+        client_conn.connection.change_property8(
+            x11rb::protocol::xproto::PropMode::REPLACE,
+            win,
+            net_wm_name,
+            utf8_string,
+            b"Terminal 1",
+        ).unwrap();
+        client_conn.flush().unwrap();
+
+        wm.process_pending_events().unwrap();
+        assert_eq!(wm.client_state.all_clients().len(), 1);
+
+        // Active title should be updated in statusbar
+        let bar = wm.statusbar.as_ref().unwrap();
+        assert!(bar.full_text().contains("Terminal 1"));
+
+        // Switch to workspace 2: workspace 1 is occupied (*), workspace 2 is active
+        wm.switch_workspace(2).expect("Failed to switch workspace");
+        assert_eq!(wm.current_workspace, 2);
+
+        // Module update re-render
+        let _ = wm.update_statusbar();
+
+        // Disable statusbar
+        wm.disable_statusbar().expect("disable_statusbar should succeed");
+    }
+}
+

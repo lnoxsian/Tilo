@@ -252,7 +252,10 @@ impl WindowManager {
     /// Enables the built-in statusbar at the top of the primary screen.
     ///
     /// Creates an `override_redirect` window, reserves screen space via struts,
-    /// and recalculates tiling layouts.
+    /// Enables the built-in statusbar at the top of the primary screen.
+    ///
+    /// Creates an `override_redirect` window, reserves screen space via struts,
+    /// initializes the double-buffered renderer, and recalculates tiling layouts.
     pub fn enable_statusbar(&mut self, height: u32) -> Result<u32, StatusbarError> {
         let rect = Rect::new(0, 0, self.context.screen_width as u32, height);
         let screen = &self.context.connection.setup().roots[self.context.screen_num];
@@ -260,7 +263,26 @@ impl WindowManager {
         let mut bar = Statusbar::default_with_window(win_id, rect);
         let occupied = self.workspace_manager.occupied_workspaces();
         bar.set_workspace(self.current_workspace, &occupied);
+
+        // Initialize and attach double-buffered renderer
+        let font_name = if !self.config.font.is_empty() {
+            self.config.font.as_str()
+        } else {
+            "fixed"
+        };
+        if let Ok(renderer) = crate::render::Renderer::new(
+            &self.context.connection,
+            win_id,
+            rect.width as u16,
+            rect.height as u16,
+            screen.root_depth,
+            font_name,
+        ) {
+            bar.attach_renderer(renderer);
+        }
+
         self.statusbar = Some(bar);
+        let _ = self.render_statusbar();
         let _ = self.retile();
         Ok(win_id)
     }
@@ -274,13 +296,39 @@ impl WindowManager {
         Ok(())
     }
 
-    /// Updates all statusbar modules and returns `true` if re-rendering is needed.
+    /// Updates all statusbar modules and re-renders if metrics or text changed.
     pub fn update_statusbar(&mut self) -> bool {
-        if let Some(ref mut bar) = self.statusbar {
+        let changed = if let Some(ref mut bar) = self.statusbar {
             bar.update_all()
         } else {
             false
+        };
+        if changed {
+            let _ = self.render_statusbar();
         }
+        changed
+    }
+
+    /// Redraws the statusbar UI using the attached renderer.
+    pub fn render_statusbar(&mut self) -> Result<(), StatusbarError> {
+        if let Some(ref bar) = self.statusbar {
+            let current_ws = self.current_workspace;
+            let occupied = self.workspace_manager.occupied_workspaces();
+            let layout_symbol = match self.client_state.focused_window() {
+                Some(w) if self.client_state.get_client(w).map(|c| c.floating).unwrap_or(false) => "><>",
+                _ => "[]=",
+            };
+            let focused = self.client_state.focused_window();
+            let title = focused.map(|w| self.get_window_title(w)).unwrap_or_default();
+            bar.render(
+                &self.context.connection,
+                current_ws,
+                &occupied,
+                layout_symbol,
+                &title,
+            )?;
+        }
+        Ok(())
     }
 
     /// Updates the root window's `_NET_ACTIVE_WINDOW` property.
@@ -394,6 +442,13 @@ impl WindowManager {
             }
             Event::RandrScreenChangeNotify(_) | Event::RandrNotify(_) => {
                 let _ = self.refresh_monitors();
+            }
+            Event::Expose(ev) => {
+                if let Some(ref bar) = self.statusbar {
+                    if ev.window == bar.window_id {
+                        let _ = self.render_statusbar();
+                    }
+                }
             }
             _ => {}
         }
@@ -568,6 +623,10 @@ impl WindowManager {
                     x11rb::CURRENT_TIME,
                 );
                 let _ = self.update_ewmh_active_window();
+                if let Some(ref mut bar) = self.statusbar {
+                    bar.set_title("");
+                }
+                let _ = self.render_statusbar();
             }
         }
         removed
@@ -681,6 +740,7 @@ impl WindowManager {
         if let Some(ref mut bar) = self.statusbar {
             bar.set_title(&title);
         }
+        let _ = self.render_statusbar();
 
         self.context.flush()?;
         Ok(())
@@ -829,6 +889,7 @@ impl WindowManager {
             let occupied = self.workspace_manager.occupied_workspaces();
             bar.set_workspace(target_id, &occupied);
         }
+        let _ = self.render_statusbar();
 
         self.retile()?;
 
@@ -1556,6 +1617,14 @@ impl WindowManager {
             }
         } else if event.atom == AtomEnum::WM_NORMAL_HINTS.into() {
             let _ = get_wm_normal_hints(&self.context.connection, event.window);
+        } else if (event.atom == AtomEnum::WM_NAME.into() || event.atom == self.atoms.net_wm_name)
+            && Some(event.window) == self.client_state.focused_window()
+        {
+            let title = self.get_window_title(event.window);
+            if let Some(ref mut bar) = self.statusbar {
+                bar.set_title(&title);
+            }
+            let _ = self.render_statusbar();
         }
 
         Ok(())
