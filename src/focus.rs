@@ -12,8 +12,8 @@ use std::collections::HashMap;
 use crate::layout::Rect;
 use crate::x11::X11Error;
 use x11rb::protocol::xproto::{
-    Atom, ChangeWindowAttributesAux, ClientMessageData, ClientMessageEvent, ConfigureWindowAux,
-    ConnectionExt, EventMask, InputFocus, Timestamp, Window,
+    Atom, ClientMessageData, ClientMessageEvent, ConnectionExt, EventMask, InputFocus,
+    Timestamp, Window,
 };
 
 /// Direction for spatial focus and movement.
@@ -47,29 +47,10 @@ impl Direction {
     }
 }
 
-/// Configuration for window borders and focus colors.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct BorderConfig {
-    /// Border width in pixels.
-    pub width: u32,
-    /// Pixel color for the currently focused window (default `#ffffff`).
-    pub focused_color: u32,
-    /// Pixel color for inactive/unfocused windows (default `#444444`).
-    pub normal_color: u32,
-    /// Pixel color for urgent windows (default `#ff0000`).
-    pub urgent_color: u32,
-}
-
-impl Default for BorderConfig {
-    fn default() -> Self {
-        Self {
-            width: 2,
-            focused_color: 0x00ffffff,
-            normal_color: 0x00444444,
-            urgent_color: 0x00ff0000,
-        }
-    }
-}
+pub use crate::decoration::{
+    parse_color, set_window_border_color, set_window_border_width, update_window_border,
+    BorderConfig,
+};
 
 /// Represents the focus state of a given workspace.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -347,27 +328,6 @@ pub fn focus_direction_wrap(
     find_neighbor(direction, current, clients, true)
 }
 
-/// Updates a window's border pixel color in X11.
-pub fn set_window_border_color<C: ConnectionExt>(
-    conn: &C,
-    window: Window,
-    color: u32,
-) -> Result<(), X11Error> {
-    let aux = ChangeWindowAttributesAux::new().border_pixel(color);
-    conn.change_window_attributes(window, &aux)?;
-    Ok(())
-}
-
-/// Updates a window's border width in X11.
-pub fn set_window_border_width<C: ConnectionExt>(
-    conn: &C,
-    window: Window,
-    width: u32,
-) -> Result<(), X11Error> {
-    let aux = ConfigureWindowAux::new().border_width(width);
-    conn.configure_window(window, &aux)?;
-    Ok(())
-}
 
 /// Sets input focus to the specified window with `POINTER_ROOT` revert mode.
 pub fn set_input_focus<C: ConnectionExt>(

@@ -3,7 +3,7 @@
 //! Implements Phase 18 of Plan.md:
 //! - Lightweight text and shape rendering without external GUI frameworks.
 //! - X11 core font loading and baseline metrics calculation ([`Renderer::load_font`]).
-//! - Double-buffered rendering via off-screen [`Pixmap`] to eliminate visual flickering.
+//! - Double-buffered rendering via off-screen `Pixmap` to eliminate visual flickering.
 //! - Workspace highlighting (active workspace pill background and text).
 //! - Active window title indication.
 //! - Status metrics rendering (RAM, CPU, Clock, Layout).

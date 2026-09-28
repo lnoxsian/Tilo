@@ -69,6 +69,12 @@ pub struct Config {
     pub font: String,
     /// Width of window borders in pixels.
     pub border_width: u32,
+    /// Pixel color for focused window borders (default `#ffffff`).
+    pub focused_color: u32,
+    /// Pixel color for inactive/unfocused window borders (default `#444444`).
+    pub normal_color: u32,
+    /// Pixel color for urgent window borders (default `#ff0000`).
+    pub urgent_color: u32,
     /// Gap between windows in pixels.
     pub inner_gap: u32,
     /// Gap between windows and screen edges in pixels.
@@ -89,6 +95,9 @@ impl Default for Config {
             mod_key: "Mod4".to_string(),
             font: "monospace".to_string(),
             border_width: 2,
+            focused_color: 0x00ffffff,
+            normal_color: 0x00444444,
+            urgent_color: 0x00ff0000,
             inner_gap: 8,
             outer_gap: 8,
             master_ratio: 0.60,
@@ -113,12 +122,40 @@ pub fn tokenize(content: &str) -> Result<Vec<Token>, ConfigError> {
     let chars: Vec<char> = content.chars().collect();
     let mut i = 0;
     let len = chars.len();
+    let mut line_has_tokens = false;
 
     while i < len {
         let c = chars[i];
 
-        // 1. Comments: ignore until newline
+        // 1. Comments: ignore until newline (unless it is a hex color token like #ffffff)
         if c == '#' {
+            if line_has_tokens {
+                let mut hex_len = 0;
+                while i + 1 + hex_len < len && chars[i + 1 + hex_len].is_ascii_hexdigit() {
+                    hex_len += 1;
+                }
+                let next_char = if i + 1 + hex_len < len {
+                    Some(chars[i + 1 + hex_len])
+                } else {
+                    None
+                };
+                let is_end_of_token = next_char.map_or(true, |ch| {
+                    ch.is_whitespace() || ch == '\n' || ch == '\r' || ch == '#'
+                });
+
+                if (hex_len == 3 || hex_len == 6 || hex_len == 8) && is_end_of_token {
+                    let mut color_token = String::with_capacity(1 + hex_len);
+                    color_token.push('#');
+                    for _ in 0..hex_len {
+                        i += 1;
+                        color_token.push(chars[i]);
+                    }
+                    i += 1;
+                    tokens.push(Token::Word(color_token));
+                    continue;
+                }
+            }
+
             while i < len && chars[i] != '\n' {
                 i += 1;
             }
@@ -128,6 +165,7 @@ pub fn tokenize(content: &str) -> Result<Vec<Token>, ConfigError> {
         // 2. Newlines
         if c == '\n' {
             tokens.push(Token::Newline);
+            line_has_tokens = false;
             i += 1;
             continue;
         }
@@ -150,6 +188,7 @@ pub fn tokenize(content: &str) -> Result<Vec<Token>, ConfigError> {
                 i += 1;
             }
             tokens.push(Token::Word(word));
+            line_has_tokens = true;
             continue;
         }
 
@@ -164,6 +203,7 @@ pub fn tokenize(content: &str) -> Result<Vec<Token>, ConfigError> {
             continue;
         }
 
+        line_has_tokens = true;
         // Attempt integer parse
         if let Ok(num) = buffer.parse::<u32>() {
             tokens.push(Token::Number(num));
@@ -273,6 +313,36 @@ fn parse_line(
             }
             let width = token_to_u32(line[1], line_number, "border_width")?;
             config.border_width = width;
+        }
+        "focused_color" => {
+            if line.len() < 2 {
+                return Err(ConfigError::ParseError {
+                    line: line_number,
+                    message: "Directive 'focused_color' requires a color argument (e.g. #ffffff)".to_string(),
+                });
+            }
+            let color = token_to_color(line[1], line_number, "focused_color")?;
+            config.focused_color = color;
+        }
+        "normal_color" => {
+            if line.len() < 2 {
+                return Err(ConfigError::ParseError {
+                    line: line_number,
+                    message: "Directive 'normal_color' requires a color argument (e.g. #444444)".to_string(),
+                });
+            }
+            let color = token_to_color(line[1], line_number, "normal_color")?;
+            config.normal_color = color;
+        }
+        "urgent_color" => {
+            if line.len() < 2 {
+                return Err(ConfigError::ParseError {
+                    line: line_number,
+                    message: "Directive 'urgent_color' requires a color argument (e.g. #ff0000)".to_string(),
+                });
+            }
+            let color = token_to_color(line[1], line_number, "urgent_color")?;
+            config.urgent_color = color;
         }
         "inner_gap" => {
             if line.len() < 2 {
@@ -404,6 +474,20 @@ fn token_to_u32(token: &Token, line: usize, directive: &str) -> Result<u32, Conf
         _ => Err(ConfigError::ParseError {
             line,
             message: format!("Directive '{}' expects an integer value", directive),
+        }),
+    }
+}
+
+fn token_to_color(token: &Token, line: usize, directive: &str) -> Result<u32, ConfigError> {
+    match token {
+        Token::Number(n) => Ok(*n),
+        Token::Word(s) => crate::decoration::parse_color(s).ok_or_else(|| ConfigError::InvalidValue {
+            line,
+            value: s.clone(),
+        }),
+        _ => Err(ConfigError::ParseError {
+            line,
+            message: format!("Directive '{}' expects a color value (e.g. #ffffff)", directive),
         }),
     }
 }
@@ -715,5 +799,22 @@ autostart picom -b
 
         assert_eq!(config.autostart[3].program, "picom");
         assert_eq!(config.autostart[3].args, vec!["-b"]);
+    }
+
+    #[test]
+    fn test_parse_border_decorations() {
+        let input = r#"
+border_width 3
+focused_color #ffffff
+normal_color #444444
+urgent_color #ff0000
+"#;
+        let tokens = tokenize(input).unwrap();
+        let config = parse(&tokens).unwrap();
+
+        assert_eq!(config.border_width, 3);
+        assert_eq!(config.focused_color, 0x00ffffff);
+        assert_eq!(config.normal_color, 0x00444444);
+        assert_eq!(config.urgent_color, 0x00ff0000);
     }
 }

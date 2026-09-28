@@ -153,6 +153,9 @@ impl WindowManager {
 
         let mut border_config = BorderConfig::default();
         border_config.width = config.border_width;
+        border_config.focused_color = config.focused_color;
+        border_config.normal_color = config.normal_color;
+        border_config.urgent_color = config.urgent_color;
 
         let mut layout_config = LayoutConfig::default();
         layout_config.border_width = config.border_width;
@@ -210,6 +213,9 @@ impl WindowManager {
     /// layouts, gaps, and registering the new keybindings.
     pub fn apply_config(&mut self, config: Config) -> Result<(), X11Error> {
         self.border_config.width = config.border_width;
+        self.border_config.focused_color = config.focused_color;
+        self.border_config.normal_color = config.normal_color;
+        self.border_config.urgent_color = config.urgent_color;
         self.layout_config.border_width = config.border_width;
         self.layout_config.inner_gap = config.inner_gap;
         self.layout_config.outer_gap = config.outer_gap;
@@ -692,6 +698,7 @@ impl WindowManager {
                 .y(geom.y)
                 .width(geom.width)
                 .height(geom.height)
+                .border_width(self.border_config.width)
                 .stack_mode(StackMode::ABOVE);
             let _ = self.context.connection.configure_window(win, &aux);
             let _ = self.context.connection.map_window(win);
