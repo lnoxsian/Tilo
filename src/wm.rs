@@ -229,7 +229,7 @@ impl WindowManager {
 
         let mod_mask = parse_modifier(&config.mod_key).unwrap_or(MOD_SUPER);
         self.mouse_bindings = crate::mouse::default_mouse_bindings(mod_mask);
-        let focused = self.client_state.focused_window();
+        let focused = self.focused_window();
         for &win in &self.client_state.all_clients() {
             let _ = crate::mouse::update_client_button_grabs(
                 &self.context.connection,
@@ -243,7 +243,7 @@ impl WindowManager {
         self.config = config;
 
         // Apply updated border width and colors to all existing client windows
-        let focused = self.client_state.focused_window();
+        let focused = self.focused_window();
         for &win in &self.client_state.all_clients() {
             let is_fullscreen = self
                 .client_state
@@ -392,15 +392,16 @@ impl WindowManager {
 
     /// Redraws the statusbar UI using the attached renderer.
     pub fn render_statusbar(&mut self) -> Result<(), StatusbarError> {
-        if let Some(ref bar) = self.statusbar {
-            let current_ws = self.current_workspace;
-            let occupied = self.workspace_manager.occupied_workspaces();
-            let layout_symbol = match self.client_state.focused_window() {
-                Some(w) if self.client_state.get_client(w).map(|c| c.floating).unwrap_or(false) => "><>",
-                _ => "[]=",
-            };
-            let focused = self.client_state.focused_window();
-            let title = focused.map(|w| self.get_window_title(w)).unwrap_or_default();
+        let current_ws = self.current_workspace;
+        let occupied = self.workspace_manager.occupied_workspaces();
+        let focused = self.focused_window();
+        let layout_symbol = match focused {
+            Some(w) if self.client_state.get_client(w).map(|c| c.floating).unwrap_or(false) => "><>",
+            _ => "[]=",
+        };
+        let title = focused.map(|w| self.get_window_title(w)).unwrap_or_default();
+        if let Some(ref mut bar) = self.statusbar {
+            bar.set_title(&title);
             bar.render(
                 &self.context.connection,
                 current_ws,
@@ -524,16 +525,11 @@ impl WindowManager {
                 let _ = self.context.connection.unmap_window(launcher.window_id);
                 self.context.flush()?;
 
-                // Restore focus to active client window or root
-                if let Some(focused) = self.client_state.focused_window() {
+                // Restore focus to active client window or clear focus
+                if let Some(focused) = self.focused_window() {
                     let _ = self.focus_client(focused);
                 } else {
-                    let _ = self.context.connection.set_input_focus(
-                        InputFocus::POINTER_ROOT,
-                        self.context.root_window,
-                        x11rb::CURRENT_TIME,
-                    );
-                    let _ = self.context.flush();
+                    let _ = self.clear_focus();
                 }
             }
         }
@@ -691,7 +687,7 @@ impl WindowManager {
             let _ = self.set_wm_state(win, WmState::Iconic);
 
             // Restore focus if scratchpad had focus
-            if self.client_state.focused_window() == Some(win) {
+            if self.focused_window() == Some(win) {
                 let focus_candidate = self
                     .workspace_manager
                     .get(self.current_workspace)
@@ -700,12 +696,7 @@ impl WindowManager {
                 if let Some(next_focus) = focus_candidate {
                     let _ = self.focus_client(next_focus);
                 } else {
-                    let _ = self.context.connection.set_input_focus(
-                        x11rb::protocol::xproto::InputFocus::POINTER_ROOT,
-                        self.context.root_window,
-                        x11rb::CURRENT_TIME,
-                    );
-                    let _ = self.update_ewmh_active_window();
+                    let _ = self.clear_focus();
                 }
             }
         } else {
@@ -758,7 +749,7 @@ impl WindowManager {
 
     /// Updates the root window's `_NET_ACTIVE_WINDOW` property.
     pub fn update_ewmh_active_window(&self) -> Result<(), X11Error> {
-        let focused = self.client_state.focused_window();
+        let focused = self.focused_window();
         update_net_active_window(
             &self.context.connection,
             self.context.root_window,
@@ -1065,7 +1056,7 @@ impl WindowManager {
             let _ = self.set_wm_state(window, WmState::Withdrawn);
         }
 
-        let is_focused = self.client_state.focused_window() == Some(window);
+        let is_focused = self.focused_window() == Some(window);
         let _ = crate::mouse::update_client_button_grabs(
             &self.context.connection,
             window,
@@ -1100,19 +1091,13 @@ impl WindowManager {
         if removed.is_some() {
             let _ = self.retile();
             // Restore focus to previous client on workspace, or global stack, or root
-            if let Some(next_window) = next_ws_win.or_else(|| self.client_state.focused_window()) {
+            let next_candidate = next_ws_win
+                .or_else(|| self.workspace_manager.get(ws).and_then(|w| w.clients.first().copied()))
+                .filter(|&w| self.client_state.contains(w));
+            if let Some(next_window) = next_candidate {
                 let _ = self.focus_client(next_window);
             } else {
-                let _ = self.context.connection.set_input_focus(
-                    InputFocus::POINTER_ROOT,
-                    self.context.root_window,
-                    x11rb::CURRENT_TIME,
-                );
-                let _ = self.update_ewmh_active_window();
-                if let Some(ref mut bar) = self.statusbar {
-                    bar.set_title("");
-                }
-                let _ = self.render_statusbar();
+                let _ = self.clear_focus();
             }
         }
         removed
@@ -1265,6 +1250,61 @@ impl WindowManager {
         Ok(())
     }
 
+    /// Returns the currently focused window on the active workspace, if any.
+    pub fn focused_window(&self) -> Option<Window> {
+        self.client_state
+            .clients
+            .iter()
+            .find(|(_, c)| c.focused && c.workspace == self.current_workspace && c.mapped)
+            .map(|(&w, _)| w)
+    }
+
+    /// Clears input focus from all clients on the active screen, reverting to root window
+    /// and clearing the statusbar title.
+    pub fn clear_focus(&mut self) -> Result<(), X11Error> {
+        // Reset all clients' focused flag and borders to normal
+        for (&w, client) in self.client_state.clients.iter_mut() {
+            if client.focused {
+                client.focused = false;
+                client.border_color = Some(self.border_config.normal_color);
+                let _ = set_window_border_color(
+                    &self.context.connection,
+                    w,
+                    self.border_config.normal_color,
+                );
+                let _ = crate::mouse::update_client_button_grabs(
+                    &self.context.connection,
+                    w,
+                    &self.mouse_bindings,
+                    self.input_manager.num_lock_mask,
+                    false,
+                );
+            }
+        }
+
+        self.client_state.unfocus_all();
+        self.workspace_focus.unfocus(self.current_workspace);
+
+        // Revert X11 input focus to root
+        let _ = self.context.connection.set_input_focus(
+            InputFocus::POINTER_ROOT,
+            self.context.root_window,
+            x11rb::CURRENT_TIME,
+        );
+
+        // Update EWMH _NET_ACTIVE_WINDOW
+        let _ = self.update_ewmh_active_window();
+
+        // Clear statusbar window title
+        if let Some(ref mut bar) = self.statusbar {
+            bar.set_title("");
+        }
+        let _ = self.render_statusbar();
+
+        self.context.flush()?;
+        Ok(())
+    }
+
     /// Queries the window title from X11 (`_NET_WM_NAME` or `WM_NAME`).
     pub fn get_window_title(&self, window: Window) -> String {
         if let Ok((_, _, Some(title))) = crate::rules::query_window_properties(
@@ -1289,7 +1329,7 @@ impl WindowManager {
         direction: Direction,
         wrap: bool,
     ) -> Result<Option<Window>, X11Error> {
-        let current = self.client_state.focused_window();
+        let current = self.focused_window();
         let current_ws = self.current_workspace;
         let visible_tiled = self.client_state.visible_tiled_clients_on_workspace(current_ws);
         if visible_tiled.is_empty() {
@@ -1366,17 +1406,10 @@ impl WindowManager {
                     .or_else(|| self.workspace_manager.get(target_id).and_then(|ws| ws.focused_client))
                     .or_else(|| self.workspace_manager.get(target_id).and_then(|ws| ws.clients.first().copied()));
 
-                if let Some(focus_win) = target_focus {
-                    if self.client_state.contains(focus_win) {
-                        self.focus_client(focus_win)?;
-                    }
+                if let Some(focus_win) = target_focus.filter(|w| self.client_state.contains(*w)) {
+                    self.focus_client(focus_win)?;
                 } else {
-                    let _ = self.context.connection.set_input_focus(
-                        InputFocus::POINTER_ROOT,
-                        self.context.root_window,
-                        x11rb::CURRENT_TIME,
-                    );
-                    let _ = self.update_ewmh_active_window();
+                    self.clear_focus()?;
                 }
                 self.context.flush()?;
                 return Ok(());
@@ -1440,7 +1473,6 @@ impl WindowManager {
             let occupied = self.workspace_manager.occupied_workspaces();
             bar.set_workspace(target_id, &occupied);
         }
-        let _ = self.render_statusbar();
 
         self.retile()?;
 
@@ -1450,17 +1482,10 @@ impl WindowManager {
             .or_else(|| self.workspace_manager.get(target_id).and_then(|ws| ws.focused_client))
             .or_else(|| target_windows.first().copied());
 
-        if let Some(focus_win) = target_focus {
-            if self.client_state.contains(focus_win) {
-                self.focus_client(focus_win)?;
-            }
+        if let Some(focus_win) = target_focus.filter(|w| self.client_state.contains(*w)) {
+            self.focus_client(focus_win)?;
         } else {
-            let _ = self.context.connection.set_input_focus(
-                InputFocus::POINTER_ROOT,
-                self.context.root_window,
-                x11rb::CURRENT_TIME,
-            );
-            let _ = self.update_ewmh_active_window();
+            self.clear_focus()?;
         }
 
         self.context.flush()?;
@@ -1510,28 +1535,14 @@ impl WindowManager {
         }
 
         // Restore focus on current workspace
-        let next_focus = self.workspace_focus.remove_window(current_id, window);
+        let next_focus = self.workspace_focus.remove_window(current_id, window)
+            .or_else(|| self.workspace_manager.get(current_id).and_then(|ws| ws.clients.first().copied()))
+            .filter(|&w| self.client_state.contains(w));
+
         if let Some(next_win) = next_focus {
-            if self.client_state.contains(next_win) {
-                let _ = self.focus_client(next_win);
-            }
-        } else if let Some(&first) = self
-            .workspace_manager
-            .get(current_id)
-            .and_then(|ws| ws.clients.first())
-        {
-            let _ = self.focus_client(first);
+            let _ = self.focus_client(next_win);
         } else {
-            self.client_state.remove_focus(window);
-            let _ = self.context.connection.set_input_focus(
-                InputFocus::POINTER_ROOT,
-                self.context.root_window,
-                x11rb::CURRENT_TIME,
-            );
-            let _ = self.update_ewmh_active_window();
-            if let Some(ref mut bar) = self.statusbar {
-                bar.set_title("");
-            }
+            let _ = self.clear_focus();
         }
 
         // Update statusbar tags
@@ -1770,6 +1781,10 @@ impl WindowManager {
                 self.current_workspace = ws;
                 self.workspace_manager.current_workspace_id = ws;
                 let _ = self.update_ewmh_current_desktop();
+                if let Some(ref mut bar) = self.statusbar {
+                    let occupied = self.workspace_manager.occupied_workspaces();
+                    bar.set_workspace(ws, &occupied);
+                }
 
                 let target_focus = self
                     .workspace_focus
@@ -1777,17 +1792,10 @@ impl WindowManager {
                     .or_else(|| self.workspace_manager.get(ws).and_then(|w| w.focused_client))
                     .or_else(|| self.workspace_manager.get(ws).and_then(|w| w.clients.first().copied()));
 
-                if let Some(w) = target_focus {
-                    if self.client_state.contains(w) {
-                        self.focus_client(w)?;
-                    }
+                if let Some(w) = target_focus.filter(|w| self.client_state.contains(*w)) {
+                    self.focus_client(w)?;
                 } else {
-                    let _ = self.context.connection.set_input_focus(
-                        InputFocus::POINTER_ROOT,
-                        self.context.root_window,
-                        x11rb::CURRENT_TIME,
-                    );
-                    let _ = self.update_ewmh_active_window();
+                    self.clear_focus()?;
                 }
             }
         }
@@ -1803,6 +1811,10 @@ impl WindowManager {
                 self.current_workspace = ws;
                 self.workspace_manager.current_workspace_id = ws;
                 let _ = self.update_ewmh_current_desktop();
+                if let Some(ref mut bar) = self.statusbar {
+                    let occupied = self.workspace_manager.occupied_workspaces();
+                    bar.set_workspace(ws, &occupied);
+                }
 
                 let target_focus = self
                     .workspace_focus
@@ -1810,17 +1822,10 @@ impl WindowManager {
                     .or_else(|| self.workspace_manager.get(ws).and_then(|w| w.focused_client))
                     .or_else(|| self.workspace_manager.get(ws).and_then(|w| w.clients.first().copied()));
 
-                if let Some(w) = target_focus {
-                    if self.client_state.contains(w) {
-                        self.focus_client(w)?;
-                    }
+                if let Some(w) = target_focus.filter(|w| self.client_state.contains(*w)) {
+                    self.focus_client(w)?;
                 } else {
-                    let _ = self.context.connection.set_input_focus(
-                        InputFocus::POINTER_ROOT,
-                        self.context.root_window,
-                        x11rb::CURRENT_TIME,
-                    );
-                    let _ = self.update_ewmh_active_window();
+                    self.clear_focus()?;
                 }
             }
         }
@@ -1830,7 +1835,7 @@ impl WindowManager {
 
     /// Moves the currently focused client to the specified monitor.
     pub fn move_to_monitor(&mut self, target_monitor_id: MonitorId) -> Result<(), X11Error> {
-        let win = match self.client_state.focused_window() {
+        let win = match self.focused_window() {
             Some(w) => w,
             None => return Ok(()),
         };
@@ -1873,24 +1878,13 @@ impl WindowManager {
             }
         }
 
-        let next_focus = self.workspace_focus.remove_window(current_ws, win);
+        let next_focus = self.workspace_focus.remove_window(current_ws, win)
+            .or_else(|| self.workspace_manager.get(current_ws).and_then(|ws| ws.clients.first().copied()))
+            .filter(|&w| self.client_state.contains(w));
         if let Some(next_win) = next_focus {
-            if self.client_state.contains(next_win) {
-                let _ = self.focus_client(next_win);
-            }
-        } else if let Some(&first) = self
-            .workspace_manager
-            .get(current_ws)
-            .and_then(|ws| ws.clients.first())
-        {
-            let _ = self.focus_client(first);
+            let _ = self.focus_client(next_win);
         } else {
-            let _ = self.context.connection.set_input_focus(
-                InputFocus::POINTER_ROOT,
-                self.context.root_window,
-                x11rb::CURRENT_TIME,
-            );
-            let _ = self.update_ewmh_active_window();
+            let _ = self.clear_focus();
         }
 
         self.retile()?;
@@ -2274,7 +2268,7 @@ impl WindowManager {
         } else if event.atom == AtomEnum::WM_NORMAL_HINTS.into() {
             let _ = get_wm_normal_hints(&self.context.connection, event.window);
         } else if (event.atom == AtomEnum::WM_NAME.into() || event.atom == self.atoms.net_wm_name)
-            && Some(event.window) == self.client_state.focused_window()
+            && Some(event.window) == self.focused_window()
         {
             let title = self.get_window_title(event.window);
             if let Some(ref mut bar) = self.statusbar {
@@ -2305,7 +2299,7 @@ impl WindowManager {
                     .spawn();
             }
             Action::Close => {
-                if let Some(win) = self.client_state.focused_window() {
+                if let Some(win) = self.focused_window() {
                     let _ = self.kill_client(win);
                 }
             }
@@ -2319,7 +2313,7 @@ impl WindowManager {
                 let _ = self.switch_workspace(ws)?;
             }
             Action::MoveToWorkspace(ws) => {
-                let win = self.client_state.focused_window()
+                let win = self.focused_window()
                     .or_else(|| self.workspace_focus.focused_window_on(self.current_workspace))
                     .or_else(|| self.workspace_manager.get(self.current_workspace).and_then(|w| w.clients.first().copied()));
                 if let Some(win) = win {
@@ -2327,12 +2321,12 @@ impl WindowManager {
                 }
             }
             Action::ToggleFloating => {
-                if let Some(win) = self.client_state.focused_window() {
+                if let Some(win) = self.focused_window() {
                     let _ = self.toggle_floating(win);
                 }
             }
             Action::ToggleFullscreen => {
-                if let Some(win) = self.client_state.focused_window() {
+                if let Some(win) = self.focused_window() {
                     let _ = self.toggle_fullscreen(win);
                 }
             }
@@ -2360,7 +2354,7 @@ impl WindowManager {
                 let _ = self.toggle_scratchpad();
             }
             Action::SetScratchpad => {
-                if let Some(focused) = self.client_state.focused_window() {
+                if let Some(focused) = self.focused_window() {
                     self.set_scratchpad_client(focused);
                 }
             }
@@ -2373,7 +2367,7 @@ impl WindowManager {
 
     /// Swaps the currently focused window with its spatial neighbor in the given direction.
     pub fn swap_in_direction(&mut self, direction: Direction) -> Result<Option<Window>, X11Error> {
-        let current = match self.client_state.focused_window() {
+        let current = match self.focused_window() {
             Some(w) => w,
             None => return Ok(None),
         };

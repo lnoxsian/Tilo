@@ -2,8 +2,8 @@ use std::process::{Child, Command};
 use tilo::layout::Rect;
 use tilo::render::Renderer;
 use tilo::statusbar::{
-    create_statusbar_window, ClockModule, CpuModule, LayoutModule, ModuleUpdate, RamModule,
-    StatusModule, TitleModule, WorkspaceModule,
+    create_statusbar_window, BatteryModule, ClockModule, CpuModule, IpModule, LayoutModule,
+    ModuleUpdate, RamModule, StatusModule, TitleModule, WorkspaceModule,
 };
 use tilo::wm::WindowManager;
 use tilo::x11::X11Context;
@@ -130,6 +130,14 @@ MemAvailable:   16000000 kB
     let title = TitleModule::new();
     assert_eq!(title.name(), "title");
     assert_eq!(title.update_interval(), 100);
+
+    let ip = IpModule::new();
+    assert_eq!(ip.name(), "ip");
+    assert_eq!(ip.update_interval(), 3000);
+
+    let bat = BatteryModule::new();
+    assert_eq!(bat.name(), "battery");
+    assert_eq!(bat.update_interval(), 5000);
 
     let clock = ClockModule::new();
     assert_eq!(clock.name(), "clock");
@@ -325,8 +333,24 @@ fn test_statusbar_renderer_in_xephyr() {
         wm.switch_workspace(2).expect("Failed to switch workspace");
         assert_eq!(wm.current_workspace, 2);
 
+        // Verify statusbar title does NOT persist on empty workspace 2
+        let bar = wm.statusbar.as_ref().unwrap();
+        assert!(!bar.full_text().contains("Terminal 1"), "Statusbar title must be cleared on empty workspace");
+
         // Module update re-render
         let _ = wm.update_statusbar();
+        let bar = wm.statusbar.as_ref().unwrap();
+        assert!(!bar.full_text().contains("Terminal 1"), "Statusbar title must remain cleared after module update");
+
+        // Switch back to workspace 1: title should be restored
+        wm.switch_workspace(1).expect("Failed to switch back to workspace 1");
+        assert_eq!(wm.current_workspace, 1);
+        let bar = wm.statusbar.as_ref().unwrap();
+        assert!(bar.full_text().contains("Terminal 1"), "Statusbar title must be restored when returning to workspace 1");
+
+        // Switch to workspace 2 again for image test
+        wm.switch_workspace(2).expect("Failed to switch workspace");
+        assert_eq!(wm.current_workspace, 2);
 
         // 7. Verify actual rendered pixels on statusbar window using get_image
         let img = wm.context.connection.get_image(

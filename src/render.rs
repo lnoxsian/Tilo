@@ -364,9 +364,34 @@ impl Renderer {
         self.draw_text(conn, self.pixmap, cur_x, baseline, &layout_text, color_scheme.active_bg)?;
         cur_x += self.text_width(&layout_text) as i16 + 12;
 
-        // 4. Render active window title
+        // 4. Collect right-aligned status modules (all modules except workspace, layout, and title)
+        let mut right_items = Vec::new();
+        for m in modules {
+            let name = m.name();
+            if name != "workspace" && name != "layout" && name != "title" {
+                let t = m.current_text();
+                if !t.is_empty() {
+                    right_items.push(t);
+                }
+            }
+        }
+
+        let right_text = if !right_items.is_empty() {
+            Some(right_items.join("  |  "))
+        } else {
+            None
+        };
+
+        let right_width = if let Some(ref rt) = right_text {
+            self.text_width(rt) as i16
+        } else {
+            0
+        };
+
+        // 5. Render active window title
         if !active_window_title.is_empty() {
-            let max_chars = ((self.width as i16 - cur_x - 300) / self.char_width as i16).max(10) as usize;
+            let reserved_right = (right_width + 24).max(100);
+            let max_chars = ((self.width as i16 - cur_x - reserved_right) / self.char_width as i16).max(10) as usize;
             let display_title = if active_window_title.chars().count() > max_chars {
                 let truncated: String = active_window_title.chars().take(max_chars.saturating_sub(3)).collect();
                 format!("{}...", truncated)
@@ -376,23 +401,10 @@ impl Renderer {
             self.draw_text(conn, self.pixmap, cur_x, baseline, &display_title, color_scheme.fg)?;
         }
 
-        // 5. Render right-aligned status modules (RAM, CPU, Clock)
-        let mut right_items = Vec::new();
-        for m in modules {
-            let name = m.name();
-            if name == "ram" || name == "cpu" || name == "clock" {
-                let t = m.current_text();
-                if !t.is_empty() {
-                    right_items.push(t);
-                }
-            }
-        }
-
-        if !right_items.is_empty() {
-            let right_text = right_items.join("  |  ");
-            let right_width = self.text_width(&right_text);
-            let right_x = (self.width as i16 - right_width as i16 - 12).max(cur_x + 20);
-            self.draw_text(conn, self.pixmap, right_x, baseline, &right_text, color_scheme.fg)?;
+        // 6. Render right-aligned status modules
+        if let Some(ref rt) = right_text {
+            let right_x = (self.width as i16 - right_width - 12).max(cur_x + 20);
+            self.draw_text(conn, self.pixmap, right_x, baseline, rt, color_scheme.fg)?;
         }
 
         // 6. Blit completed frame to visible window

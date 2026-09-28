@@ -15,6 +15,7 @@
 
 use crate::layout::Rect;
 use crate::x11::X11Error;
+use std::net::UdpSocket;
 use std::path::PathBuf;
 use std::time::Instant;
 use thiserror::Error;
@@ -176,14 +177,16 @@ impl Statusbar {
     }
 
     /// Creates a default `Statusbar` equipped with standard modules:
-    /// Workspace, Layout, Window Title, RAM, CPU, and Clock.
+    /// Workspace, Layout, Window Title, IP, RAM, CPU, Battery, and Clock.
     pub fn default_with_window(window_id: u32, rect: Rect) -> Self {
         let modules: Vec<Box<dyn StatusModule>> = vec![
             Box::new(WorkspaceModule::new()),
             Box::new(LayoutModule::new()),
             Box::new(TitleModule::new()),
+            Box::new(IpModule::new()),
             Box::new(RamModule::new()),
             Box::new(CpuModule::new()),
+            Box::new(BatteryModule::new()),
             Box::new(ClockModule::new()),
         ];
         Self::new(window_id, rect, modules, ColorScheme::default())
@@ -626,6 +629,92 @@ impl StatusModule for TitleModule {
     }
 }
 
+/// IP status module displaying the active local IP address.
+#[derive(Debug, Clone)]
+pub struct IpModule {
+    pub cached_text: String,
+    pub last_updated: Option<Instant>,
+    pub custom_ip: Option<String>,
+}
+
+impl IpModule {
+    pub fn new() -> Self {
+        Self::with_ip(None)
+    }
+
+    pub fn with_ip(ip: Option<String>) -> Self {
+        let mut s = Self {
+            cached_text: "IP ...".to_string(),
+            last_updated: None,
+            custom_ip: ip,
+        };
+        let _ = s.update();
+        s
+    }
+
+    pub fn set_ip(&mut self, ip: Option<String>) {
+        self.custom_ip = ip;
+    }
+
+    fn query_local_ip() -> Option<String> {
+        let socket = UdpSocket::bind("0.0.0.0:0").ok()?;
+        socket.connect("1.1.1.1:80").ok()?;
+        let addr = socket.local_addr().ok()?;
+        let ip = addr.ip();
+        if ip.is_unspecified() || ip.is_loopback() {
+            None
+        } else {
+            Some(ip.to_string())
+        }
+    }
+}
+
+impl Default for IpModule {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl StatusModule for IpModule {
+    fn name(&self) -> &'static str {
+        "ip"
+    }
+
+    fn update_interval(&self) -> u64 {
+        3000
+    }
+
+    fn update(&mut self) -> Result<ModuleUpdate, StatusbarError> {
+        self.last_updated = Some(Instant::now());
+
+        let ip_opt = if let Some(ref custom) = self.custom_ip {
+            Some(custom.clone())
+        } else {
+            Self::query_local_ip()
+        };
+
+        let new_text = match ip_opt {
+            Some(ip) if !ip.is_empty() => format!("IP {}", ip),
+            _ => "IP Offline".to_string(),
+        };
+
+        if new_text != self.cached_text {
+            self.cached_text = new_text.clone();
+            Ok(ModuleUpdate::Changed(new_text))
+        } else {
+            Ok(ModuleUpdate::Unchanged)
+        }
+    }
+
+    fn current_text(&self) -> &str {
+        &self.cached_text
+    }
+
+    fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> {
+        Some(self)
+    }
+}
+
 /// RAM status module reading `/proc/meminfo` directly without external child processes.
 #[derive(Debug, Clone)]
 pub struct RamModule {
@@ -849,7 +938,131 @@ impl StatusModule for CpuModule {
     }
 }
 
-/// Clock status module displaying the system time in `HH:MM` format.
+/// Battery status module reading `/sys/class/power_supply/BAT*` capacity and charging status.
+#[derive(Debug, Clone)]
+pub struct BatteryModule {
+    pub cached_text: String,
+    pub last_updated: Option<Instant>,
+    pub sysfs_path: Option<PathBuf>,
+}
+
+impl BatteryModule {
+    pub fn new() -> Self {
+        Self::with_path(Self::find_battery_path())
+    }
+
+    pub fn with_path(path: Option<PathBuf>) -> Self {
+        let mut s = Self {
+            cached_text: "BAT --%".to_string(),
+            last_updated: None,
+            sysfs_path: path,
+        };
+        let _ = s.update();
+        s
+    }
+
+    pub fn find_battery_path() -> Option<PathBuf> {
+        let base = std::path::Path::new("/sys/class/power_supply");
+        if let Ok(entries) = std::fs::read_dir(base) {
+            let mut bat_paths = Vec::new();
+            for entry in entries.flatten() {
+                let name = entry.file_name();
+                let name_str = name.to_string_lossy();
+                if name_str.starts_with("BAT") || name_str.starts_with("bat") {
+                    bat_paths.push(entry.path());
+                }
+            }
+            bat_paths.sort();
+            if let Some(first) = bat_paths.into_iter().next() {
+                return Some(first);
+            }
+        }
+        None
+    }
+
+    pub fn parse_battery_info(bat_dir: &std::path::Path) -> Result<(u32, bool), String> {
+        let capacity_path = bat_dir.join("capacity");
+        let status_path = bat_dir.join("status");
+
+        let cap_content = std::fs::read_to_string(&capacity_path)
+            .map_err(|e| format!("Failed to read capacity: {}", e))?;
+        let cap: u32 = cap_content
+            .trim()
+            .parse::<u32>()
+            .map_err(|e| format!("Failed to parse capacity: {}", e))?;
+
+        let is_charging = if let Ok(status_content) = std::fs::read_to_string(&status_path) {
+            status_content.trim().eq_ignore_ascii_case("charging")
+        } else {
+            false
+        };
+
+        Ok((cap.min(100), is_charging))
+    }
+}
+
+impl Default for BatteryModule {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl StatusModule for BatteryModule {
+    fn name(&self) -> &'static str {
+        "battery"
+    }
+
+    fn update_interval(&self) -> u64 {
+        5000
+    }
+
+    fn update(&mut self) -> Result<ModuleUpdate, StatusbarError> {
+        self.last_updated = Some(Instant::now());
+
+        let path = match self.sysfs_path {
+            Some(ref p) => p,
+            None => {
+                let na = "BAT N/A".to_string();
+                if self.cached_text != na {
+                    self.cached_text = na.clone();
+                    return Ok(ModuleUpdate::Changed(na));
+                }
+                return Ok(ModuleUpdate::Unchanged);
+            }
+        };
+
+        match Self::parse_battery_info(path) {
+            Ok((cap, is_charging)) => {
+                let new_text = if is_charging {
+                    format!("BAT {}% (+)", cap)
+                } else {
+                    format!("BAT {}%", cap)
+                };
+
+                if new_text != self.cached_text {
+                    self.cached_text = new_text.clone();
+                    Ok(ModuleUpdate::Changed(new_text))
+                } else {
+                    Ok(ModuleUpdate::Unchanged)
+                }
+            }
+            Err(e) => {
+                self.cached_text = "BAT: ERR".to_string();
+                Ok(ModuleUpdate::Error(e))
+            }
+        }
+    }
+
+    fn current_text(&self) -> &str {
+        &self.cached_text
+    }
+
+    fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> {
+        Some(self)
+    }
+}
+
+/// Clock status module displaying the system time in `DAY:DATE:TIME` format (e.g. `Tue:2026-09-29:04:18`).
 #[derive(Debug, Clone)]
 pub struct ClockModule {
     pub cached_text: String,
@@ -873,9 +1086,16 @@ impl ClockModule {
             let mut tm = std::mem::MaybeUninit::<libc::tm>::zeroed();
             if !libc::localtime_r(&now, tm.as_mut_ptr()).is_null() {
                 let tm = tm.assume_init();
-                format!("{:02}:{:02}", tm.tm_hour, tm.tm_min)
+                const DAYS: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+                let day_name = DAYS.get(tm.tm_wday.clamp(0, 6) as usize).unwrap_or(&"---");
+                let year = 1900 + tm.tm_year;
+                let month = tm.tm_mon + 1;
+                let mday = tm.tm_mday;
+                let hour = tm.tm_hour;
+                let min = tm.tm_min;
+                format!("{}:{:04}-{:02}-{:02}:{:02}:{:02}", day_name, year, month, mday, hour, min)
             } else {
-                "00:00".to_string()
+                "---:0000-00-00:00:00".to_string()
             }
         }
     }
@@ -909,6 +1129,10 @@ impl StatusModule for ClockModule {
 
     fn current_text(&self) -> &str {
         &self.cached_text
+    }
+
+    fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> {
+        Some(self)
     }
 }
 
@@ -985,8 +1209,61 @@ Cached:          2000000 kB
         let mut clock = ClockModule::new();
         let _ = clock.update();
         let text = clock.current_text();
-        assert_eq!(text.len(), 5);
-        assert_eq!(&text[2..3], ":");
+        // Format is DAY:DATE:TIME, e.g. "Tue:2026-09-29:04:18"
+        let parts: Vec<&str> = text.split(':').collect();
+        assert_eq!(parts.len(), 4);
+        assert_eq!(parts[0].len(), 3); // 3-letter day
+        assert_eq!(parts[1].len(), 10); // YYYY-MM-DD
+    }
+
+    #[test]
+    fn test_ip_module() {
+        let mut ip = IpModule::with_ip(Some("192.168.1.10".to_string()));
+        assert_eq!(ip.name(), "ip");
+        assert_eq!(ip.update_interval(), 3000);
+        assert_eq!(ip.current_text(), "IP 192.168.1.10");
+
+        ip.set_ip(None);
+        // When custom_ip is None, update queries system or falls back
+        let _ = ip.update();
+        assert!(ip.current_text().starts_with("IP "));
+
+        let ip_offline = IpModule::with_ip(Some("".to_string()));
+        assert_eq!(ip_offline.current_text(), "IP Offline");
+    }
+
+    #[test]
+    fn test_battery_module() {
+        let temp_dir = std::env::temp_dir().join(format!("tilo_bat_test_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        let _ = std::fs::create_dir_all(&temp_dir);
+
+        // When no path is provided
+        let bat_na = BatteryModule::with_path(None);
+        assert_eq!(bat_na.name(), "battery");
+        assert_eq!(bat_na.update_interval(), 5000);
+        assert_eq!(bat_na.current_text(), "BAT N/A");
+
+        // Write fake capacity and status (Discharging)
+        std::fs::write(temp_dir.join("capacity"), "75\n").unwrap();
+        std::fs::write(temp_dir.join("status"), "Discharging\n").unwrap();
+        let mut bat = BatteryModule::with_path(Some(temp_dir.clone()));
+        assert_eq!(bat.current_text(), "BAT 75%");
+
+        // Write fake capacity and status (Charging)
+        std::fs::write(temp_dir.join("capacity"), "76\n").unwrap();
+        std::fs::write(temp_dir.join("status"), "Charging\n").unwrap();
+        let update_res = bat.update().unwrap();
+        assert_eq!(update_res, ModuleUpdate::Changed("BAT 76% (+)".to_string()));
+        assert_eq!(bat.current_text(), "BAT 76% (+)");
+
+        // Invalid capacity
+        std::fs::write(temp_dir.join("capacity"), "invalid\n").unwrap();
+        let update_err = bat.update().unwrap();
+        assert!(matches!(update_err, ModuleUpdate::Error(_)));
+        assert_eq!(bat.current_text(), "BAT: ERR");
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 
     #[test]
@@ -994,10 +1271,13 @@ Cached:          2000000 kB
         let mut bar = Statusbar::default_with_window(12345, Rect::new(0, 0, 1920, 24));
         bar.set_title("Terminal");
         let full = bar.full_text();
+        println!("Full statusbar text: {}", full);
         assert!(full.contains("[1]"));
         assert!(full.contains("[]="));
         assert!(full.contains("Terminal"));
+        assert!(full.contains("IP"));
         assert!(full.contains("RAM"));
         assert!(full.contains("CPU"));
+        assert!(full.contains("BAT"));
     }
 }
