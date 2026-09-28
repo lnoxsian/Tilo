@@ -140,6 +140,15 @@ impl WorkspaceManager {
         self.current_workspace_id
     }
 
+    /// Returns a list of workspace IDs that currently contain one or more client windows.
+    pub fn occupied_workspaces(&self) -> Vec<WorkspaceId> {
+        self.workspaces
+            .iter()
+            .filter(|(_, ws)| !ws.is_empty())
+            .map(|(&id, _)| id)
+            .collect()
+    }
+
     /// Checks if a workspace with the given ID exists.
     pub fn workspace_exists(&self, id: WorkspaceId) -> bool {
         self.workspaces.contains_key(&id)

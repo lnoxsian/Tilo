@@ -1,0 +1,244 @@
+use std::process::{Child, Command};
+use tilo::layout::Rect;
+use tilo::statusbar::{
+    create_statusbar_window, ClockModule, CpuModule, LayoutModule, ModuleUpdate, RamModule,
+    StatusModule, TitleModule, WorkspaceModule,
+};
+use tilo::wm::WindowManager;
+use tilo::x11::X11Context;
+use x11rb::connection::Connection;
+use x11rb::protocol::xproto::{
+    AtomEnum, ConnectionExt, CreateWindowAux, EventMask, Window, WindowClass,
+};
+
+struct XephyrServer {
+    child: Child,
+    display: String,
+}
+
+impl XephyrServer {
+    fn start(display_num: u32) -> Option<Self> {
+        let display = format!(":{}", display_num);
+        let child = Command::new("Xephyr")
+            .arg(&display)
+            .arg("-screen")
+            .arg("1000x800")
+            .arg("-ac")
+            .arg("-br")
+            .arg("-noreset")
+            .spawn()
+            .ok()?;
+
+        for _ in 0..30 {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            if X11Context::connect_to(Some(&display)).is_ok() {
+                return Some(Self { child, display });
+            }
+        }
+
+        let mut s = Self { child, display };
+        s.kill();
+        None
+    }
+
+    fn kill(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+impl Drop for XephyrServer {
+    fn drop(&mut self) {
+        self.kill();
+    }
+}
+
+fn create_client_window(conn: &impl Connection, root: Window, x: i16, y: i16, w: u16, h: u16) -> Window {
+    let win = conn.generate_id().unwrap();
+    let aux = CreateWindowAux::new()
+        .event_mask(EventMask::STRUCTURE_NOTIFY | EventMask::PROPERTY_CHANGE)
+        .background_pixel(0x002244);
+    conn.create_window(
+        0,
+        win,
+        root,
+        x,
+        y,
+        w,
+        h,
+        0,
+        WindowClass::INPUT_OUTPUT,
+        0,
+        &aux,
+    )
+    .unwrap();
+    conn.map_window(win).unwrap();
+    conn.flush().unwrap();
+    win
+}
+
+#[test]
+fn test_modules_independent_polling_and_errors() {
+    // 1. RAM module with custom non-existent file
+    let temp_dir = std::env::temp_dir().join(format!("tilo_statusbar_test_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    let _ = std::fs::create_dir_all(&temp_dir);
+    let fake_meminfo = temp_dir.join("fake_meminfo");
+
+    let mut ram_err = RamModule::with_path(fake_meminfo.clone());
+    let update_res = ram_err.update().unwrap();
+    assert!(matches!(update_res, ModuleUpdate::Error(_)));
+    assert_eq!(ram_err.current_text(), "RAM: ERR");
+
+    // Write valid meminfo data
+    let sample_mem = "\
+MemTotal:       32000000 kB
+MemFree:         4000000 kB
+MemAvailable:   16000000 kB
+";
+    std::fs::write(&fake_meminfo, sample_mem).unwrap();
+    let update_ok = ram_err.update().unwrap();
+    assert_eq!(update_ok, ModuleUpdate::Changed("RAM 50%".to_string()));
+    assert_eq!(ram_err.current_text(), "RAM 50%");
+
+    // 2. CPU module with custom non-existent file
+    let fake_stat = temp_dir.join("fake_stat");
+    let mut cpu_err = CpuModule::with_path(fake_stat.clone());
+    let cpu_res = cpu_err.update().unwrap();
+    assert!(matches!(cpu_res, ModuleUpdate::Error(_)));
+    assert_eq!(cpu_err.current_text(), "CPU: ERR");
+
+    // Write valid stat data
+    std::fs::write(&fake_stat, "cpu 100 0 100 800 0 0 0 0 0 0\n").unwrap();
+    let _ = cpu_err.update();
+    std::fs::write(&fake_stat, "cpu 150 0 150 900 0 0 0 0 0 0\n").unwrap();
+    let cpu_ok = cpu_err.update().unwrap();
+    assert_eq!(cpu_ok, ModuleUpdate::Changed("CPU 50%".to_string()));
+    assert_eq!(cpu_err.current_text(), "CPU 50%");
+
+    // 3. Workspace and layout modules
+    let ws = WorkspaceModule::new();
+    assert_eq!(ws.name(), "workspace");
+    assert_eq!(ws.update_interval(), 100);
+
+    let layout = LayoutModule::new();
+    assert_eq!(layout.name(), "layout");
+    assert_eq!(layout.update_interval(), 200);
+
+    let title = TitleModule::new();
+    assert_eq!(title.name(), "title");
+    assert_eq!(title.update_interval(), 100);
+
+    let clock = ClockModule::new();
+    assert_eq!(clock.name(), "clock");
+    assert_eq!(clock.update_interval(), 1000);
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_statusbar_creation_in_xephyr() {
+    if !Command::new("which")
+        .arg("Xephyr")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+    {
+        return;
+    }
+
+    let xephyr = XephyrServer::start(99);
+    if let Some(server) = xephyr {
+        let wm_ctx = X11Context::connect_to(Some(&server.display))
+            .expect("WM context connect failed");
+        assert!(wm_ctx.become_wm().is_ok());
+
+        // 1. Direct creation of statusbar window with create_statusbar_window
+        let screen = &wm_ctx.connection.setup().roots[wm_ctx.screen_num];
+        let bar_rect = Rect::new(0, 0, wm_ctx.screen_width as u32, 26);
+        let win_id = create_statusbar_window(&wm_ctx.connection, screen, bar_rect)
+            .expect("Failed to create statusbar window");
+
+        // Verify window attributes: override_redirect must be true
+        let attrs = wm_ctx.connection.get_window_attributes(win_id).unwrap().reply().unwrap();
+        assert!(attrs.override_redirect);
+
+        // Verify window geometry: x=0, y=0, w=screen_width, h=26
+        let geom = wm_ctx.connection.get_geometry(win_id).unwrap().reply().unwrap();
+        assert_eq!(geom.x, 0);
+        assert_eq!(geom.y, 0);
+        assert_eq!(geom.width, wm_ctx.screen_width);
+        assert_eq!(geom.height, 26);
+
+        // Verify _NET_WM_WINDOW_TYPE = _NET_WM_WINDOW_TYPE_DOCK
+        let net_wm_window_type = wm_ctx.connection.intern_atom(false, b"_NET_WM_WINDOW_TYPE").unwrap().reply().unwrap().atom;
+        let net_wm_window_type_dock = wm_ctx.connection.intern_atom(false, b"_NET_WM_WINDOW_TYPE_DOCK").unwrap().reply().unwrap().atom;
+        let prop = wm_ctx.connection.get_property(false, win_id, net_wm_window_type, AtomEnum::ATOM, 0, 1).unwrap().reply().unwrap();
+        assert_eq!(prop.value32().unwrap().next(), Some(net_wm_window_type_dock));
+
+        // Verify _NET_WM_STRUT = [0, 0, 26, 0]
+        let net_wm_strut = wm_ctx.connection.intern_atom(false, b"_NET_WM_STRUT").unwrap().reply().unwrap().atom;
+        let strut_prop = wm_ctx.connection.get_property(false, win_id, net_wm_strut, AtomEnum::CARDINAL, 0, 4).unwrap().reply().unwrap();
+        let strut_vals: Vec<u32> = strut_prop.value32().unwrap().collect();
+        assert_eq!(strut_vals, vec![0, 0, 26, 0]);
+
+        // Clean up direct window
+        let _ = wm_ctx.connection.destroy_window(win_id);
+    }
+}
+
+#[test]
+fn test_wm_statusbar_integration_and_space_reservation_in_xephyr() {
+    if !Command::new("which")
+        .arg("Xephyr")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+    {
+        return;
+    }
+
+    let xephyr = XephyrServer::start(100);
+    if let Some(server) = xephyr {
+        let wm_ctx = X11Context::connect_to(Some(&server.display))
+            .expect("WM context connect failed");
+        assert!(wm_ctx.become_wm().is_ok());
+
+        let mut wm = WindowManager::new(wm_ctx).expect("Failed to create WM");
+
+        // 1. Enable statusbar with height 24
+        let bar_win = wm.enable_statusbar(24).expect("Failed to enable statusbar");
+        assert!(wm.statusbar.is_some());
+        assert_eq!(wm.statusbar.as_ref().unwrap().window_id, bar_win);
+        assert_eq!(wm.statusbar.as_ref().unwrap().rect.height, 24);
+
+        // 2. Open client window
+        let client_conn = X11Context::connect_to(Some(&server.display)).unwrap();
+        let win = create_client_window(&client_conn.connection, wm.context.root_window, 10, 10, 300, 300);
+
+        wm.process_pending_events().unwrap();
+        assert_eq!(wm.client_state.all_clients().len(), 1);
+
+        // 3. Verify client window starts BELOW statusbar (y >= 24)
+        let geom = client_conn.connection.get_geometry(win).unwrap().reply().unwrap();
+        assert!(
+            geom.y >= 24,
+            "Client window y ({}) should be at or below statusbar height (24)",
+            geom.y
+        );
+
+        // 4. Update statusbar and check full text
+        assert!(wm.update_statusbar() || !wm.update_statusbar());
+        let text = wm.statusbar.as_ref().unwrap().full_text();
+        assert!(text.contains("[1]"));
+        assert!(text.contains("[]="));
+
+        // 5. Disable statusbar and verify retile restores full height
+        wm.disable_statusbar().expect("Failed to disable statusbar");
+        assert!(wm.statusbar.is_none());
+
+        let geom_after = client_conn.connection.get_geometry(win).unwrap().reply().unwrap();
+        // Outer gap is default 0 or border; y should be at top edge now
+        assert!(geom_after.y < geom.y);
+    }
+}

@@ -26,6 +26,7 @@ use crate::input::InputManager;
 use crate::keybind::Action;
 use crate::layout::{apply_layout_with_border, calculate_master_stack, LayoutConfig, Rect};
 use crate::rules::{apply_rules as apply_window_rules, RuleAction, WindowRule};
+use crate::statusbar::{create_statusbar_window, Statusbar, StatusbarError};
 use crate::workspace::{WorkspaceId, WorkspaceManager};
 use crate::x11::{X11Context, X11Error};
 use x11rb::connection::Connection;
@@ -93,6 +94,8 @@ pub struct WindowManager {
     pub monitor_manager: MonitorManager,
     /// Parsed user configuration.
     pub config: Config,
+    /// Built-in statusbar instance if enabled.
+    pub statusbar: Option<Statusbar>,
 }
 
 impl WindowManager {
@@ -160,6 +163,7 @@ impl WindowManager {
             supporting_window,
             monitor_manager,
             config,
+            statusbar: None,
         })
     }
 
@@ -243,6 +247,40 @@ impl WindowManager {
         self.apply_config(new_cfg)?;
         println!("[INFO  tilo::wm] Configuration reloaded successfully.");
         Ok(())
+    }
+
+    /// Enables the built-in statusbar at the top of the primary screen.
+    ///
+    /// Creates an `override_redirect` window, reserves screen space via struts,
+    /// and recalculates tiling layouts.
+    pub fn enable_statusbar(&mut self, height: u32) -> Result<u32, StatusbarError> {
+        let rect = Rect::new(0, 0, self.context.screen_width as u32, height);
+        let screen = &self.context.connection.setup().roots[self.context.screen_num];
+        let win_id = create_statusbar_window(&self.context.connection, screen, rect)?;
+        let mut bar = Statusbar::default_with_window(win_id, rect);
+        let occupied = self.workspace_manager.occupied_workspaces();
+        bar.set_workspace(self.current_workspace, &occupied);
+        self.statusbar = Some(bar);
+        let _ = self.retile();
+        Ok(win_id)
+    }
+
+    /// Disables and destroys the built-in statusbar, releasing reserved screen space.
+    pub fn disable_statusbar(&mut self) -> Result<(), X11Error> {
+        if let Some(bar) = self.statusbar.take() {
+            bar.destroy(&self.context.connection)?;
+            self.retile()?;
+        }
+        Ok(())
+    }
+
+    /// Updates all statusbar modules and returns `true` if re-rendering is needed.
+    pub fn update_statusbar(&mut self) -> bool {
+        if let Some(ref mut bar) = self.statusbar {
+            bar.update_all()
+        } else {
+            false
+        }
     }
 
     /// Updates the root window's `_NET_ACTIVE_WINDOW` property.
@@ -541,10 +579,28 @@ impl WindowManager {
         for monitor in &monitors {
             let mon_ws = monitor.workspace;
             let monitor_rect = monitor.rect();
+            let usable_rect = if let Some(ref bar) = self.statusbar {
+                if bar.rect.y as i32 <= monitor.y
+                    && (bar.rect.y as i32 + bar.rect.height as i32) > monitor.y
+                {
+                    let offset = (bar.rect.y as i32 + bar.rect.height as i32) - monitor.y;
+                    Rect::new(
+                        monitor_rect.x,
+                        monitor_rect.y + offset,
+                        monitor_rect.width,
+                        monitor_rect.height.saturating_sub(offset as u32),
+                    )
+                } else {
+                    monitor_rect
+                }
+            } else {
+                monitor_rect
+            };
+
             let visible_tiled = self.client_state.visible_tiled_clients_on_workspace(mon_ws);
 
             if !visible_tiled.is_empty() {
-                let rects = calculate_master_stack(&visible_tiled, &monitor_rect, &self.layout_config);
+                let rects = calculate_master_stack(&visible_tiled, &usable_rect, &self.layout_config);
                 apply_layout_with_border(
                     &self.context.connection,
                     &visible_tiled,
@@ -620,8 +676,27 @@ impl WindowManager {
         // 7. Update EWMH _NET_ACTIVE_WINDOW
         let _ = self.update_ewmh_active_window();
 
+        // 8. Update statusbar window title if active
+        let title = self.get_window_title(window);
+        if let Some(ref mut bar) = self.statusbar {
+            bar.set_title(&title);
+        }
+
         self.context.flush()?;
         Ok(())
+    }
+
+    /// Queries the window title from X11 (`_NET_WM_NAME` or `WM_NAME`).
+    pub fn get_window_title(&self, window: Window) -> String {
+        if let Ok((_, _, Some(title))) = crate::rules::query_window_properties(
+            &self.context.connection,
+            &self.atoms,
+            window,
+        ) {
+            title
+        } else {
+            String::new()
+        }
     }
 
     /// Focuses the adjacent window in the given spatial direction on the active workspace.
@@ -750,6 +825,10 @@ impl WindowManager {
         self.workspace_manager.current_workspace_id = target_id;
         self.current_workspace = target_id;
         let _ = self.update_ewmh_current_desktop();
+        if let Some(ref mut bar) = self.statusbar {
+            let occupied = self.workspace_manager.occupied_workspaces();
+            bar.set_workspace(target_id, &occupied);
+        }
 
         self.retile()?;
 
