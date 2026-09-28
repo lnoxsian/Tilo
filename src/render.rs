@@ -225,6 +225,17 @@ impl Renderer {
 
     /// Blits the fully rendered off-screen pixmap onto the target window in a single atomic frame.
     pub fn flush_to_window(&self, conn: &impl Connection, window: u32) -> Result<(), StatusbarError> {
+        self.flush_area_to_window(conn, window, self.width, self.height)
+    }
+
+    /// Blits a specific sub-area of the off-screen pixmap onto the target window.
+    pub fn flush_area_to_window(
+        &self,
+        conn: &impl Connection,
+        window: u32,
+        width: u16,
+        height: u16,
+    ) -> Result<(), StatusbarError> {
         conn.copy_area(
             self.pixmap,
             window,
@@ -233,8 +244,8 @@ impl Renderer {
             0,
             0,
             0,
-            self.width,
-            self.height,
+            width.min(self.width),
+            height.min(self.height),
         )?;
         conn.flush()?;
         Ok(())

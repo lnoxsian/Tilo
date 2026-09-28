@@ -25,6 +25,15 @@ use x11rb::protocol::xproto::{
     ConnectionExt, CreateWindowAux, EventMask, Screen, WindowClass,
 };
 
+/// Default width of the application launcher overlay window.
+pub const LAUNCHER_WIDTH: u16 = 560;
+
+/// Default height of the application launcher overlay window when displaying the top 8 suggestions.
+pub const LAUNCHER_HEIGHT: u16 = 256;
+
+/// Maximum number of suggestions displayed by default.
+pub const LAUNCHER_MAX_RESULTS: usize = 8;
+
 /// Core configuration and state for the application launcher.
 #[derive(Debug)]
 pub struct Launcher {
@@ -56,9 +65,21 @@ impl Launcher {
             query: String::new(),
             selected_index: 0,
             visible: false,
-            rect: Rect::new(0, 0, 560, 300),
+            rect: Rect::new(0, 0, LAUNCHER_WIDTH as u32, LAUNCHER_HEIGHT as u32),
             renderer: None,
             color_scheme: ColorScheme::default(),
+        }
+    }
+
+    /// Calculates the exact window height required for a given number of result items with no empty space.
+    pub fn calculate_height(item_count: usize) -> u16 {
+        let count = item_count.min(LAUNCHER_MAX_RESULTS);
+        if count == 0 {
+            // Header (42) + notice row (26) + bottom padding (6)
+            42 + 26 + 6
+        } else {
+            // Header (42) + item rows (count * 26) + bottom padding (6)
+            42 + (count as u16 * 26) + 6
         }
     }
 
@@ -73,7 +94,7 @@ impl Launcher {
     }
 
     /// Renders the launcher UI into its off-screen pixmap and copies it to the window.
-    pub fn render(&self, conn: &impl Connection) -> Result<(), StatusbarError> {
+    pub fn render(&mut self, conn: &impl Connection) -> Result<(), StatusbarError> {
         let renderer = match self.renderer {
             Some(ref r) => r,
             None => return Ok(()),
@@ -83,7 +104,27 @@ impl Launcher {
             return Ok(());
         }
 
-        let results = self.filtered_results(8);
+        let results = self.filtered_results(LAUNCHER_MAX_RESULTS);
+
+        // Dynamically compute the window height to snugly fit the suggestions with zero empty space
+        let display_count = if results.is_empty() && !self.query.is_empty() {
+            0
+        } else {
+            results.len().min(LAUNCHER_MAX_RESULTS)
+        };
+        let target_height = Self::calculate_height(display_count);
+
+        if target_height != self.rect.height as u16 {
+            self.rect.height = target_height as u32;
+            let _ = conn.configure_window(
+                self.window_id,
+                &x11rb::protocol::xproto::ConfigureWindowAux::new()
+                    .height(target_height as u32),
+            );
+        }
+
+        let w = self.rect.width as u16;
+        let h = self.rect.height as u16;
 
         // 1. Fill entire launcher background
         renderer.fill_rect(
@@ -91,14 +132,12 @@ impl Launcher {
             renderer.pixmap,
             0,
             0,
-            self.rect.width as u16,
-            self.rect.height as u16,
+            w,
+            h,
             self.color_scheme.bg,
         )?;
 
         // 2. Draw border around the launcher overlay
-        let w = self.rect.width as u16;
-        let h = self.rect.height as u16;
         let border_color = self.color_scheme.active_bg;
         // Top, bottom, left, right border outlines
         renderer.fill_rect(conn, renderer.pixmap, 0, 0, w, 2, border_color)?;
@@ -120,7 +159,7 @@ impl Launcher {
 
         let prefix_width = renderer.text_width(prompt_prefix);
         let query_text = if self.query.is_empty() {
-            "Type application name or command (e.g. firefox --private-window)..."
+            "Type application name..."
         } else {
             &self.query
         };
@@ -156,7 +195,7 @@ impl Launcher {
         renderer.fill_rect(conn, renderer.pixmap, 8, 36, w.saturating_sub(16), 1, 0x333344)?;
 
         // 5. Draw filtered result items
-        let mut cur_y = 44i16;
+        let mut cur_y = 42i16;
         let row_height = 26i16;
 
         for (idx, item) in results.iter().enumerate() {
@@ -211,8 +250,8 @@ impl Launcher {
             )?;
         }
 
-        // 6. Blit completed double-buffer pixmap to launcher window
-        renderer.flush_to_window(conn, self.window_id)?;
+        // 6. Blit completed double-buffer pixmap sub-area to launcher window
+        renderer.flush_area_to_window(conn, self.window_id, w, h)?;
 
         Ok(())
     }
@@ -381,9 +420,18 @@ pub fn fuzzy_match(query: &str, target: &str) -> Option<i32> {
             score += consecutive * 5;
             if t_idx == 0 {
                 score += 15; // Starting character bonus
+            } else if target_chars[t_idx - 1] == '-'
+                || target_chars[t_idx - 1] == '_'
+                || target_chars[t_idx - 1] == '.'
+            {
+                score += 10; // Word boundary bonus (e.g. "fc" matching "firewall-cmd")
             }
             consecutive += 1;
             q_idx += 1;
+
+            if q_idx == query_chars.len() {
+                return Some(score);
+            }
         } else {
             consecutive = 0;
             score -= 1; // Gap penalty
@@ -407,27 +455,44 @@ pub fn filter_executables(cache: &[String], query: &str, max_results: usize) -> 
         return cache.iter().take(max_results).cloned().collect();
     }
 
+    let query_lower = binary_query.to_lowercase();
+    let first_char = query_lower.chars().next();
     let mut scored: Vec<(&String, i32)> = Vec::new();
 
     for item in cache {
         let item_lower = item.to_lowercase();
-        let query_lower = binary_query.to_lowercase();
 
-        // High priority for prefix matches
-        if item_lower.starts_with(&query_lower) {
-            let score = 1000 - (item.len() as i32 * 2);
+        if item_lower == query_lower {
+            // Exact match
+            scored.push((item, 5000));
+        } else if item_lower.starts_with(&query_lower) {
+            // High priority for prefix matches
+            let score = 3000 - (item.len() as i32 * 2);
             scored.push((item, score));
+        } else if let Some(fuzzy_score) = fuzzy_match(&query_lower, &item_lower) {
+            // If the item starts with the first character of the query, it ranks above substring matches
+            if first_char.map_or(false, |fc| item_lower.starts_with(fc)) {
+                let score = 1500 + fuzzy_score * 10 - (item.len() as i32);
+                scored.push((item, score));
+            } else if let Some(pos) = item_lower.find(&query_lower) {
+                // Substring matches that don't start with query char
+                let score = 500 - (pos as i32 * 5) - (item.len() as i32);
+                scored.push((item, score));
+            } else {
+                // General fuzzy match
+                scored.push((item, fuzzy_score * 5 - (item.len() as i32)));
+            }
         } else if let Some(pos) = item_lower.find(&query_lower) {
-            // Medium priority for substring matches
             let score = 500 - (pos as i32 * 5) - (item.len() as i32);
-            scored.push((item, score));
-        } else if let Some(score) = fuzzy_match(&query_lower, &item_lower) {
-            // Lower priority for general fuzzy matches
             scored.push((item, score));
         }
     }
 
-    scored.sort_by(|a, b| b.1.cmp(&a.1));
+    scored.sort_by(|a, b| {
+        b.1.cmp(&a.1)
+            .then_with(|| a.0.len().cmp(&b.0.len()))
+            .then_with(|| a.0.cmp(b.0))
+    });
     scored.into_iter().take(max_results).map(|(s, _)| s.clone()).collect()
 }
 
@@ -661,5 +726,34 @@ mod tests {
 
         update_launcher_state(&mut launcher, LauncherAction::DeleteLine);
         assert_eq!(launcher.query, "");
+    }
+
+    #[test]
+    fn test_calculate_height_no_empty_space() {
+        // Height for top 8 suggestions must be exactly 256 px with zero empty space
+        assert_eq!(Launcher::calculate_height(8), 256);
+        assert_eq!(LAUNCHER_HEIGHT, 256);
+
+        // Height for 0 items (notice row)
+        assert_eq!(Launcher::calculate_height(0), 74);
+
+        // Height for 1 item
+        assert_eq!(Launcher::calculate_height(1), 74);
+
+        // Height for 3 items
+        assert_eq!(Launcher::calculate_height(3), 126);
+    }
+
+    #[test]
+    fn test_plan_md_fuzzy_match_ff_finds_firefox() {
+        let cache = vec![
+            "firefox".to_string(),
+            "alacritty".to_string(),
+            "diff".to_string(),
+            "foot".to_string(),
+        ];
+        let res = filter_executables(&cache, "ff", 5);
+        assert!(res.contains(&"firefox".to_string()));
+        assert_eq!(res[0], "firefox");
     }
 }

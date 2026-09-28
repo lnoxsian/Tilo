@@ -164,6 +164,7 @@ fn test_launcher_in_xephyr_lifecycle_and_interaction() {
         let launcher = wm.launcher.as_ref().unwrap();
         assert!(launcher.visible);
         assert!(launcher.window_id > 0);
+        assert_eq!(launcher.rect.height, 256, "Launcher height must be 256px to fit top 8 suggestions with no empty space");
         let launcher_win = launcher.window_id;
 
         // Verify window attributes: override_redirect must be true

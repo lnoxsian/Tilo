@@ -362,8 +362,8 @@ impl WindowManager {
     /// Opens the application launcher overlay, centering it on the active monitor and grabbing keyboard.
     pub fn open_launcher(&mut self) -> Result<(), StatusbarError> {
         let active_mon = self.monitor_manager.active_monitor().clone();
-        let width = 560u16;
-        let height = 300u16;
+        let width = crate::launcher::LAUNCHER_WIDTH;
+        let height = crate::launcher::LAUNCHER_HEIGHT;
         let x = (active_mon.x + (active_mon.width as i32 - width as i32) / 2).max(active_mon.x) as i16;
         let y = (active_mon.y + (active_mon.height as i32 - height as i32) / 3).max(active_mon.y) as i16;
         let rect = Rect::new(x as i32, y as i32, width as u32, height as u32);
@@ -493,8 +493,8 @@ impl WindowManager {
     }
 
     /// Renders the launcher UI if visible.
-    pub fn render_launcher(&self) -> Result<(), StatusbarError> {
-        if let Some(ref launcher) = self.launcher {
+    pub fn render_launcher(&mut self) -> Result<(), StatusbarError> {
+        if let Some(ref mut launcher) = self.launcher {
             if launcher.visible {
                 launcher.render(&self.context.connection)?;
             }
@@ -699,10 +699,13 @@ impl WindowManager {
                         let _ = self.render_statusbar();
                     }
                 }
-                if let Some(ref launcher) = self.launcher {
-                    if launcher.visible && ev.window == launcher.window_id {
-                        let _ = self.render_launcher();
-                    }
+                let is_launcher_expose = self
+                    .launcher
+                    .as_ref()
+                    .map(|l| l.visible && ev.window == l.window_id)
+                    .unwrap_or(false);
+                if is_launcher_expose {
+                    let _ = self.render_launcher();
                 }
             }
             _ => {}
