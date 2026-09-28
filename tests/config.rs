@@ -125,7 +125,7 @@ bind Mod4+Shift+2 move_workspace 2
 
     assert_eq!(config.bindings[1].modifiers, MOD_SUPER);
     assert_eq!(config.bindings[1].keysym, XK_SPACE);
-    assert_eq!(config.bindings[1].action, Action::Spawn("dmenu_run".to_string()));
+    assert_eq!(config.bindings[1].action, Action::Launcher);
 
     assert_eq!(config.bindings[2].modifiers, MOD_SUPER);
     assert_eq!(config.bindings[2].keysym, XK_Q);

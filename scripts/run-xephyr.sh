@@ -179,7 +179,7 @@ if [[ ${AUTOMATED_TEST} -eq 1 ]]; then
     echo -e "${C_BOLD} Running tilo layout and rendering integration tests in Xephyr${C_RESET}"
     echo -e "${C_BOLD}${C_BLUE}============================================================${C_RESET}"
     cd "${ROOT_DIR}"
-    cargo test --test layout --test floating --test statusbar -- --nocapture
+    cargo test --test layout --test floating --test statusbar --test launcher -- --nocapture
     echo ""
     echo -e "${C_GREEN}==> All integration tests passed successfully!${C_RESET}"
     exit 0
@@ -406,7 +406,8 @@ show_keybindings() {
     cat << EOF
 ${C_BOLD}${C_YELLOW}tilo Default Keybindings inside Xephyr:${C_RESET}
   ${C_CYAN}Mod4 + Return${C_RESET}           Spawn terminal (xterm / alacritty / kitty)
-  ${C_CYAN}Mod4 + Space${C_RESET}            Toggle Tiled <-> Floating mode for focused window
+  ${C_CYAN}Mod4 + Space${C_RESET}            Toggle Application Launcher (search & spawn apps)
+  ${C_CYAN}Mod4 + Shift + Space${C_RESET}    Toggle Tiled <-> Floating mode for focused window
   ${C_CYAN}Mod4 + f${C_RESET}                Toggle Fullscreen mode for focused window
   ${C_CYAN}Mod4 + j / k${C_RESET}            Focus Next / Previous window (Down / Up in stack)
   ${C_CYAN}Mod4 + h / l${C_RESET}            Focus Left (Master) / Right (Stack)

@@ -420,7 +420,7 @@ fn parse_action(tokens: &[&Token], line: usize, config: &Config) -> Result<Actio
                 let cmd: Vec<String> = tokens[1..].iter().map(|t| token_to_string(t)).collect();
                 Ok(Action::Spawn(cmd.join(" ")))
             } else {
-                Ok(Action::Spawn("dmenu_run".to_string()))
+                Ok(Action::Launcher)
             }
         }
         "focus" => {

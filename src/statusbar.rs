@@ -42,6 +42,14 @@ pub enum StatusbarError {
     /// Failed to load font.
     #[error("Failed to load font: {0}")]
     FontLoadError(String),
+
+    /// PATH scanning failure.
+    #[error("Path scan error: {0}")]
+    PathScanError(String),
+
+    /// Process spawn error.
+    #[error("Spawn error: {0}")]
+    SpawnError(String),
 }
 
 impl From<x11rb::errors::ConnectionError> for StatusbarError {

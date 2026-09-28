@@ -11,6 +11,7 @@ pub mod icccm;
 pub mod input;
 pub mod keybind;
 pub mod layout;
+pub mod launcher;
 pub mod monitor;
 pub mod render;
 pub mod rules;

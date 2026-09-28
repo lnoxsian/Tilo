@@ -100,6 +100,8 @@ pub enum Action {
     MoveToMonitor(u32),
     /// Reload the window manager configuration.
     Reload,
+    /// Toggle the integrated application launcher.
+    Launcher,
     /// Exit the window manager gracefully.
     Exit,
 }
@@ -219,8 +221,9 @@ pub fn default_keybindings() -> Vec<KeyBind> {
         KeyBind::new(MOD_SUPER | MOD_SHIFT, XK_J, Action::Move(Direction::Down)),
         KeyBind::new(MOD_SUPER | MOD_SHIFT, XK_K, Action::Move(Direction::Up)),
         KeyBind::new(MOD_SUPER | MOD_SHIFT, XK_L, Action::Move(Direction::Right)),
-        // Window States
+        // Window States & Launcher
         KeyBind::new(MOD_SUPER, XK_F, Action::ToggleFullscreen),
+        KeyBind::new(MOD_SUPER, XK_SPACE, Action::Launcher),
         KeyBind::new(MOD_SUPER | MOD_SHIFT, XK_SPACE, Action::ToggleFloating),
         // Workspaces 1-9
         KeyBind::new(MOD_SUPER, XK_1, Action::Workspace(1)),

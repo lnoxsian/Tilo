@@ -96,6 +96,8 @@ pub struct WindowManager {
     pub config: Config,
     /// Built-in statusbar instance if enabled.
     pub statusbar: Option<Statusbar>,
+    /// Built-in application launcher instance if initialized.
+    pub launcher: Option<crate::launcher::Launcher>,
 }
 
 impl WindowManager {
@@ -164,6 +166,7 @@ impl WindowManager {
             monitor_manager,
             config,
             statusbar: None,
+            launcher: Some(crate::launcher::Launcher::new()),
         })
     }
 
@@ -332,6 +335,185 @@ impl WindowManager {
         Ok(())
     }
 
+    // -- Application Launcher (Phase 19, 20, 21) --
+
+    /// Opens the application launcher overlay, centering it on the active monitor and grabbing keyboard.
+    pub fn open_launcher(&mut self) -> Result<(), StatusbarError> {
+        let active_mon = self.monitor_manager.active_monitor().clone();
+        let width = 560u16;
+        let height = 300u16;
+        let x = (active_mon.x + (active_mon.width as i32 - width as i32) / 2).max(active_mon.x) as i16;
+        let y = (active_mon.y + (active_mon.height as i32 - height as i32) / 3).max(active_mon.y) as i16;
+        let rect = Rect::new(x as i32, y as i32, width as u32, height as u32);
+
+        let screen = &self.context.connection.setup().roots[self.context.screen_num];
+        let font_name = if !self.config.font.is_empty() {
+            self.config.font.as_str()
+        } else {
+            "monospace"
+        };
+
+        if self.launcher.is_none() {
+            self.launcher = Some(crate::launcher::Launcher::new());
+        }
+
+        let launcher = self.launcher.as_mut().unwrap();
+        launcher.rect = rect;
+
+        if launcher.window_id == 0 {
+            let win_id = crate::launcher::create_launcher_window(
+                &self.context.connection,
+                screen,
+                rect,
+                launcher.color_scheme.bg,
+            )?;
+            launcher.window_id = win_id;
+
+            if let Ok(renderer) = crate::render::Renderer::new(
+                &self.context.connection,
+                win_id,
+                width,
+                height,
+                screen.root_depth,
+                font_name,
+            ) {
+                launcher.attach_renderer(renderer);
+            }
+        } else {
+            // Reposition window if active monitor changed
+            let _ = self.context.connection.configure_window(
+                launcher.window_id,
+                &x11rb::protocol::xproto::ConfigureWindowAux::new()
+                    .x(x as i32)
+                    .y(y as i32)
+                    .width(width as u32)
+                    .height(height as u32),
+            );
+        }
+
+        // Map and raise
+        self.context.connection.map_window(launcher.window_id)?;
+        self.context.connection.configure_window(
+            launcher.window_id,
+            &x11rb::protocol::xproto::ConfigureWindowAux::new()
+                .stack_mode(x11rb::protocol::xproto::StackMode::ABOVE),
+        )?;
+
+        // Grab keyboard to route all keystrokes directly to launcher
+        let _ = self.context.connection.grab_keyboard(
+            false,
+            launcher.window_id,
+            x11rb::CURRENT_TIME,
+            x11rb::protocol::xproto::GrabMode::ASYNC,
+            x11rb::protocol::xproto::GrabMode::ASYNC,
+        )?;
+
+        launcher.visible = true;
+        launcher.query.clear();
+        launcher.selected_index = 0;
+
+        let _ = launcher.render(&self.context.connection);
+        self.context.flush()?;
+        Ok(())
+    }
+
+    /// Closes and unmaps the application launcher overlay, releasing keyboard grab.
+    pub fn close_launcher(&mut self) -> Result<(), StatusbarError> {
+        if let Some(ref mut launcher) = self.launcher {
+            if launcher.visible {
+                launcher.visible = false;
+                launcher.query.clear();
+                launcher.selected_index = 0;
+                let _ = self.context.connection.ungrab_keyboard(x11rb::CURRENT_TIME);
+                let _ = self.context.connection.unmap_window(launcher.window_id);
+                self.context.flush()?;
+
+                // Restore focus to active client window
+                if let Some(focused) = self.client_state.focused_window() {
+                    let _ = self.focus_client(focused);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Toggles the visibility of the application launcher overlay.
+    pub fn toggle_launcher(&mut self) -> Result<(), StatusbarError> {
+        let is_visible = self.launcher.as_ref().map(|l| l.visible).unwrap_or(false);
+        if is_visible {
+            self.close_launcher()
+        } else {
+            self.open_launcher()
+        }
+    }
+
+    /// Renders the launcher UI if visible.
+    pub fn render_launcher(&self) -> Result<(), StatusbarError> {
+        if let Some(ref launcher) = self.launcher {
+            if launcher.visible {
+                launcher.render(&self.context.connection)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Handles KeyPress events when the launcher overlay is active.
+    pub fn handle_launcher_key(&mut self, event: &KeyPressEvent) -> Result<(), X11Error> {
+        let mapping = match self.input_manager.mapping.as_ref() {
+            Some(m) => m,
+            None => return Ok(()),
+        };
+
+        if let Some(action) = crate::launcher::handle_launcher_keypress(event.detail, u16::from(event.state), mapping) {
+            match action {
+                crate::launcher::LauncherAction::Cancel => {
+                    let _ = self.close_launcher();
+                }
+                crate::launcher::LauncherAction::Execute => {
+                    let cmd_to_spawn = if let Some(ref launcher) = self.launcher {
+                        let results = launcher.filtered_results(8);
+                        let trimmed = launcher.query.trim();
+                        if trimmed.is_empty() {
+                            None
+                        } else if trimmed.contains(' ') {
+                            // User typed arguments: e.g. "firefox --private-window"
+                            // If first word matches selected result, use selected binary with the typed arguments
+                            let first_word = trimmed.split_whitespace().next().unwrap_or("");
+                            let args_part = &trimmed[first_word.len()..];
+                            let binary = if let Some(sel) = results.get(launcher.selected_index) {
+                                sel.as_str()
+                            } else {
+                                first_word
+                            };
+                            Some(format!("{}{}", binary, args_part))
+                        } else if let Some(selected) = results.get(launcher.selected_index) {
+                            Some(selected.clone())
+                        } else {
+                            Some(trimmed.to_string())
+                        }
+                    } else {
+                        None
+                    };
+
+                    let _ = self.close_launcher();
+
+                    if let Some(cmd) = cmd_to_spawn {
+                        if let Err(e) = crate::launcher::spawn_app(&cmd) {
+                            eprintln!("[WARN  tilo::launcher] {}", e);
+                        }
+                    }
+                }
+                other => {
+                    if let Some(ref mut launcher) = self.launcher {
+                        crate::launcher::update_launcher_state(launcher, other);
+                    }
+                    let _ = self.render_launcher();
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Updates the root window's `_NET_ACTIVE_WINDOW` property.
     pub fn update_ewmh_active_window(&self) -> Result<(), X11Error> {
         let focused = self.client_state.focused_window();
@@ -439,6 +621,12 @@ impl WindowManager {
                 self.handle_property_notify(&ev)?;
             }
             Event::KeyPress(ev) => {
+                if let Some(ref launcher) = self.launcher {
+                    if launcher.visible {
+                        self.handle_launcher_key(&ev)?;
+                        return Ok(());
+                    }
+                }
                 self.handle_key_press(&ev)?;
             }
             Event::ButtonPress(ev) => {
@@ -456,6 +644,11 @@ impl WindowManager {
                 if let Some(ref bar) = self.statusbar {
                     if ev.window == bar.window_id {
                         let _ = self.render_statusbar();
+                    }
+                }
+                if let Some(ref launcher) = self.launcher {
+                    if launcher.visible && ev.window == launcher.window_id {
+                        let _ = self.render_launcher();
                     }
                 }
             }
@@ -1702,6 +1895,9 @@ impl WindowManager {
                         err
                     );
                 }
+            }
+            Action::Launcher => {
+                let _ = self.toggle_launcher();
             }
             Action::Exit => {
                 self.stop();
