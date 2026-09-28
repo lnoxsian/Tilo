@@ -268,7 +268,7 @@ impl WindowManager {
         let font_name = if !self.config.font.is_empty() {
             self.config.font.as_str()
         } else {
-            "fixed"
+            "monospace"
         };
         if let Ok(renderer) = crate::render::Renderer::new(
             &self.context.connection,

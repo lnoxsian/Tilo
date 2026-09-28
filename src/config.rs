@@ -84,7 +84,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             mod_key: "Mod4".to_string(),
-            font: "JetBrainsMono Nerd Font 10".to_string(),
+            font: "monospace".to_string(),
             border_width: 2,
             inner_gap: 8,
             outer_gap: 8,
@@ -665,5 +665,11 @@ bind Mod4+Shift+2 move_workspace 2
             }
             _ => panic!("Expected InvalidValue error"),
         }
+    }
+
+    #[test]
+    fn test_default_config_font_is_monospace() {
+        let config = Config::default();
+        assert_eq!(config.font, "monospace");
     }
 }
