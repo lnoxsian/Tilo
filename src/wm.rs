@@ -25,8 +25,8 @@ use crate::icccm::{
 use crate::input::InputManager;
 use crate::keybind::{parse_modifier, Action, MOD_LOCK, MOD_SUPER};
 use crate::layout::{
-    apply_layout_with_border, calculate_horizontal, calculate_master_stack, calculate_monocle,
-    calculate_vertical, LayoutConfig, LayoutType, Rect,
+    apply_layout_with_border, calculate_master_stack, calculate_monocle,
+    LayoutConfig, LayoutType, Rect,
 };
 use crate::rules::{apply_rules as apply_window_rules, RuleAction, WindowRule};
 use crate::statusbar::{create_statusbar_window, Statusbar, StatusbarError};
@@ -1187,26 +1187,21 @@ impl WindowManager {
 
         if let Some(ws) = self.workspace_manager.get_mut(ws_id) {
             match ws.layout {
-                LayoutType::Bsp => {
-                    let focused = self.workspace_focus.focused_window_on(ws_id);
-                    ws.bsp_tree.sync_clients(&visible_tiled, focused, usable_rect, self.layout_config.inner_gap);
-                    ws.bsp_tree.calculate_rects(usable_rect, &self.layout_config)
-                }
-                LayoutType::MasterStack => {
-                    let rects = calculate_master_stack(&visible_tiled, usable_rect, &self.layout_config);
-                    visible_tiled.into_iter().zip(rects.into_iter()).collect()
-                }
-                LayoutType::Vertical => {
-                    let rects = calculate_vertical(&visible_tiled, usable_rect, &self.layout_config);
-                    visible_tiled.into_iter().zip(rects.into_iter()).collect()
-                }
-                LayoutType::Horizontal => {
-                    let rects = calculate_horizontal(&visible_tiled, usable_rect, &self.layout_config);
-                    visible_tiled.into_iter().zip(rects.into_iter()).collect()
-                }
                 LayoutType::Monocle | LayoutType::Tabbed | LayoutType::Stacked => {
                     let rects = calculate_monocle(&visible_tiled, usable_rect, &self.layout_config);
                     visible_tiled.into_iter().zip(rects.into_iter()).collect()
+                }
+                layout => {
+                    let focused = self.workspace_focus.focused_window_on(ws_id);
+                    ws.bsp_tree.sync_clients_with_layout(
+                        layout,
+                        &visible_tiled,
+                        focused,
+                        usable_rect,
+                        self.layout_config.inner_gap,
+                        self.layout_config.master_ratio,
+                    );
+                    ws.bsp_tree.calculate_rects(usable_rect, &self.layout_config)
                 }
             }
         } else {
@@ -2485,32 +2480,42 @@ impl WindowManager {
             }
             Action::ResizeTile(dir) => {
                 let current_ws = self.workspace_manager.current_id();
-                if let Some(focused) = self.workspace_focus.focused_window_on(current_ws) {
+                let focused = self.focused_window()
+                    .or_else(|| self.workspace_focus.focused_window_on(current_ws));
+
+                if let Some(win) = focused {
+                    // 1. Floating window resizing in all 4 directions via keyboard
+                    let is_floating = self.client_state.get_client(win).map(|c| c.floating).unwrap_or(false);
+                    if is_floating {
+                        let step = 30;
+                        let geom = self.client_state.get_client(win).and_then(|c| c.floating_geometry).unwrap_or_else(|| {
+                            crate::floating::calculate_default_floating_geometry(self.context.screen_width, self.context.screen_height)
+                        });
+                        let (new_w, new_h) = match dir {
+                            Direction::Right => ((geom.width + step).min(self.context.screen_width as u32), geom.height),
+                            Direction::Left => (geom.width.saturating_sub(step).max(100), geom.height),
+                            Direction::Down => (geom.width, (geom.height + step).min(self.context.screen_height as u32)),
+                            Direction::Up => (geom.width, geom.height.saturating_sub(step).max(80)),
+                        };
+                        let _ = self.resize_floating(win, new_w, new_h);
+                        return Ok(());
+                    }
+
+                    // 2. Tiled window resizing across all layouts
                     if let Some(ws) = self.workspace_manager.get_mut(current_ws) {
-                        match ws.layout {
-                            LayoutType::Bsp => {
-                                let (split_type, delta) = match dir {
-                                    Direction::Left => (crate::layout::SplitType::Horizontal, -0.05),
-                                    Direction::Right => (crate::layout::SplitType::Horizontal, 0.05),
-                                    Direction::Up => (crate::layout::SplitType::Vertical, -0.05),
-                                    Direction::Down => (crate::layout::SplitType::Vertical, 0.05),
-                                };
-                                if ws.bsp_tree.resize_window(focused, delta, split_type) {
-                                    let _ = self.retile();
+                        let (split_type, delta) = match dir {
+                            Direction::Left => (crate::layout::SplitType::Horizontal, -0.05),
+                            Direction::Right => (crate::layout::SplitType::Horizontal, 0.05),
+                            Direction::Up => (crate::layout::SplitType::Vertical, -0.05),
+                            Direction::Down => (crate::layout::SplitType::Vertical, 0.05),
+                        };
+                        if ws.bsp_tree.resize_window(win, delta, split_type) {
+                            if ws.layout == LayoutType::MasterStack {
+                                if let Some(r) = ws.bsp_tree.master_ratio() {
+                                    self.layout_config.master_ratio = r;
                                 }
                             }
-                            LayoutType::MasterStack => {
-                                let delta = match dir {
-                                    Direction::Right => 0.05,
-                                    Direction::Left => -0.05,
-                                    _ => 0.0,
-                                };
-                                if delta != 0.0 {
-                                    self.layout_config.master_ratio = (self.layout_config.master_ratio + delta).clamp(0.10, 0.90);
-                                    let _ = self.retile();
-                                }
-                            }
-                            _ => {}
+                            let _ = self.retile();
                         }
                     }
                 }
@@ -2524,16 +2529,22 @@ impl WindowManager {
             }
             Action::CycleLayout => {
                 let current_ws = self.workspace_manager.current_id();
+                let visible_tiled = self.client_state.visible_tiled_clients_on_workspace(current_ws);
+                let master_ratio = self.layout_config.master_ratio;
                 if let Some(ws) = self.workspace_manager.get_mut(current_ws) {
                     ws.cycle_layout();
+                    ws.bsp_tree.rebuild_for_layout(ws.layout, &visible_tiled, master_ratio);
                 }
                 self.retile()?;
                 self.render_statusbar().ok();
             }
             Action::SetLayout(layout) => {
                 let current_ws = self.workspace_manager.current_id();
+                let visible_tiled = self.client_state.visible_tiled_clients_on_workspace(current_ws);
+                let master_ratio = self.layout_config.master_ratio;
                 if let Some(ws) = self.workspace_manager.get_mut(current_ws) {
                     ws.set_layout(layout);
+                    ws.bsp_tree.rebuild_for_layout(layout, &visible_tiled, master_ratio);
                 }
                 self.retile()?;
                 self.render_statusbar().ok();
@@ -2787,14 +2798,7 @@ impl WindowManager {
                 let delta_y = event.root_y as i32 - start_y;
                 let new_w = (start_width as i32 + delta_x).max(100) as u32;
                 let new_h = (start_height as i32 + delta_y).max(80) as u32;
-                if let Some(client) = self.client_state.get_client_mut(window) {
-                    if let Some(ref mut fg) = client.floating_geometry {
-                        fg.width = new_w;
-                        fg.height = new_h;
-                    } else {
-                        client.floating_geometry = Some(crate::floating::FloatingGeometry::new(0, 0, new_w, new_h));
-                    }
-                }
+                let _ = self.resize_floating(window, new_w, new_h);
             }
             crate::mouse::MouseAction::ResizingTiled {
                 window,
@@ -2804,23 +2808,21 @@ impl WindowManager {
             } => {
                 let delta_x = event.root_x as i32 - start_x;
                 let delta_y = event.root_y as i32 - start_y;
+                self.mouse_action = crate::mouse::MouseAction::ResizingTiled {
+                    window,
+                    start_x: event.root_x as i32,
+                    start_y: event.root_y as i32,
+                    initial_rect,
+                };
                 let current_ws = self.workspace_manager.current_id();
                 if let Some(ws) = self.workspace_manager.get_mut(current_ws) {
-                    match ws.layout {
-                        LayoutType::Bsp => {
-                            if ws.bsp_tree.resize_by_pointer(window, delta_x, delta_y, initial_rect) {
-                                let _ = self.retile();
+                    if ws.bsp_tree.resize_by_pointer(window, delta_x, delta_y, initial_rect) {
+                        if ws.layout == LayoutType::MasterStack {
+                            if let Some(r) = ws.bsp_tree.master_ratio() {
+                                self.layout_config.master_ratio = r;
                             }
                         }
-                        LayoutType::MasterStack => {
-                            let delta_ratio = delta_x as f32 / initial_rect.width.max(1) as f32 * 0.2;
-                            let new_ratio = (self.layout_config.master_ratio + delta_ratio).clamp(0.10, 0.90);
-                            if (new_ratio - self.layout_config.master_ratio).abs() > 0.001 {
-                                self.layout_config.master_ratio = new_ratio;
-                                let _ = self.retile();
-                            }
-                        }
-                        _ => {}
+                        let _ = self.retile();
                     }
                 }
             }

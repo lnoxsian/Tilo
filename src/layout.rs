@@ -617,69 +617,150 @@ impl BspNode {
     }
 
     /// Resizes the ancestor split of `target` that matches `target_split`.
-    pub fn resize_ancestor(&mut self, target: Window, delta: f32, target_split: SplitType) -> bool {
+    /// Resizes the focused pane `target` by `delta` along `target_split` such that
+    /// only `target` and its immediate adjacent neighbor in that linear sequence change size,
+    /// leaving all other panes completely unchanged.
+    pub fn resize_pane(&mut self, target: Window, delta: f32, target_split: SplitType) -> bool {
+        if let Some(highest) = self.find_highest_split_mut(target, target_split) {
+            highest.adjust_linear_leaf(target, delta, target_split)
+        } else {
+            self.resize_any_split(delta, target_split)
+        }
+    }
+
+    /// Finds a mutable reference to the highest continuous ancestor split of `target_split` containing `target`.
+    fn find_highest_split_mut(&mut self, target: Window, target_split: SplitType) -> Option<&mut BspNode> {
+        if !self.contains(target) {
+            return None;
+        }
+
+        if let BspNode::Split { split_type, .. } = self {
+            if *split_type == target_split {
+                return Some(self);
+            }
+        }
+
         match self {
-            BspNode::Leaf { .. } => false,
-            BspNode::Split { split_type, ratio, first, second } => {
-                if *split_type == target_split {
-                    if first.contains(target) {
-                        *ratio = (*ratio + delta).clamp(0.05, 0.95);
-                        return true;
-                    } else if second.contains(target) {
-                        *ratio = (*ratio - delta).clamp(0.05, 0.95);
-                        return true;
-                    }
+            BspNode::Split { first, second, .. } => {
+                if first.contains(target) {
+                    first.find_highest_split_mut(target, target_split)
+                } else if second.contains(target) {
+                    second.find_highest_split_mut(target, target_split)
+                } else {
+                    None
                 }
-                first.resize_ancestor(target, delta, target_split)
-                    || second.resize_ancestor(target, delta, target_split)
+            }
+            _ => None,
+        }
+    }
+
+    /// Adjusts the leaf corresponding to `target` within this linear subtree of `target_split`.
+    fn adjust_linear_leaf(&mut self, target: Window, delta: f32, target_split: SplitType) -> bool {
+        let mut units = Vec::new();
+        self.collect_split_units(target_split, 1.0, &mut units);
+
+        if units.len() < 2 {
+            return false;
+        }
+
+        let target_idx = match units.iter().position(|(wins, _)| wins.contains(&target)) {
+            Some(i) => i,
+            None => return false,
+        };
+
+        let neighbor_idx = if target_idx + 1 < units.len() {
+            target_idx + 1
+        } else if target_idx > 0 {
+            target_idx - 1
+        } else {
+            return false;
+        };
+
+        let min_weight = 0.05;
+        if delta > 0.0 {
+            let max_delta = (units[neighbor_idx].1 - min_weight).max(0.0);
+            let actual = delta.min(max_delta);
+            if actual <= 0.0001 {
+                return false;
+            }
+            units[target_idx].1 += actual;
+            units[neighbor_idx].1 -= actual;
+        } else {
+            let max_delta = (units[target_idx].1 - min_weight).max(0.0);
+            let actual = (-delta).min(max_delta);
+            if actual <= 0.0001 {
+                return false;
+            }
+            units[target_idx].1 -= actual;
+            units[neighbor_idx].1 += actual;
+        }
+
+        self.apply_split_unit_weights(target_split, &units);
+        true
+    }
+
+    fn collect_split_units(&self, target_split: SplitType, factor: f32, out: &mut Vec<(Vec<Window>, f32)>) {
+        match self {
+            BspNode::Leaf { window } => {
+                out.push((vec![*window], factor));
+            }
+            BspNode::Split { split_type, ratio, first, second } if *split_type == target_split => {
+                first.collect_split_units(target_split, factor * *ratio, out);
+                second.collect_split_units(target_split, factor * (1.0 - *ratio), out);
+            }
+            BspNode::Split { .. } => {
+                out.push((self.windows(), factor));
             }
         }
     }
 
-    /// Resizes the closest ancestor split based on pointer drag deltas.
-    pub fn resize_by_pointer(&mut self, target: Window, delta_x: i32, delta_y: i32, initial_rect: Rect) -> bool {
+    fn apply_split_unit_weights(&mut self, target_split: SplitType, units: &[(Vec<Window>, f32)]) {
+        match self {
+            BspNode::Leaf { .. } => {}
+            BspNode::Split { split_type, ratio, first, second } if *split_type == target_split => {
+                let first_wins = first.windows();
+                let second_wins = second.windows();
+
+                let sum_first: f32 = units
+                    .iter()
+                    .filter(|(wins, _)| wins.iter().any(|w| first_wins.contains(w)))
+                    .map(|(_, s)| *s)
+                    .sum();
+                let sum_second: f32 = units
+                    .iter()
+                    .filter(|(wins, _)| wins.iter().any(|w| second_wins.contains(w)))
+                    .map(|(_, s)| *s)
+                    .sum();
+
+                let total = sum_first + sum_second;
+                if total > 0.0 {
+                    *ratio = (sum_first / total).clamp(0.05, 0.95);
+                }
+
+                first.apply_split_unit_weights(target_split, units);
+                second.apply_split_unit_weights(target_split, units);
+            }
+            _ => {}
+        }
+    }
+
+    /// Resizes the ancestor split of `target` that matches `target_split`.
+    pub fn resize_ancestor(&mut self, target: Window, delta: f32, target_split: SplitType) -> bool {
+        self.resize_pane(target, delta, target_split)
+    }
+
+    /// Resizes the first split matching `target_split` in this subtree.
+    pub fn resize_any_split(&mut self, delta: f32, target_split: SplitType) -> bool {
         match self {
             BspNode::Leaf { .. } => false,
             BspNode::Split { split_type, ratio, first, second } => {
-                // If this split directly contains `target`, check if the drag movement corresponds to its split orientation
-                if first.contains(target) || second.contains(target) {
-                    let is_first = first.contains(target);
-                    let handled = match split_type {
-                        SplitType::Horizontal => {
-                            if initial_rect.width > 0 && delta_x != 0 {
-                                let frac = delta_x as f32 / initial_rect.width as f32;
-                                if is_first {
-                                    *ratio = (*ratio + frac).clamp(0.05, 0.95);
-                                } else {
-                                    *ratio = (*ratio - frac).clamp(0.05, 0.95);
-                                }
-                                true
-                            } else {
-                                false
-                            }
-                        }
-                        SplitType::Vertical => {
-                            if initial_rect.height > 0 && delta_y != 0 {
-                                let frac = delta_y as f32 / initial_rect.height as f32;
-                                if is_first {
-                                    *ratio = (*ratio + frac).clamp(0.05, 0.95);
-                                } else {
-                                    *ratio = (*ratio - frac).clamp(0.05, 0.95);
-                                }
-                                true
-                            } else {
-                                false
-                            }
-                        }
-                    };
-
-                    if handled {
-                        return true;
-                    }
+                if *split_type == target_split {
+                    *ratio = (*ratio + delta).clamp(0.05, 0.95);
+                    true
+                } else {
+                    first.resize_any_split(delta, target_split)
+                        || second.resize_any_split(delta, target_split)
                 }
-
-                first.resize_by_pointer(target, delta_x, delta_y, initial_rect)
-                    || second.resize_by_pointer(target, delta_x, delta_y, initial_rect)
             }
         }
     }
@@ -861,9 +942,22 @@ impl BspTree {
     }
 
     /// Resizes the ancestor split of `window` by `delta_ratio` ($\pm 0.05$).
+    /// Returns the current horizontal split ratio if the root is a horizontal split.
+    pub fn master_ratio(&self) -> Option<f32> {
+        match self.root.as_deref() {
+            Some(BspNode::Split { split_type: SplitType::Horizontal, ratio, .. }) => Some(*ratio),
+            _ => None,
+        }
+    }
+
+    /// Resizes the ancestor split of `window` by `delta_ratio` ($\pm 0.05$), falling back to any matching split.
     pub fn resize_window(&mut self, window: Window, delta_ratio: f32, split_type: SplitType) -> bool {
         if let Some(ref mut root) = self.root {
-            root.resize_ancestor(window, delta_ratio, split_type)
+            if root.resize_ancestor(window, delta_ratio, split_type) {
+                true
+            } else {
+                root.resize_any_split(delta_ratio, split_type)
+            }
         } else {
             false
         }
@@ -871,11 +965,22 @@ impl BspTree {
 
     /// Dynamically resizes a window's split during mouse drag.
     pub fn resize_by_pointer(&mut self, window: Window, delta_x: i32, delta_y: i32, initial_rect: Rect) -> bool {
+        let mut handled = false;
         if let Some(ref mut root) = self.root {
-            root.resize_by_pointer(window, delta_x, delta_y, initial_rect)
-        } else {
-            false
+            if initial_rect.width > 0 && delta_x != 0 {
+                let frac = delta_x as f32 / initial_rect.width as f32;
+                if root.resize_pane(window, frac, SplitType::Horizontal) {
+                    handled = true;
+                }
+            }
+            if initial_rect.height > 0 && delta_y != 0 {
+                let frac = delta_y as f32 / initial_rect.height as f32;
+                if root.resize_pane(window, frac, SplitType::Vertical) {
+                    handled = true;
+                }
+            }
         }
+        handled
     }
 
     /// Calculates bounding rectangles for all windows in the tree.
@@ -908,18 +1013,142 @@ impl BspTree {
         pairs
     }
 
-    /// Synchronizes the tree with a list of currently visible tiled windows.
-    pub fn sync_clients(&mut self, visible_clients: &[Window], focused: Option<Window>, usable_rect: &Rect, inner_gap: u32) {
+    /// Builds a Master/Stack binary layout tree.
+    pub fn build_master_stack(clients: &[Window], master_ratio: f32) -> Option<Box<BspNode>> {
+        match clients.len() {
+            0 => None,
+            1 => Some(Box::new(BspNode::Leaf { window: clients[0] })),
+            _ => {
+                let master = clients[0];
+                let stack = &clients[1..];
+                Some(Box::new(BspNode::Split {
+                    split_type: SplitType::Horizontal,
+                    ratio: master_ratio.clamp(0.05, 0.95),
+                    first: Box::new(BspNode::Leaf { window: master }),
+                    second: Self::build_linear(stack, SplitType::Vertical),
+                }))
+            }
+        }
+    }
+
+    /// Builds a Vertical (side-by-side columns) binary layout tree.
+    pub fn build_vertical(clients: &[Window]) -> Option<Box<BspNode>> {
+        if clients.is_empty() {
+            None
+        } else {
+            Some(Self::build_linear(clients, SplitType::Horizontal))
+        }
+    }
+
+    /// Builds a Horizontal (stacked rows) binary layout tree.
+    pub fn build_horizontal(clients: &[Window]) -> Option<Box<BspNode>> {
+        if clients.is_empty() {
+            None
+        } else {
+            Some(Self::build_linear(clients, SplitType::Vertical))
+        }
+    }
+
+    fn build_linear(clients: &[Window], split_type: SplitType) -> Box<BspNode> {
+        let k = clients.len();
+        if k <= 1 {
+            Box::new(BspNode::Leaf { window: clients[0] })
+        } else {
+            let ratio = (1.0 / k as f32).clamp(0.05, 0.95);
+            Box::new(BspNode::Split {
+                split_type,
+                ratio,
+                first: Box::new(BspNode::Leaf { window: clients[0] }),
+                second: Self::build_linear(&clients[1..], split_type),
+            })
+        }
+    }
+
+    /// Rebuilds the tree structure for the specified layout type while preserving client order.
+    pub fn rebuild_for_layout(&mut self, layout: LayoutType, clients: &[Window], master_ratio: f32) {
+        self.root = match layout {
+            LayoutType::MasterStack => Self::build_master_stack(clients, master_ratio),
+            LayoutType::Vertical => Self::build_vertical(clients),
+            LayoutType::Horizontal => Self::build_horizontal(clients),
+            LayoutType::Bsp => {
+                let current_wins = self.windows();
+                if current_wins.len() == clients.len() && clients.iter().all(|w| current_wins.contains(w)) && self.root.is_some() {
+                    return;
+                }
+                let mut tree = BspTree::new();
+                let dummy_rect = Rect::new(0, 0, 1920, 1080);
+                for &w in clients {
+                    tree.insert(None, w, &dummy_rect, 0);
+                }
+                tree.root
+            }
+            LayoutType::Monocle | LayoutType::Tabbed | LayoutType::Stacked => None,
+        };
+    }
+
+    /// Synchronizes the tree with visible clients using layout-specific insertion rules.
+    pub fn sync_clients_with_layout(
+        &mut self,
+        layout: LayoutType,
+        visible_clients: &[Window],
+        focused: Option<Window>,
+        usable_rect: &Rect,
+        inner_gap: u32,
+        master_ratio: f32,
+    ) {
         for w in self.windows() {
             if !visible_clients.contains(&w) {
                 self.remove(w);
             }
         }
+
+        if self.is_empty() {
+            self.rebuild_for_layout(layout, visible_clients, master_ratio);
+            return;
+        }
+
         for &w in visible_clients {
             if !self.contains(w) {
-                self.insert(focused, w, usable_rect, inner_gap);
+                match layout {
+                    LayoutType::MasterStack => {
+                        let wins = self.windows();
+                        if wins.len() == 1 {
+                            let m = wins[0];
+                            if let Some(ref mut root) = self.root {
+                                root.insert_at(m, w, SplitType::Horizontal, master_ratio.clamp(0.05, 0.95));
+                            }
+                        } else {
+                            let last = wins.last().copied().unwrap();
+                            if let Some(ref mut root) = self.root {
+                                root.insert_at(last, w, SplitType::Vertical, 0.5);
+                            }
+                        }
+                    }
+                    LayoutType::Vertical => {
+                        let wins = self.windows();
+                        let last = wins.last().copied().unwrap();
+                        if let Some(ref mut root) = self.root {
+                            root.insert_at(last, w, SplitType::Horizontal, 0.5);
+                        }
+                    }
+                    LayoutType::Horizontal => {
+                        let wins = self.windows();
+                        let last = wins.last().copied().unwrap();
+                        if let Some(ref mut root) = self.root {
+                            root.insert_at(last, w, SplitType::Vertical, 0.5);
+                        }
+                    }
+                    _ => {
+                        self.insert(focused, w, usable_rect, inner_gap);
+                    }
+                }
             }
         }
+    }
+
+    /// Synchronizes the tree with a list of currently visible tiled windows.
+    pub fn sync_clients(&mut self, visible_clients: &[Window], focused: Option<Window>, usable_rect: &Rect, inner_gap: u32) {
+        self.sync_clients_with_layout(LayoutType::Bsp, visible_clients, focused, usable_rect, inner_gap, 0.55);
     }
 }
 
@@ -1231,5 +1460,71 @@ mod tests {
         assert_eq!(r3[1], r3[2]);
         assert_eq!(r3[0].width, 1000 - 20 - 4);
         assert_eq!(r3[0].height, 600 - 20 - 4);
+    }
+
+    #[test]
+    fn test_resize_pane_isolates_changes_to_adjacent_neighbor_only() {
+        let screen = Rect::new(0, 0, 1200, 900);
+        let config = LayoutConfig {
+            master_ratio: 0.50,
+            inner_gap: 0,
+            outer_gap: 0,
+            border_width: 0,
+        };
+
+        // 1. Master/Stack layout: resizing stack window 2 must NOT change master window 1
+        let mut tree_ms = BspTree::new();
+        tree_ms.rebuild_for_layout(LayoutType::MasterStack, &[1, 2, 3], 0.50);
+        let rects_ms_init = tree_ms.calculate_rects(&screen, &config);
+        let r1_init = rects_ms_init.iter().find(|(w, _)| *w == 1).unwrap().1;
+        let r2_init = rects_ms_init.iter().find(|(w, _)| *w == 2).unwrap().1;
+        let r3_init = rects_ms_init.iter().find(|(w, _)| *w == 3).unwrap().1;
+
+        assert!(tree_ms.resize_window(2, 0.05, SplitType::Vertical));
+        let rects_ms_post = tree_ms.calculate_rects(&screen, &config);
+        let r1_post = rects_ms_post.iter().find(|(w, _)| *w == 1).unwrap().1;
+        let r2_post = rects_ms_post.iter().find(|(w, _)| *w == 2).unwrap().1;
+        let r3_post = rects_ms_post.iter().find(|(w, _)| *w == 3).unwrap().1;
+
+        assert_eq!(r1_post.width, r1_init.width, "Master width must remain strictly unchanged");
+        assert_eq!(r1_post.height, r1_init.height, "Master height must remain strictly unchanged");
+        assert!(r2_post.height > r2_init.height, "Window 2 height must increase");
+        assert!(r3_post.height < r3_init.height, "Window 3 height must decrease");
+
+        // 2. Vertical layout: 3 columns. Resizing window 1 must NOT change non-adjacent window 3
+        let mut tree_v = BspTree::new();
+        tree_v.rebuild_for_layout(LayoutType::Vertical, &[1, 2, 3], 0.50);
+        let rects_v_init = tree_v.calculate_rects(&screen, &config);
+        let v1_init = rects_v_init.iter().find(|(w, _)| *w == 1).unwrap().1;
+        let v2_init = rects_v_init.iter().find(|(w, _)| *w == 2).unwrap().1;
+        let v3_init = rects_v_init.iter().find(|(w, _)| *w == 3).unwrap().1;
+
+        assert!(tree_v.resize_window(1, 0.05, SplitType::Horizontal));
+        let rects_v_post = tree_v.calculate_rects(&screen, &config);
+        let v1_post = rects_v_post.iter().find(|(w, _)| *w == 1).unwrap().1;
+        let v2_post = rects_v_post.iter().find(|(w, _)| *w == 2).unwrap().1;
+        let v3_post = rects_v_post.iter().find(|(w, _)| *w == 3).unwrap().1;
+
+        assert!(v1_post.width > v1_init.width, "Window 1 width must increase");
+        assert!(v2_post.width < v2_init.width, "Adjacent Window 2 width must decrease");
+        assert_eq!(v3_post.width, v3_init.width, "Non-adjacent Window 3 width must remain strictly unchanged");
+
+        // 3. Horizontal layout: 3 rows. Resizing window 1 must NOT change non-adjacent window 3
+        let mut tree_h = BspTree::new();
+        tree_h.rebuild_for_layout(LayoutType::Horizontal, &[1, 2, 3], 0.50);
+        let rects_h_init = tree_h.calculate_rects(&screen, &config);
+        let h1_init = rects_h_init.iter().find(|(w, _)| *w == 1).unwrap().1;
+        let h2_init = rects_h_init.iter().find(|(w, _)| *w == 2).unwrap().1;
+        let h3_init = rects_h_init.iter().find(|(w, _)| *w == 3).unwrap().1;
+
+        assert!(tree_h.resize_window(1, 0.05, SplitType::Vertical));
+        let rects_h_post = tree_h.calculate_rects(&screen, &config);
+        let h1_post = rects_h_post.iter().find(|(w, _)| *w == 1).unwrap().1;
+        let h2_post = rects_h_post.iter().find(|(w, _)| *w == 2).unwrap().1;
+        let h3_post = rects_h_post.iter().find(|(w, _)| *w == 3).unwrap().1;
+
+        assert!(h1_post.height > h1_init.height, "Window 1 height must increase");
+        assert!(h2_post.height < h2_init.height, "Adjacent Window 2 height must decrease");
+        assert_eq!(h3_post.height, h3_init.height, "Non-adjacent Window 3 height must remain strictly unchanged");
     }
 }
