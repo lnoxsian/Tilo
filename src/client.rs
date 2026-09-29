@@ -61,7 +61,7 @@ impl Client {
 
     /// Returns true if this client is in fullscreen mode.
     pub fn is_fullscreen(&self) -> bool {
-        self.fullscreen || matches!(self.fullscreen_state, FullscreenState::Fullscreen { .. })
+        self.fullscreen || self.fullscreen_state.is_fullscreen()
     }
 
     /// Sets the client to fullscreen mode, saving its previous geometry and border width.
@@ -153,8 +153,7 @@ impl ClientState {
             .filter(|&w| {
                 self.clients
                     .get(&w)
-                    .map(|c| c.mapped && !c.is_floating() && !c.is_fullscreen())
-                    .unwrap_or(false)
+                    .is_some_and(|c| c.mapped && !c.is_floating() && !c.is_fullscreen())
             })
             .collect()
     }
@@ -167,8 +166,7 @@ impl ClientState {
             .filter(|&w| {
                 self.clients
                     .get(&w)
-                    .map(|c| c.workspace == workspace)
-                    .unwrap_or(false)
+                    .is_some_and(|c| c.workspace == workspace)
             })
             .collect()
     }
@@ -186,10 +184,9 @@ impl ClientState {
             .filter(|&w| {
                 self.clients
                     .get(&w)
-                    .map(|c| {
+                    .is_some_and(|c| {
                         c.workspace == workspace && c.mapped && !c.is_floating() && !c.is_fullscreen()
                     })
-                    .unwrap_or(false)
             })
             .collect()
     }
@@ -202,8 +199,7 @@ impl ClientState {
             .filter(|&w| {
                 self.clients
                     .get(&w)
-                    .map(|c| c.workspace == workspace && c.mapped && c.is_floating() && !c.is_fullscreen())
-                    .unwrap_or(false)
+                    .is_some_and(|c| c.workspace == workspace && c.mapped && c.is_floating() && !c.is_fullscreen())
             })
             .collect()
     }
@@ -216,8 +212,7 @@ impl ClientState {
             .filter(|&w| {
                 self.clients
                     .get(&w)
-                    .map(|c| c.workspace == workspace && c.mapped && c.is_fullscreen())
-                    .unwrap_or(false)
+                    .is_some_and(|c| c.workspace == workspace && c.mapped && c.is_fullscreen())
             })
             .collect()
     }

@@ -71,8 +71,8 @@ fn test_fullscreen_mode_in_xephyr() {
         let mut wm = WindowManager::new(wm_ctx).expect("Failed to initialize WM");
         let root = wm.context.root_window;
         let ewmh = wm.ewmh_atoms;
-        let screen_width = wm.context.screen_width as u16;
-        let screen_height = wm.context.screen_height as u16;
+        let screen_width = wm.context.screen_width;
+        let screen_height = wm.context.screen_height;
 
         assert_eq!(screen_width, 1000);
         assert_eq!(screen_height, 800);

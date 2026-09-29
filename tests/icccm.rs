@@ -138,15 +138,14 @@ fn test_icccm_protocols_and_wm_state_in_xephyr() {
 
         let mut received_take_focus = false;
         while let Some(event) = client_conn.poll_for_event().unwrap() {
-            if let Event::ClientMessage(msg) = event {
-                if msg.window == win1 && msg.type_ == wm_protocols {
+            if let Event::ClientMessage(msg) = event
+                && msg.window == win1 && msg.type_ == wm_protocols {
                     let data = msg.data.as_data32();
                     if data[0] == wm_take_focus {
                         received_take_focus = true;
                         break;
                     }
                 }
-            }
         }
         assert!(received_take_focus, "Client should receive WM_TAKE_FOCUS ClientMessage");
 
@@ -157,15 +156,14 @@ fn test_icccm_protocols_and_wm_state_in_xephyr() {
         // Client checks for ClientMessage event
         let mut received_delete = false;
         while let Some(event) = client_conn.poll_for_event().unwrap() {
-            if let Event::ClientMessage(msg) = event {
-                if msg.window == win1 && msg.type_ == wm_protocols {
+            if let Event::ClientMessage(msg) = event
+                && msg.window == win1 && msg.type_ == wm_protocols {
                     let data = msg.data.as_data32();
                     if data[0] == wm_delete {
                         received_delete = true;
                         break;
                     }
                 }
-            }
         }
         assert!(received_delete, "Client should receive WM_DELETE_WINDOW ClientMessage");
 

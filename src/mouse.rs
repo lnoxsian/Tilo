@@ -17,8 +17,10 @@ use x11rb::protocol::xproto::{
 
 /// The current mouse interaction state.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Default)]
 pub enum MouseAction {
     /// No action is currently in progress.
+    #[default]
     None,
     /// Dragging a window to move it.
     Moving {
@@ -45,11 +47,6 @@ pub enum MouseAction {
     },
 }
 
-impl Default for MouseAction {
-    fn default() -> Self {
-        Self::None
-    }
-}
 
 impl MouseAction {
     /// Returns `true` if a drag operation (move or resize) is currently active.

@@ -54,18 +54,13 @@ impl From<FloatingGeometry> for Rect {
 }
 
 /// Indicates whether a client is tiled or floating.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum ClientLayoutState {
     /// Window is managed by the tiling algorithm.
+    #[default]
     Tiled,
     /// Window is floating and placed freely. Contains its last known geometry.
     Floating(FloatingGeometry),
-}
-
-impl Default for ClientLayoutState {
-    fn default() -> Self {
-        Self::Tiled
-    }
 }
 
 /// Calculates the default centered geometry for a floating window based on screen dimensions.

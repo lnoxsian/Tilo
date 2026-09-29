@@ -142,7 +142,7 @@ pub fn tokenize(content: &str) -> Result<Vec<Token>, ConfigError> {
                 } else {
                     None
                 };
-                let is_end_of_token = next_char.map_or(true, |ch| {
+                let is_end_of_token = next_char.is_none_or(|ch| {
                     ch.is_whitespace() || ch == '\n' || ch == '\r' || ch == '#'
                 });
 

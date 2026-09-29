@@ -335,11 +335,10 @@ pub fn get_net_wm_state(
         32,
     )?.reply();
 
-    if let Ok(prop) = reply {
-        if let Some(val32) = prop.value32() {
+    if let Ok(prop) = reply
+        && let Some(val32) = prop.value32() {
             return Ok(val32.collect());
         }
-    }
     Ok(Vec::new())
 }
 
@@ -415,15 +414,12 @@ pub fn get_net_active_window(
         1,
     )?.reply();
 
-    if let Ok(prop) = reply {
-        if let Some(mut val32) = prop.value32() {
-            if let Some(w) = val32.next() {
-                if w != 0 {
+    if let Ok(prop) = reply
+        && let Some(mut val32) = prop.value32()
+            && let Some(w) = val32.next()
+                && w != 0 {
                     return Ok(Some(w));
                 }
-            }
-        }
-    }
     Ok(None)
 }
 
@@ -442,11 +438,10 @@ pub fn get_net_client_list(
         1024,
     )?.reply();
 
-    if let Ok(prop) = reply {
-        if let Some(val32) = prop.value32() {
+    if let Ok(prop) = reply
+        && let Some(val32) = prop.value32() {
             return Ok(val32.collect());
         }
-    }
     Ok(Vec::new())
 }
 
@@ -465,11 +460,10 @@ pub fn get_net_current_desktop(
         1,
     )?.reply();
 
-    if let Ok(prop) = reply {
-        if let Some(mut val32) = prop.value32() {
+    if let Ok(prop) = reply
+        && let Some(mut val32) = prop.value32() {
             return Ok(val32.next());
         }
-    }
     Ok(None)
 }
 
@@ -488,10 +482,9 @@ pub fn get_supporting_wm_check(
         1,
     )?.reply();
 
-    if let Ok(prop) = reply {
-        if let Some(mut val32) = prop.value32() {
+    if let Ok(prop) = reply
+        && let Some(mut val32) = prop.value32() {
             return Ok(val32.next());
         }
-    }
     Ok(None)
 }

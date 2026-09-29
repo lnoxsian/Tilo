@@ -91,15 +91,6 @@ pub struct ColorScheme {
     pub urgent_fg: u32,
 }
 
-impl ColorScheme {
-    pub fn focused_bg(&self) -> u32 {
-        self.active_bg
-    }
-    pub fn focused_fg(&self) -> u32 {
-        self.active_fg
-    }
-}
-
 impl Default for ColorScheme {
     fn default() -> Self {
         Self {

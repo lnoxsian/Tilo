@@ -110,9 +110,9 @@ pub fn match_rules(
 
     for rule in rules {
         let is_match = match &rule.condition {
-            RuleCondition::Class(expected) => class.map(|c| c == expected).unwrap_or(false),
-            RuleCondition::Instance(expected) => instance.map(|i| i == expected).unwrap_or(false),
-            RuleCondition::Title(expected) => title.map(|t| t == expected).unwrap_or(false),
+            RuleCondition::Class(expected) => class == Some(expected.as_str()),
+            RuleCondition::Instance(expected) => instance == Some(expected.as_str()),
+            RuleCondition::Title(expected) => title == Some(expected.as_str()),
         };
 
         if is_match {
@@ -131,12 +131,15 @@ pub fn match_rules(
     combined_action
 }
 
+/// Tuple of window properties: `(instance, class, title)`.
+pub type WindowProperties = (Option<String>, Option<String>, Option<String>);
+
 /// Queries X11 properties for a window and extracts `(instance, class, title)`.
 pub fn query_window_properties(
     conn: &impl Connection,
     atoms: &Atoms,
     window: Window,
-) -> Result<(Option<String>, Option<String>, Option<String>), X11Error> {
+) -> Result<WindowProperties, X11Error> {
     // 1. Query WM_CLASS
     let (instance, class) = if let Ok(reply) = conn.get_property(
         false,

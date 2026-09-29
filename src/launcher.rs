@@ -263,11 +263,10 @@ impl Launcher {
     /// filesystem stat calls during rapid keystrokes.
     pub fn refresh_if_needed_throttled(&mut self, min_interval: std::time::Duration) -> bool {
         let now = std::time::Instant::now();
-        if let Some(last) = self.last_check_instant {
-            if now.duration_since(last) < min_interval {
+        if let Some(last) = self.last_check_instant
+            && now.duration_since(last) < min_interval {
                 return false;
             }
-        }
         self.last_check_instant = Some(now);
         self.refresh_if_needed()
     }
@@ -318,7 +317,7 @@ impl Launcher {
             }
         }
 
-        scored.sort_by(|a, b| b.0.cmp(&a.0));
+        scored.sort_by_key(|a| std::cmp::Reverse(a.0));
         scored.into_iter().map(|(_, name)| name).collect()
     }
 
@@ -544,17 +543,14 @@ pub fn scan_single_bin_dir(dir: &std::path::Path) -> (Vec<String>, HashMap<Strin
     if let Ok(entries) = std::fs::read_dir(dir) {
         for entry in entries.flatten() {
             let file_path = entry.path();
-            if let Ok(metadata) = file_path.metadata() {
-                if (metadata.is_file() || metadata.file_type().is_symlink())
+            if let Ok(metadata) = file_path.metadata()
+                && (metadata.is_file() || metadata.file_type().is_symlink())
                     && (metadata.permissions().mode() & 0o111 != 0)
-                {
-                    if let Some(file_name) = file_path.file_name().and_then(|n| n.to_str()) {
+                    && let Some(file_name) = file_path.file_name().and_then(|n| n.to_str()) {
                         let name_str = file_name.to_string();
                         commands.insert(name_str.clone(), name_str.clone());
                         items.push(name_str);
                     }
-                }
-            }
         }
     }
     items.sort();
@@ -636,7 +632,7 @@ fn is_field_code(arg: &str) -> bool {
             | "@@F"
     ) || (arg.starts_with('%')
         && arg.len() == 2
-        && arg.chars().nth(1).map_or(false, |c| {
+        && arg.chars().nth(1).is_some_and(|c| {
             matches!(
                 c,
                 'f' | 'F' | 'u' | 'U' | 'd' | 'D' | 'n' | 'N' | 'i' | 'c' | 'k' | 'v' | 'm'
@@ -735,11 +731,10 @@ pub fn parse_desktop_file(content: &str) -> Option<(String, String)> {
                         name = Some(val.to_string());
                     }
                 }
-                "Exec" => {
-                    if exec.is_none() {
+                "Exec"
+                    if exec.is_none() => {
                         exec = Some(val.to_string());
                     }
-                }
                 _ => {}
             }
         }
@@ -766,9 +761,9 @@ pub fn scan_single_desktop_dir(dir: &std::path::Path) -> (Vec<String>, HashMap<S
     if let Ok(entries) = std::fs::read_dir(dir) {
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.extension().and_then(|s| s.to_str()) == Some("desktop") {
-                if let Ok(content) = std::fs::read_to_string(&path) {
-                    if let Some((name, clean_exec)) = parse_desktop_file(&content) {
+            if path.extension().and_then(|s| s.to_str()) == Some("desktop")
+                && let Ok(content) = std::fs::read_to_string(&path)
+                    && let Some((name, clean_exec)) = parse_desktop_file(&content) {
                         commands.insert(name.clone(), clean_exec.clone());
                         items.push(name);
 
@@ -781,8 +776,6 @@ pub fn scan_single_desktop_dir(dir: &std::path::Path) -> (Vec<String>, HashMap<S
                             commands.insert(binary_name.to_string(), clean_exec);
                         }
                     }
-                }
-            }
         }
     }
     items.sort();
@@ -813,8 +806,8 @@ pub fn scan_desktop_dirs(dirs: &[PathBuf]) -> (Vec<String>, HashMap<String, Stri
                         continue;
                     }
 
-                    if let Ok(content) = std::fs::read_to_string(&path) {
-                        if let Some((name, clean_exec)) = parse_desktop_file(&content) {
+                    if let Ok(content) = std::fs::read_to_string(&path)
+                        && let Some((name, clean_exec)) = parse_desktop_file(&content) {
                             app_commands.insert(name.clone(), clean_exec.clone());
                             all_names.insert(name);
 
@@ -828,7 +821,6 @@ pub fn scan_desktop_dirs(dirs: &[PathBuf]) -> (Vec<String>, HashMap<String, Stri
                                 app_commands.insert(binary_name.to_string(), clean_exec);
                             }
                         }
-                    }
                 }
             }
         }
@@ -958,9 +950,8 @@ pub fn fuzzy_match(query: &str, target: &str) -> Option<i32> {
     let mut score = 0;
     let mut consecutive = 0;
     let mut prev_c = '\0';
-    let mut t_idx = 0;
 
-    for t_c in target.chars() {
+    for (t_idx, t_c) in target.chars().enumerate() {
         if t_c.eq_ignore_ascii_case(&current_q) {
             score += 10;
             score += consecutive * 5;
@@ -979,7 +970,6 @@ pub fn fuzzy_match(query: &str, target: &str) -> Option<i32> {
             score -= 1; // Gap penalty
         }
         prev_c = t_c;
-        t_idx += 1;
     }
 
     None
@@ -1031,8 +1021,8 @@ fn score_item(item: &str, query: &str) -> Option<i32> {
         Some(3000 - (item.len() as i32 * 2))
     } else if let Some(fuzzy_score) = fuzzy_match(query, item) {
         let first_char = query.chars().next();
-        let starts_with_first = first_char.map_or(false, |fc| {
-            item.chars().next().map_or(false, |ic| ic.eq_ignore_ascii_case(&fc))
+        let starts_with_first = first_char.is_some_and(|fc| {
+            item.chars().next().is_some_and(|ic| ic.eq_ignore_ascii_case(&fc))
         });
         if starts_with_first {
             Some(1500 + fuzzy_score * 10 - (item.len() as i32))
@@ -1041,11 +1031,7 @@ fn score_item(item: &str, query: &str) -> Option<i32> {
         } else {
             Some(fuzzy_score * 5 - (item.len() as i32))
         }
-    } else if let Some(pos) = find_ignore_case(item, query) {
-        Some(500 - (pos as i32 * 5) - (item.len() as i32))
-    } else {
-        None
-    }
+    } else { find_ignore_case(item, query).map(|pos| 500 - (pos as i32 * 5) - (item.len() as i32)) }
 }
 
 /// Filters and ranks cached executable names against the user query.

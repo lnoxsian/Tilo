@@ -250,11 +250,13 @@ fn test_wm_apply_config_in_xephyr() {
             .expect("WM context connect failed");
         assert!(wm_ctx.become_wm().is_ok());
 
-        let mut custom_config = Config::default();
-        custom_config.border_width = 6;
-        custom_config.inner_gap = 14;
-        custom_config.outer_gap = 18;
-        custom_config.master_ratio = 0.70;
+        let custom_config = Config {
+            border_width: 6,
+            inner_gap: 14,
+            outer_gap: 18,
+            master_ratio: 0.70,
+            ..Default::default()
+        };
 
         let mut wm = WindowManager::new_with_config(wm_ctx, custom_config.clone())
             .expect("Failed to initialize WM with config");

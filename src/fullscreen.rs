@@ -91,9 +91,16 @@ pub enum FullscreenState {
     },
 }
 
+impl FullscreenState {
+    /// Returns true if this state represents an active fullscreen window.
+    pub fn is_fullscreen(&self) -> bool {
+        matches!(self, FullscreenState::Fullscreen { .. })
+    }
+}
+
 /// Returns true if the given state is fullscreen.
 pub fn is_fullscreen(state: &FullscreenState) -> bool {
-    matches!(state, FullscreenState::Fullscreen { .. })
+    state.is_fullscreen()
 }
 
 /// Constructs a `ConfigureWindowAux` to apply fullscreen geometry to a window.

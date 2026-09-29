@@ -364,7 +364,7 @@ fn test_statusbar_renderer_in_xephyr() {
         ).unwrap().reply().unwrap();
         // Check that pixels with color scheme active_bg (0x7aa2f7) or fg (0xc0caf5) were actually written
         // In 32-bit/24-bit visual, pixels are stored in BGR or RGB format
-        let has_colored_pixels = img.data.chunks_exact(4).any(|p| {
+        let has_colored_pixels = img.data.as_chunks::<4>().0.iter().any(|p| {
             let color = (p[2] as u32) << 16 | (p[1] as u32) << 8 | (p[0] as u32);
             color == 0x7aa2f7 || color == 0xc0caf5 || color == 0x15161e
         });

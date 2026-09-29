@@ -61,8 +61,10 @@ impl Default for LayoutConfig {
 
 /// Available layout types.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Default)]
 pub enum LayoutType {
     /// Traditional master and stack tiling.
+    #[default]
     MasterStack,
     /// Evenly divide space vertically.
     Vertical,
@@ -80,11 +82,6 @@ pub enum LayoutType {
     Bsp,
 }
 
-impl Default for LayoutType {
-    fn default() -> Self {
-        Self::MasterStack
-    }
-}
 
 impl std::fmt::Display for LayoutType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -400,14 +397,13 @@ pub fn apply_layout(
     let rects = calculate_layout(layout, clients, area, &config);
     apply_layout_with_border(conn, clients, &rects, config.border_width)?;
 
-    if layout == LayoutType::Monocle {
-        if let Some(&first) = clients.first() {
+    if layout == LayoutType::Monocle
+        && let Some(&first) = clients.first() {
             let aux = ConfigureWindowAux::default()
                 .stack_mode(StackMode::ABOVE);
             let _ = conn.configure_window(first, &aux);
             conn.flush()?;
         }
-    }
 
     Ok(())
 }
@@ -460,16 +456,6 @@ pub enum SplitType {
     Horizontal,
     /// Splits vertically into Top and Bottom children.
     Vertical,
-}
-
-impl SplitType {
-    /// Returns the opposite split orientation.
-    pub fn opposite(&self) -> Self {
-        match self {
-            SplitType::Horizontal => SplitType::Vertical,
-            SplitType::Vertical => SplitType::Horizontal,
-        }
-    }
 }
 
 /// A node in the Binary Space Partitioning (BSP) tree.
@@ -595,7 +581,7 @@ impl BspNode {
 
         if let (Some(ptr_a), Some(ptr_b)) = (leaf_a, leaf_b) {
             unsafe {
-                std::mem::swap(&mut *ptr_a, &mut *ptr_b);
+                core::ptr::swap(ptr_a, ptr_b);
             }
             true
         } else {
@@ -634,11 +620,10 @@ impl BspNode {
             return None;
         }
 
-        if let BspNode::Split { split_type, .. } = self {
-            if *split_type == target_split {
+        if let BspNode::Split { split_type, .. } = self
+            && *split_type == target_split {
                 return Some(self);
             }
-        }
 
         match self {
             BspNode::Split { first, second, .. } => {
@@ -744,11 +729,6 @@ impl BspNode {
         }
     }
 
-    /// Resizes the ancestor split of `target` that matches `target_split`.
-    pub fn resize_ancestor(&mut self, target: Window, delta: f32, target_split: SplitType) -> bool {
-        self.resize_pane(target, delta, target_split)
-    }
-
     /// Resizes the first split matching `target_split` in this subtree.
     pub fn resize_any_split(&mut self, delta: f32, target_split: SplitType) -> bool {
         match self {
@@ -767,6 +747,7 @@ impl BspNode {
 }
 
 /// Recursively removes `target` from the subtree, collapsing the parent node with the remaining sibling.
+#[allow(clippy::boxed_local)]
 fn remove_node(node: Box<BspNode>, target: Window) -> Option<Box<BspNode>> {
     match *node {
         BspNode::Leaf { window } => {
@@ -953,11 +934,7 @@ impl BspTree {
     /// Resizes the ancestor split of `window` by `delta_ratio` ($\pm 0.05$), falling back to any matching split.
     pub fn resize_window(&mut self, window: Window, delta_ratio: f32, split_type: SplitType) -> bool {
         if let Some(ref mut root) = self.root {
-            if root.resize_ancestor(window, delta_ratio, split_type) {
-                true
-            } else {
-                root.resize_any_split(delta_ratio, split_type)
-            }
+            root.resize_pane(window, delta_ratio, split_type)
         } else {
             false
         }

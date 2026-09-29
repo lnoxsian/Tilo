@@ -103,28 +103,24 @@ impl WmSizeHints {
         if let Some(min_h) = self.min_height {
             height = height.max(min_h);
         }
-        if let Some(max_w) = self.max_width {
-            if max_w > 0 {
+        if let Some(max_w) = self.max_width
+            && max_w > 0 {
                 width = width.min(max_w);
             }
-        }
-        if let Some(max_h) = self.max_height {
-            if max_h > 0 {
+        if let Some(max_h) = self.max_height
+            && max_h > 0 {
                 height = height.min(max_h);
             }
-        }
 
         // Apply resize increments
-        if let (Some(w_inc), Some(base_w)) = (self.width_inc, self.base_width.or(self.min_width)) {
-            if w_inc > 1 && width >= base_w {
+        if let (Some(w_inc), Some(base_w)) = (self.width_inc, self.base_width.or(self.min_width))
+            && w_inc > 1 && width >= base_w {
                 width = base_w + ((width - base_w) / w_inc) * w_inc;
             }
-        }
-        if let (Some(h_inc), Some(base_h)) = (self.height_inc, self.base_height.or(self.min_height)) {
-            if h_inc > 1 && height >= base_h {
+        if let (Some(h_inc), Some(base_h)) = (self.height_inc, self.base_height.or(self.min_height))
+            && h_inc > 1 && height >= base_h {
                 height = base_h + ((height - base_h) / h_inc) * h_inc;
             }
-        }
 
         (width, height)
     }
@@ -230,11 +226,10 @@ pub fn supports_protocol(
         32,
     )?.reply();
 
-    if let Ok(prop) = reply {
-        if let Some(mut atoms) = prop.value32() {
+    if let Ok(prop) = reply
+        && let Some(mut atoms) = prop.value32() {
             return Ok(atoms.any(|a| a == protocol));
         }
-    }
     Ok(false)
 }
 
@@ -332,13 +327,11 @@ pub fn get_wm_state(
         2,
     )?.reply();
 
-    if let Ok(prop) = reply {
-        if let Some(mut val32) = prop.value32() {
-            if let Some(state_num) = val32.next() {
+    if let Ok(prop) = reply
+        && let Some(mut val32) = prop.value32()
+            && let Some(state_num) = val32.next() {
                 return Ok(WmState::from_u32(state_num));
             }
-        }
-    }
     Ok(None)
 }
 
@@ -354,14 +347,12 @@ pub fn get_wm_normal_hints(
         AtomEnum::ANY,
         0,
         32,
-    ) {
-        if let Ok(prop) = reply.reply() {
-            if let Some(val32) = prop.value32() {
+    )
+        && let Ok(prop) = reply.reply()
+            && let Some(val32) = prop.value32() {
                 let vec: Vec<u32> = val32.collect();
                 return Ok(Some(parse_wm_size_hints(&vec)));
             }
-        }
-    }
     Ok(None)
 }
 
@@ -377,14 +368,12 @@ pub fn get_wm_hints(
         AtomEnum::ANY,
         0,
         32,
-    ) {
-        if let Ok(prop) = reply.reply() {
-            if let Some(val32) = prop.value32() {
+    )
+        && let Ok(prop) = reply.reply()
+            && let Some(val32) = prop.value32() {
                 let vec: Vec<u32> = val32.collect();
                 return Ok(Some(parse_wm_hints(&vec)));
             }
-        }
-    }
     Ok(None)
 }
 

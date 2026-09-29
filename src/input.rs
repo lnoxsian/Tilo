@@ -93,8 +93,8 @@ pub fn detect_num_lock_mask<C: Connection>(
     conn: &C,
     mapping: &KeyboardMapping,
 ) -> u16 {
-    if let Ok(reply) = conn.get_modifier_mapping() {
-        if let Ok(reply) = reply.reply() {
+    if let Ok(reply) = conn.get_modifier_mapping()
+        && let Ok(reply) = reply.reply() {
             let kpm = reply.keycodes_per_modifier() as usize;
             for (mod_idx, chunk) in reply.keycodes.chunks(kpm).enumerate() {
                 for &kc in chunk {
@@ -107,7 +107,6 @@ pub fn detect_num_lock_mask<C: Connection>(
                 }
             }
         }
-    }
     MOD_MOD2 // Fallback to standard Mod2
 }
 

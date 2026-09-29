@@ -44,8 +44,8 @@ impl Renderer {
             return Err(());
         }
         // query_font round-trips to X server, ensuring the font name is valid
-        if let Ok(cookie) = conn.query_font(font_id) {
-            if let Ok(reply) = cookie.reply() {
+        if let Ok(cookie) = conn.query_font(font_id)
+            && let Ok(reply) = cookie.reply() {
                 let ascent = reply.font_ascent;
                 let descent = reply.font_descent;
                 let width = if reply.max_bounds.character_width > 0 {
@@ -55,7 +55,6 @@ impl Renderer {
                 };
                 return Ok((font_id, ascent, descent, width));
             }
-        }
         let _ = conn.close_font(font_id);
         Err(())
     }
@@ -186,6 +185,7 @@ impl Renderer {
     }
 
     /// Fills a solid rectangular region with the specified color.
+    #[allow(clippy::too_many_arguments)]
     pub fn fill_rect(
         &self,
         conn: &impl Connection,
@@ -281,6 +281,7 @@ impl Renderer {
     /// Renders the entire statusbar: background, workspace indicators, layout indicator,
     /// active window title, and right-aligned system modules into the double-buffer pixmap,
     /// then blits the result to the statusbar window.
+    #[allow(clippy::too_many_arguments)]
     pub fn render_statusbar(
         &self,
         conn: &impl Connection,

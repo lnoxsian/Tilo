@@ -13,8 +13,6 @@ use x11rb::protocol::xproto::{self, ChangeWindowAttributesAux, ConnectionExt, Wi
 use x11rb::resource_manager::Database;
 
 /// Standard X11 font cursor glyph IDs from `cursorfont.h`.
-pub const XC_X_CURSOR: u16 = 0;
-pub const XC_ARROW: u16 = 2;
 pub const XC_FLEUR: u16 = 52;
 pub const XC_LEFT_PTR: u16 = 68;
 pub const XC_SIZING: u16 = 120;
@@ -48,7 +46,7 @@ pub fn create_font_cursor<C: Connection>(conn: &C, shape: u16) -> Result<xproto:
 }
 
 /// Manages X11 cursors used by the window manager.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct CursorManager {
     /// Normal arrow pointer cursor (`left_ptr`).
     pub normal: xproto::Cursor,
@@ -56,16 +54,6 @@ pub struct CursorManager {
     pub move_cursor: xproto::Cursor,
     /// Resize cursor (`sizing`) used when resizing windows.
     pub resize_cursor: xproto::Cursor,
-}
-
-impl Default for CursorManager {
-    fn default() -> Self {
-        Self {
-            normal: 0,
-            move_cursor: 0,
-            resize_cursor: 0,
-        }
-    }
 }
 
 impl CursorManager {
@@ -82,11 +70,10 @@ impl CursorManager {
 
         let load = |h: &Handle, names: &[&str]| -> Option<xproto::Cursor> {
             for name in names {
-                if let Ok(c) = h.load_cursor(conn, name) {
-                    if c != 0 {
+                if let Ok(c) = h.load_cursor(conn, name)
+                    && c != 0 {
                         return Some(c);
                     }
-                }
             }
             None
         };
@@ -146,8 +133,6 @@ mod tests {
 
     #[test]
     fn test_cursor_constants() {
-        assert_eq!(XC_X_CURSOR, 0);
-        assert_eq!(XC_ARROW, 2);
         assert_eq!(XC_FLEUR, 52);
         assert_eq!(XC_LEFT_PTR, 68);
         assert_eq!(XC_SIZING, 120);

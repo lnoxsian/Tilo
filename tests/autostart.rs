@@ -118,11 +118,13 @@ fn test_wm_autostart_integration_in_xephyr() {
         let _ = fs::remove_file(&witness_path);
     }
 
-    let mut config = Config::default();
-    config.autostart = vec![
-        AutostartCmd::new("touch", vec![witness_path.display().to_string()]),
-        AutostartCmd::new("__non_existent_app__", vec![]),
-    ];
+    let config = Config {
+        autostart: vec![
+            AutostartCmd::new("touch", vec![witness_path.display().to_string()]),
+            AutostartCmd::new("__non_existent_app__", vec![]),
+        ],
+        ..Default::default()
+    };
 
     let wm = WindowManager::new_with_config(ctx, config).expect("Failed to initialize WindowManager");
     let autostart_res = wm.run_autostart();

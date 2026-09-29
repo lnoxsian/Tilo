@@ -156,17 +156,19 @@ impl WindowManager {
             1,
         )?;
 
-        let mut border_config = BorderConfig::default();
-        border_config.width = config.border_width;
-        border_config.focused_color = config.focused_color;
-        border_config.normal_color = config.normal_color;
-        border_config.urgent_color = config.urgent_color;
+        let border_config = BorderConfig {
+            width: config.border_width,
+            focused_color: config.focused_color,
+            normal_color: config.normal_color,
+            urgent_color: config.urgent_color,
+        };
 
-        let mut layout_config = LayoutConfig::default();
-        layout_config.border_width = config.border_width;
-        layout_config.inner_gap = config.inner_gap;
-        layout_config.outer_gap = config.outer_gap;
-        layout_config.master_ratio = config.master_ratio;
+        let layout_config = LayoutConfig {
+            border_width: config.border_width,
+            inner_gap: config.inner_gap,
+            outer_gap: config.outer_gap,
+            master_ratio: config.master_ratio,
+        };
 
         let mut input_manager = InputManager::new(config.bindings.clone());
         let _ = input_manager.setup(&context.connection, context.root_window);
@@ -524,13 +526,11 @@ impl WindowManager {
                 x11rb::CURRENT_TIME,
                 x11rb::protocol::xproto::GrabMode::ASYNC,
                 x11rb::protocol::xproto::GrabMode::ASYNC,
-            ) {
-                if let Ok(reply) = cookie.reply() {
-                    if reply.status == x11rb::protocol::xproto::GrabStatus::SUCCESS {
+            )
+                && let Ok(reply) = cookie.reply()
+                    && reply.status == x11rb::protocol::xproto::GrabStatus::SUCCESS {
                         break;
                     }
-                }
-            }
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
 
@@ -547,8 +547,8 @@ impl WindowManager {
 
     /// Closes and unmaps the application launcher overlay, releasing keyboard grab.
     pub fn close_launcher(&mut self) -> Result<(), StatusbarError> {
-        if let Some(ref mut launcher) = self.launcher {
-            if launcher.visible {
+        if let Some(ref mut launcher) = self.launcher
+            && launcher.visible {
                 launcher.visible = false;
                 launcher.mode = crate::launcher::LauncherMode::App;
                 launcher.query.clear();
@@ -565,7 +565,6 @@ impl WindowManager {
                     let _ = self.clear_focus();
                 }
             }
-        }
         Ok(())
     }
 
@@ -581,11 +580,10 @@ impl WindowManager {
 
     /// Renders the launcher UI if visible.
     pub fn render_launcher(&mut self) -> Result<(), StatusbarError> {
-        if let Some(ref mut launcher) = self.launcher {
-            if launcher.visible {
+        if let Some(ref mut launcher) = self.launcher
+            && launcher.visible {
                 launcher.render(&self.context.connection)?;
             }
-        }
         Ok(())
     }
 
@@ -675,11 +673,10 @@ impl WindowManager {
 
                     if let Some(action) = power_action {
                         self.execute_power_action(&action);
-                    } else if let Some(cmd) = cmd_to_spawn {
-                        if let Err(e) = crate::launcher::spawn_app(&cmd) {
+                    } else if let Some(cmd) = cmd_to_spawn
+                        && let Err(e) = crate::launcher::spawn_app(&cmd) {
                             eprintln!("[WARN  tilo::launcher] {}", e);
                         }
-                    }
                 }
                 other => {
                     if let Some(ref mut launcher) = self.launcher {
@@ -735,11 +732,10 @@ impl WindowManager {
     /// - If visible: unmaps window, marks iconic, restores previous focus.
     /// - If hidden: moves to current workspace, centers on active monitor, maps, raises ABOVE, focuses.
     pub fn toggle_scratchpad(&mut self) -> Result<(), X11Error> {
-        if let Some(win) = self.scratchpad.client {
-            if !self.client_state.contains(win) {
+        if let Some(win) = self.scratchpad.client
+            && !self.client_state.contains(win) {
                 self.scratchpad.clear_client();
             }
-        }
 
         if self.scratchpad.client.is_none() {
             // Spawn default terminal emulator as scratchpad
@@ -939,12 +935,11 @@ impl WindowManager {
                 self.handle_property_notify(&ev)?;
             }
             Event::KeyPress(ev) => {
-                if let Some(ref launcher) = self.launcher {
-                    if launcher.visible {
+                if let Some(ref launcher) = self.launcher
+                    && launcher.visible {
                         self.handle_launcher_key(&ev)?;
                         return Ok(());
                     }
-                }
                 self.handle_key_press(&ev)?;
             }
             Event::ButtonPress(ev) => {
@@ -970,11 +965,10 @@ impl WindowManager {
                 let _ = self.refresh_monitors();
             }
             Event::Expose(ev) => {
-                if let Some(ref bar) = self.statusbar {
-                    if ev.window == bar.window_id {
+                if let Some(ref bar) = self.statusbar
+                    && ev.window == bar.window_id {
                         let _ = self.render_statusbar();
                     }
-                }
                 let is_launcher_expose = self
                     .launcher
                     .as_ref()
@@ -1189,7 +1183,7 @@ impl WindowManager {
             match ws.layout {
                 LayoutType::Monocle | LayoutType::Tabbed | LayoutType::Stacked => {
                     let rects = calculate_monocle(&visible_tiled, usable_rect, &self.layout_config);
-                    visible_tiled.into_iter().zip(rects.into_iter()).collect()
+                    visible_tiled.into_iter().zip(rects).collect()
                 }
                 layout => {
                     let focused = self.workspace_focus.focused_window_on(ws_id);
@@ -1206,7 +1200,7 @@ impl WindowManager {
             }
         } else {
             let rects = calculate_master_stack(&visible_tiled, usable_rect, &self.layout_config);
-            visible_tiled.into_iter().zip(rects.into_iter()).collect()
+            visible_tiled.into_iter().zip(rects).collect()
         }
     }
 
@@ -1217,10 +1211,10 @@ impl WindowManager {
             let mon_ws = monitor.workspace;
             let monitor_rect = monitor.rect();
             let usable_rect = if let Some(ref bar) = self.statusbar {
-                if bar.rect.y as i32 <= monitor.y
-                    && (bar.rect.y as i32 + bar.rect.height as i32) > monitor.y
+                if bar.rect.y <= monitor.y
+                    && (bar.rect.y + bar.rect.height as i32) > monitor.y
                 {
-                    let offset = (bar.rect.y as i32 + bar.rect.height as i32) - monitor.y;
+                    let offset = (bar.rect.y + bar.rect.height as i32) - monitor.y;
                     Rect::new(
                         monitor_rect.x,
                         monitor_rect.y + offset,
@@ -1250,14 +1244,13 @@ impl WindowManager {
                 )?;
 
                 // If Monocle layout, raise the focused window above other tiled windows
-                if ws_layout == LayoutType::Monocle {
-                    if let Some(focused) = self.workspace_focus.focused_window_on(mon_ws) {
+                if ws_layout == LayoutType::Monocle
+                    && let Some(focused) = self.workspace_focus.focused_window_on(mon_ws) {
                         let _ = self.context.connection.configure_window(
                             focused,
                             &ConfigureWindowAux::default().stack_mode(StackMode::ABOVE),
                         );
                     }
-                }
             }
 
             // Keep all mapped floating windows on this monitor's workspace stacked above tiled windows
@@ -1464,10 +1457,10 @@ impl WindowManager {
             .unwrap_or_else(|| self.monitor_manager.active_monitor().clone());
         let monitor_rect = mon.rect();
         let usable_rect = if let Some(ref bar) = self.statusbar {
-            if bar.rect.y as i32 <= mon.y
-                && (bar.rect.y as i32 + bar.rect.height as i32) > mon.y
+            if bar.rect.y <= mon.y
+                && (bar.rect.y + bar.rect.height as i32) > mon.y
             {
-                let offset = (bar.rect.y as i32 + bar.rect.height as i32) - mon.y;
+                let offset = (bar.rect.y + bar.rect.height as i32) - mon.y;
                 Rect::new(
                     monitor_rect.x,
                     monitor_rect.y + offset,
@@ -1510,8 +1503,8 @@ impl WindowManager {
             .monitor_for_workspace(target_id)
             .map(|m| m.id);
 
-        if let Some(target_mon_id) = target_mon_id {
-            if target_mon_id != self.monitor_manager.active_monitor_id {
+        if let Some(target_mon_id) = target_mon_id
+            && target_mon_id != self.monitor_manager.active_monitor_id {
                 self.monitor_manager.active_monitor_id = target_mon_id;
                 self.workspace_manager.current_workspace_id = target_id;
                 self.current_workspace = target_id;
@@ -1531,7 +1524,6 @@ impl WindowManager {
                 self.context.flush()?;
                 return Ok(());
             }
-        }
 
         // 2. Target workspace is not on any other monitor.
         // Active monitor replaces its workspace from current_id to target_id.
@@ -1568,8 +1560,8 @@ impl WindowManager {
         }
 
         // If scratchpad is currently visible, ensure it remains visible on target workspace
-        if let Some(scratch_win) = self.scratchpad.client {
-            if self.scratchpad.is_visible {
+        if let Some(scratch_win) = self.scratchpad.client
+            && self.scratchpad.is_visible {
                 self.workspace_manager.move_client(scratch_win, target_id);
                 if let Some(c) = self.client_state.get_client_mut(scratch_win) {
                     c.workspace = target_id;
@@ -1580,7 +1572,6 @@ impl WindowManager {
                 let _ = self.context.connection.configure_window(scratch_win, &aux);
                 let _ = self.set_wm_state(scratch_win, WmState::Normal);
             }
-        }
 
         self.monitor_manager.active_monitor_mut().workspace = target_id;
         self.workspace_manager.current_workspace_id = target_id;
@@ -1892,8 +1883,8 @@ impl WindowManager {
 
     /// Focuses the monitor visually to the left of the active monitor.
     pub fn focus_monitor_left(&mut self) -> Result<(), X11Error> {
-        if let Some(target_id) = self.monitor_manager.focus_monitor_left() {
-            if let Some(mon) = self.monitor_manager.get_monitor(target_id) {
+        if let Some(target_id) = self.monitor_manager.focus_monitor_left()
+            && let Some(mon) = self.monitor_manager.get_monitor(target_id) {
                 let ws = mon.workspace;
                 self.current_workspace = ws;
                 self.workspace_manager.current_workspace_id = ws;
@@ -1915,15 +1906,14 @@ impl WindowManager {
                     self.clear_focus()?;
                 }
             }
-        }
         self.context.flush()?;
         Ok(())
     }
 
     /// Focuses the monitor visually to the right of the active monitor.
     pub fn focus_monitor_right(&mut self) -> Result<(), X11Error> {
-        if let Some(target_id) = self.monitor_manager.focus_monitor_right() {
-            if let Some(mon) = self.monitor_manager.get_monitor(target_id) {
+        if let Some(target_id) = self.monitor_manager.focus_monitor_right()
+            && let Some(mon) = self.monitor_manager.get_monitor(target_id) {
                 let ws = mon.workspace;
                 self.current_workspace = ws;
                 self.workspace_manager.current_workspace_id = ws;
@@ -1945,7 +1935,6 @@ impl WindowManager {
                     self.clear_focus()?;
                 }
             }
-        }
         self.context.flush()?;
         Ok(())
     }
@@ -1975,9 +1964,9 @@ impl WindowManager {
             client.mapped = true;
         }
 
-        if let Some(client) = self.client_state.get_client(win) {
-            if client.is_floating() {
-                if let Some(target_mon) = self.monitor_manager.get_monitor(target_monitor_id) {
+        if let Some(client) = self.client_state.get_client(win)
+            && client.is_floating()
+                && let Some(target_mon) = self.monitor_manager.get_monitor(target_monitor_id) {
                     let mut geom = client.floating_geometry.unwrap_or_else(|| {
                         calculate_default_floating_geometry(
                             target_mon.width as u16,
@@ -1992,8 +1981,6 @@ impl WindowManager {
                         c_mut.set_floating(geom);
                     }
                 }
-            }
-        }
 
         let next_focus = self.workspace_focus.remove_window(current_ws, win)
             .or_else(|| self.workspace_manager.get(current_ws).and_then(|ws| ws.clients.first().copied()))
@@ -2012,12 +1999,11 @@ impl WindowManager {
     /// Refreshes monitor geometry by querying XRandR and reconciles state.
     pub fn refresh_monitors(&mut self) -> Result<(), X11Error> {
         // 1. Query the live root window geometry to get the actual current resolution
-        if let Ok(reply) = self.context.connection.get_geometry(self.context.root_window) {
-            if let Ok(geom) = reply.reply() {
+        if let Ok(reply) = self.context.connection.get_geometry(self.context.root_window)
+            && let Ok(geom) = reply.reply() {
                 self.context.screen_width = geom.width;
                 self.context.screen_height = geom.height;
             }
-        }
 
         // 2. Query updated monitors from XRandR (using the updated screen dimensions as fallback)
         let new_monitors = query_monitors(
@@ -2072,8 +2058,8 @@ impl WindowManager {
         }
 
         // 5. If the application launcher is open, re-center it on the active monitor
-        if let Some(ref mut launcher) = self.launcher {
-            if launcher.visible {
+        if let Some(ref mut launcher) = self.launcher
+            && launcher.visible {
                 let active_mon = self.monitor_manager.active_monitor().clone();
                 let width = launcher.rect.width as u16;
                 let height = launcher.rect.height as u16;
@@ -2087,12 +2073,11 @@ impl WindowManager {
                 );
                 let _ = launcher.render(&self.context.connection);
             }
-        }
 
         // 6. Clamp floating windows to new screen dimensions
         for client in self.client_state.clients.values_mut() {
-            if client.floating {
-                if let Some(geom) = client.floating_geometry {
+            if client.floating
+                && let Some(geom) = client.floating_geometry {
                     let clamped = clamp_floating_geometry(
                         geom,
                         self.context.screen_width,
@@ -2108,7 +2093,6 @@ impl WindowManager {
                         let _ = self.context.connection.configure_window(client.window, &aux);
                     }
                 }
-            }
         }
 
         self.retile()?;
@@ -2320,8 +2304,8 @@ impl WindowManager {
                 "[WARN  tilo::wm] Failed to configure window 0x{:x}: {}",
                 event.window, err
             );
-        } else if let Some(client) = self.client_state.get_client_mut(event.window) {
-            if client.floating {
+        } else if let Some(client) = self.client_state.get_client_mut(event.window)
+            && client.floating {
                 let mut geom = client.floating_geometry.unwrap_or_else(|| {
                     calculate_default_floating_geometry(
                         self.context.screen_width,
@@ -2342,7 +2326,6 @@ impl WindowManager {
                 }
                 client.set_floating(geom);
             }
-        }
         Ok(())
     }
 
@@ -2356,11 +2339,10 @@ impl WindowManager {
     pub fn handle_unmap_notify(&mut self, window: Window) -> Result<(), X11Error> {
         // If the window belongs to an inactive workspace, it was unmapped intentionally
         // by the window manager during a workspace switch. Keep it tracked on its workspace!
-        if let Some(ws) = self.workspace_manager.find_workspace_for(window) {
-            if ws != self.current_workspace {
+        if let Some(ws) = self.workspace_manager.find_workspace_for(window)
+            && ws != self.current_workspace {
                 return Ok(());
             }
-        }
         if self.scratchpad.client == Some(window) {
             self.scratchpad.is_visible = false;
         }
@@ -2373,15 +2355,14 @@ impl WindowManager {
         self.stats.property_notifications += 1;
 
         if event.atom == AtomEnum::WM_HINTS.into() {
-            if let Ok(Some(hints)) = get_wm_hints(&self.context.connection, event.window) {
-                if hints.is_urgent {
+            if let Ok(Some(hints)) = get_wm_hints(&self.context.connection, event.window)
+                && hints.is_urgent {
                     let _ = set_window_border_color(
                         &self.context.connection,
                         event.window,
                         self.border_config.urgent_color,
                     );
                 }
-            }
         } else if event.atom == AtomEnum::WM_NORMAL_HINTS.into() {
             let _ = get_wm_normal_hints(&self.context.connection, event.window);
         } else if (event.atom == AtomEnum::WM_NAME.into() || event.atom == self.atoms.net_wm_name)
@@ -2427,14 +2408,14 @@ impl WindowManager {
                 let _ = self.swap_in_direction(dir)?;
             }
             Action::Workspace(ws) => {
-                let _ = self.switch_workspace(ws)?;
+                self.switch_workspace(ws)?;
             }
             Action::MoveToWorkspace(ws) => {
                 let win = self.focused_window()
                     .or_else(|| self.workspace_focus.focused_window_on(self.current_workspace))
                     .or_else(|| self.workspace_manager.get(self.current_workspace).and_then(|w| w.clients.first().copied()));
                 if let Some(win) = win {
-                    let _ = self.move_to_workspace(win, ws)?;
+                    self.move_to_workspace(win, ws)?;
                 }
             }
             Action::ToggleFloating => {
@@ -2448,13 +2429,13 @@ impl WindowManager {
                 }
             }
             Action::FocusMonitorLeft => {
-                let _ = self.focus_monitor_left()?;
+                self.focus_monitor_left()?;
             }
             Action::FocusMonitorRight => {
-                let _ = self.focus_monitor_right()?;
+                self.focus_monitor_right()?;
             }
             Action::MoveToMonitor(mon_id) => {
-                let _ = self.move_to_monitor(mon_id)?;
+                self.move_to_monitor(mon_id)?;
             }
             Action::Reload => {
                 if let Err(err) = self.reload_config() {
@@ -2510,11 +2491,10 @@ impl WindowManager {
                             Direction::Down => (crate::layout::SplitType::Vertical, 0.05),
                         };
                         if ws.bsp_tree.resize_window(win, delta, split_type) {
-                            if ws.layout == LayoutType::MasterStack {
-                                if let Some(r) = ws.bsp_tree.master_ratio() {
+                            if ws.layout == LayoutType::MasterStack
+                                && let Some(r) = ws.bsp_tree.master_ratio() {
                                     self.layout_config.master_ratio = r;
                                 }
-                            }
                             let _ = self.retile();
                         }
                     }
@@ -2572,10 +2552,10 @@ impl WindowManager {
             .unwrap_or_else(|| self.monitor_manager.active_monitor().clone());
         let monitor_rect = mon.rect();
         let usable_rect = if let Some(ref bar) = self.statusbar {
-            if bar.rect.y as i32 <= mon.y
-                && (bar.rect.y as i32 + bar.rect.height as i32) > mon.y
+            if bar.rect.y <= mon.y
+                && (bar.rect.y + bar.rect.height as i32) > mon.y
             {
-                let offset = (bar.rect.y as i32 + bar.rect.height as i32) - mon.y;
+                let offset = (bar.rect.y + bar.rect.height as i32) - mon.y;
                 Rect::new(
                     monitor_rect.x,
                     monitor_rect.y + offset,
@@ -2815,16 +2795,14 @@ impl WindowManager {
                     initial_rect,
                 };
                 let current_ws = self.workspace_manager.current_id();
-                if let Some(ws) = self.workspace_manager.get_mut(current_ws) {
-                    if ws.bsp_tree.resize_by_pointer(window, delta_x, delta_y, initial_rect) {
-                        if ws.layout == LayoutType::MasterStack {
-                            if let Some(r) = ws.bsp_tree.master_ratio() {
+                if let Some(ws) = self.workspace_manager.get_mut(current_ws)
+                    && ws.bsp_tree.resize_by_pointer(window, delta_x, delta_y, initial_rect) {
+                        if ws.layout == LayoutType::MasterStack
+                            && let Some(r) = ws.bsp_tree.master_ratio() {
                                 self.layout_config.master_ratio = r;
                             }
-                        }
                         let _ = self.retile();
                     }
-                }
             }
             crate::mouse::MouseAction::None => {}
         }
@@ -2850,17 +2828,16 @@ impl WindowManager {
         if event.type_ == atoms.net_active_window {
             let window = event.window;
             if self.client_state.contains(window) {
-                if let Some(ws) = self.workspace_manager.find_workspace_for(window) {
-                    if ws != self.current_workspace {
+                if let Some(ws) = self.workspace_manager.find_workspace_for(window)
+                    && ws != self.current_workspace {
                         self.switch_workspace(ws)?;
                     }
-                }
                 self.focus_client(window)?;
             }
         } else if event.type_ == atoms.net_current_desktop {
             let data = event.data.as_data32();
             let target_ws = data[0] + 1; // 0-indexed in EWMH -> 1-based workspace
-            if target_ws >= 1 && target_ws <= 9 {
+            if (1..=9).contains(&target_ws) {
                 self.switch_workspace(target_ws)?;
             }
         } else if event.type_ == atoms.net_close_window {

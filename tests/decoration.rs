@@ -141,11 +141,13 @@ fn test_window_decoration_in_xephyr() {
     let context = X11Context::connect_to(Some(&xephyr.display)).unwrap();
     let root = context.root_window;
 
-    let mut config = Config::default();
-    config.border_width = 4;
-    config.focused_color = 0x0000ff00;
-    config.normal_color = 0x00222222;
-    config.urgent_color = 0x00ff5500;
+    let config = Config {
+        border_width: 4,
+        focused_color: 0x0000ff00,
+        normal_color: 0x00222222,
+        urgent_color: 0x00ff5500,
+        ..Default::default()
+    };
 
     let mut wm = WindowManager::new_with_config(context, config).expect("WindowManager should initialize");
 
@@ -190,11 +192,13 @@ fn test_window_decoration_in_xephyr() {
     assert_eq!(wm.client_state.focused_window(), Some(win2));
 
     // Test applying new config updates existing client window border widths and colors
-    let mut new_config = Config::default();
-    new_config.border_width = 7;
-    new_config.focused_color = 0x0000ffff;
-    new_config.normal_color = 0x00555555;
-    new_config.urgent_color = 0x00ff00ff;
+    let new_config = Config {
+        border_width: 7,
+        focused_color: 0x0000ffff,
+        normal_color: 0x00555555,
+        urgent_color: 0x00ff00ff,
+        ..Default::default()
+    };
 
     wm.apply_config(new_config).unwrap();
 
