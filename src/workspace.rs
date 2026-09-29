@@ -4,6 +4,7 @@
 //! focused client and layout. Workspaces 1 through 9 are created by default,
 //! and additional workspaces are created on demand.
 
+use crate::layout::LayoutType;
 use std::collections::BTreeMap;
 use x11rb::protocol::xproto::Window;
 
@@ -11,7 +12,7 @@ use x11rb::protocol::xproto::Window;
 pub type WorkspaceId = u32;
 
 /// Defines the state and layout of a single workspace.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Workspace {
     /// Unique identifier for this workspace (e.g., 1-9).
     pub id: WorkspaceId,
@@ -21,6 +22,10 @@ pub struct Workspace {
     pub clients: Vec<Window>,
     /// The currently focused window in this workspace, if any.
     pub focused_client: Option<Window>,
+    /// Dedicated Binary Space Partitioning layout tree for this workspace.
+    pub bsp_tree: crate::layout::BspTree,
+    /// Active window tiling layout for this workspace (Phase 27).
+    pub layout: LayoutType,
 }
 
 impl Workspace {
@@ -31,6 +36,8 @@ impl Workspace {
             name: id.to_string(),
             clients: Vec::new(),
             focused_client: None,
+            bsp_tree: crate::layout::BspTree::new(),
+            layout: LayoutType::Bsp,
         }
     }
 
@@ -41,6 +48,8 @@ impl Workspace {
             name: name.into(),
             clients: Vec::new(),
             focused_client: None,
+            bsp_tree: crate::layout::BspTree::new(),
+            layout: LayoutType::Bsp,
         }
     }
 
@@ -53,6 +62,7 @@ impl Workspace {
 
     /// Removes a client window from this workspace.
     pub fn remove_client(&mut self, window: Window) -> bool {
+        self.bsp_tree.remove(window);
         let prev_len = self.clients.len();
         self.clients.retain(|&w| w != window);
         if self.focused_client == Some(window) {
@@ -77,6 +87,29 @@ impl Workspace {
         }
     }
 
+    /// Creates a new workspace with a specific layout type.
+    pub fn with_layout(id: WorkspaceId, layout: LayoutType) -> Self {
+        Self {
+            id,
+            name: id.to_string(),
+            clients: Vec::new(),
+            focused_client: None,
+            bsp_tree: crate::layout::BspTree::new(),
+            layout,
+        }
+    }
+
+    /// Sets the workspace layout algorithm.
+    pub fn set_layout(&mut self, layout: LayoutType) {
+        self.layout = layout;
+    }
+
+    /// Cycles this workspace to the next layout algorithm.
+    pub fn cycle_layout(&mut self) -> LayoutType {
+        self.layout = crate::layout::cycle_layout(self.layout);
+        self.layout
+    }
+
     /// Returns the number of client windows on this workspace.
     pub fn len(&self) -> usize {
         self.clients.len()
@@ -95,12 +128,14 @@ impl Default for Workspace {
             name: "1".to_string(),
             clients: Vec::new(),
             focused_client: None,
+            bsp_tree: crate::layout::BspTree::new(),
+            layout: LayoutType::Bsp,
         }
     }
 }
 
 /// Manages multiple workspaces, switching, and window movement between them.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct WorkspaceManager {
     /// Map of workspace ID to workspace object, ordered by ID.
     pub workspaces: BTreeMap<WorkspaceId, Workspace>,
@@ -138,6 +173,16 @@ impl WorkspaceManager {
     /// Returns the ID of the currently active workspace.
     pub fn current_id(&self) -> WorkspaceId {
         self.current_workspace_id
+    }
+
+    /// Sets the layout for the current workspace.
+    pub fn set_current_layout(&mut self, layout: LayoutType) {
+        self.current_workspace_mut().set_layout(layout);
+    }
+
+    /// Cycles the layout for the current workspace to the next algorithm.
+    pub fn cycle_current_layout(&mut self) -> LayoutType {
+        self.current_workspace_mut().cycle_layout()
     }
 
     /// Returns a list of workspace IDs that currently contain one or more client windows.

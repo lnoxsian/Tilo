@@ -532,10 +532,21 @@ impl LayoutModule {
     pub fn set_layout(&mut self, layout: &str) {
         self.layout_name = layout.to_string();
         self.layout_symbol = match layout {
-            "floating" => "><>".to_string(),
-            "tabbed" => "[T]".to_string(),
-            "stacking" => "[S]".to_string(),
-            _ => "[]=".to_string(),
+            "floating" | "><>" => "><>".to_string(),
+            "tabbed" | "[T]" => "[T]".to_string(),
+            "stacking" | "stacked" | "[S]" => "[S]".to_string(),
+            "vertical" | "|||" => "|||".to_string(),
+            "horizontal" | "===" => "===".to_string(),
+            "monocle" | "[M]" => "[M]".to_string(),
+            "bsp" | "[B]" => "[B]".to_string(),
+            "master" | "[]=" => "[]=".to_string(),
+            _ => {
+                if layout.starts_with('[') && layout.ends_with(']') {
+                    layout.to_string()
+                } else {
+                    "[]=".to_string()
+                }
+            }
         };
         self.cached_text = self.layout_symbol.clone();
     }

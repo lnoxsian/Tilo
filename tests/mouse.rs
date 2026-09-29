@@ -451,4 +451,109 @@ fn test_cursor_initialization_and_application_in_xephyr() {
     assert!(wm.cursor_manager.apply_root(&wm.context.connection, wm.context.root_window).is_ok());
 }
 
+#[test]
+fn test_tiled_window_mouse_drag_resize_in_xephyr() {
+    let _server = match XephyrServer::start(150) {
+        Some(s) => s,
+        None => {
+            eprintln!("Xephyr not available on :150, skipping test");
+            return;
+        }
+    };
+
+    let ctx = X11Context::connect_to(Some(":150")).expect("Connect to Xephyr");
+    let mut wm = WindowManager::new(ctx).expect("Create WM");
+
+    let screen = &wm.context.connection.setup().roots[wm.context.screen_num];
+    let w1 = wm.context.connection.generate_id().unwrap();
+    let w2 = wm.context.connection.generate_id().unwrap();
+
+    wm.context.connection.create_window(
+        screen.root_depth,
+        w1,
+        wm.context.root_window,
+        0, 0, 200, 200, 0,
+        WindowClass::INPUT_OUTPUT,
+        screen.root_visual,
+        &CreateWindowAux::new().event_mask(EventMask::STRUCTURE_NOTIFY),
+    ).unwrap();
+
+    wm.context.connection.create_window(
+        screen.root_depth,
+        w2,
+        wm.context.root_window,
+        0, 0, 200, 200, 0,
+        WindowClass::INPUT_OUTPUT,
+        screen.root_visual,
+        &CreateWindowAux::new().event_mask(EventMask::STRUCTURE_NOTIFY),
+    ).unwrap();
+
+    wm.manage_window(w1).unwrap();
+    wm.manage_window(w2).unwrap();
+    wm.retile().unwrap();
+
+    let geom1_before = wm.context.connection.get_geometry(w1).unwrap().reply().unwrap();
+
+    // Initiate Mod + Right Click on w1
+    let press = ButtonPressEvent {
+        response_type: 4,
+        detail: 3, // Right click
+        sequence: 1,
+        time: 10,
+        root: wm.context.root_window,
+        event: w1,
+        child: 0,
+        root_x: geom1_before.x + (geom1_before.width / 2) as i16,
+        root_y: geom1_before.y + (geom1_before.height / 2) as i16,
+        event_x: (geom1_before.width / 2) as i16,
+        event_y: (geom1_before.height / 2) as i16,
+        state: KeyButMask::from(MOD_SUPER),
+        same_screen: true,
+    };
+    wm.handle_button_press(&press).unwrap();
+    assert!(matches!(wm.mouse_action, MouseAction::ResizingTiled { .. }));
+
+    // Drag pointer 100 pixels to the right
+    let motion = MotionNotifyEvent {
+        response_type: 6,
+        detail: Motion::NORMAL,
+        sequence: 2,
+        time: 20,
+        root: wm.context.root_window,
+        event: wm.context.root_window,
+        child: w1,
+        root_x: press.root_x + 100,
+        root_y: press.root_y,
+        event_x: press.root_x + 100,
+        event_y: press.root_y,
+        state: KeyButMask::from(MOD_SUPER) | KeyButMask::BUTTON3,
+        same_screen: true,
+    };
+    wm.handle_motion_notify(&motion).unwrap();
+
+    // Release mouse button
+    let release = ButtonReleaseEvent {
+        response_type: 5,
+        detail: 3,
+        sequence: 3,
+        time: 30,
+        root: wm.context.root_window,
+        event: wm.context.root_window,
+        child: 0,
+        root_x: motion.root_x,
+        root_y: motion.root_y,
+        event_x: motion.root_x,
+        event_y: motion.root_y,
+        state: KeyButMask::from(MOD_SUPER),
+        same_screen: true,
+    };
+    wm.handle_button_release(&release).unwrap();
+    assert!(!wm.mouse_action.is_active());
+
+    // Window 1 should now be wider than its initial geometry
+    let geom1_after = wm.context.connection.get_geometry(w1).unwrap().reply().unwrap();
+    assert!(geom1_after.width > geom1_before.width, "Tiled window 1 width must have grown");
+}
+
+
 

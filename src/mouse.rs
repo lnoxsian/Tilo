@@ -36,6 +36,13 @@ pub enum MouseAction {
         start_width: u32,
         start_height: u32,
     },
+    /// Dragging a tiled window boundary to resize it in the BSP tree.
+    ResizingTiled {
+        window: u32,
+        start_x: i32,
+        start_y: i32,
+        initial_rect: crate::layout::Rect,
+    },
 }
 
 impl Default for MouseAction {
@@ -53,9 +60,9 @@ impl MouseAction {
     /// Returns the window ID being manipulated, if any.
     pub fn window(&self) -> Option<u32> {
         match self {
-            MouseAction::Moving { window, .. } | MouseAction::Resizing { window, .. } => {
-                Some(*window)
-            }
+            MouseAction::Moving { window, .. }
+            | MouseAction::Resizing { window, .. }
+            | MouseAction::ResizingTiled { window, .. } => Some(*window),
             MouseAction::None => None,
         }
     }
@@ -208,7 +215,7 @@ pub fn handle_motion_notify(
             conn.configure_window(*window, &aux)?;
             conn.flush()?;
         }
-        MouseAction::None => {}
+        MouseAction::ResizingTiled { .. } | MouseAction::None => {}
     }
     Ok(())
 }

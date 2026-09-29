@@ -1,5 +1,8 @@
 use std::process::{Child, Command};
-use tilo::layout::{calculate_master_stack, LayoutConfig, Rect};
+use tilo::keybind::Action;
+use tilo::layout::{
+    apply_layout, calculate_master_stack, LayoutConfig, LayoutType, Rect,
+};
 use tilo::wm::WindowManager;
 use tilo::x11::X11Context;
 use x11rb::connection::Connection;
@@ -187,3 +190,130 @@ fn test_tiling_live_in_xephyr() {
         wm.stop();
     }
 }
+
+#[test]
+fn test_layout_switching_and_cycling_live_in_xephyr() {
+    if !Command::new("which").arg("Xephyr").output().map(|o| o.status.success()).unwrap_or(false) {
+        return;
+    }
+
+    let xephyr = XephyrServer::start(91);
+    if let Some(server) = xephyr {
+        let wm_ctx = X11Context::connect_to(Some(&server.display))
+            .expect("WM connect failed");
+        assert!(wm_ctx.become_wm().is_ok());
+
+        let mut wm = WindowManager::new(wm_ctx).expect("WM init failed");
+        wm.layout_config = LayoutConfig {
+            master_ratio: 0.50,
+            inner_gap: 10,
+            outer_gap: 10,
+            border_width: 2,
+        };
+
+        let (client_conn, screen_num) = x11rb::connect(Some(&server.display))
+            .expect("Client connect failed");
+        let screen = &client_conn.setup().roots[screen_num];
+        let root = screen.root;
+
+        let create_win = |conn: &x11rb::rust_connection::RustConnection| -> u32 {
+            let win = conn.generate_id().unwrap();
+            conn.create_window(
+                x11rb::COPY_DEPTH_FROM_PARENT,
+                win,
+                root,
+                0,
+                0,
+                100,
+                100,
+                0,
+                WindowClass::INPUT_OUTPUT,
+                x11rb::COPY_FROM_PARENT,
+                &CreateWindowAux::default(),
+            )
+            .unwrap();
+            conn.flush().unwrap();
+            conn.sync().unwrap();
+            win
+        };
+
+        let win1 = create_win(&client_conn);
+        let win2 = create_win(&client_conn);
+        let win3 = create_win(&client_conn);
+
+        assert!(wm.manage_window(win1).unwrap());
+        assert!(wm.manage_window(win2).unwrap());
+        assert!(wm.manage_window(win3).unwrap());
+
+        // 1. Test Vertical Layout: all 3 windows placed side-by-side
+        wm.execute_action(Action::SetLayout(LayoutType::Vertical)).unwrap();
+        let g1_v = client_conn.get_geometry(win1).unwrap().reply().unwrap();
+        let g2_v = client_conn.get_geometry(win2).unwrap().reply().unwrap();
+        let g3_v = client_conn.get_geometry(win3).unwrap().reply().unwrap();
+
+        assert_eq!(g1_v.y, 10);
+        assert_eq!(g2_v.y, 10);
+        assert_eq!(g3_v.y, 10);
+        assert_eq!(g1_v.height, 776);
+        assert_eq!(g2_v.height, 776);
+        assert_eq!(g3_v.height, 776);
+        assert!(g1_v.x < g2_v.x);
+        assert!(g2_v.x < g3_v.x);
+        assert!(g1_v.x + g1_v.width as i16 <= g2_v.x);
+        assert!(g2_v.x + g2_v.width as i16 <= g3_v.x);
+
+        // 2. Test Horizontal Layout: all 3 windows stacked top-to-bottom
+        wm.execute_action(Action::SetLayout(LayoutType::Horizontal)).unwrap();
+        let g1_h = client_conn.get_geometry(win1).unwrap().reply().unwrap();
+        let g2_h = client_conn.get_geometry(win2).unwrap().reply().unwrap();
+        let g3_h = client_conn.get_geometry(win3).unwrap().reply().unwrap();
+
+        assert_eq!(g1_h.x, 10);
+        assert_eq!(g2_h.x, 10);
+        assert_eq!(g3_h.x, 10);
+        assert_eq!(g1_h.width, 976);
+        assert_eq!(g2_h.width, 976);
+        assert_eq!(g3_h.width, 976);
+        assert!(g1_h.y < g2_h.y);
+        assert!(g2_h.y < g3_h.y);
+        assert!(g1_h.y + g1_h.height as i16 <= g2_h.y);
+        assert!(g2_h.y + g2_h.height as i16 <= g3_h.y);
+
+        // 3. Test Monocle Layout: all windows take full screen
+        wm.execute_action(Action::SetLayout(LayoutType::Monocle)).unwrap();
+        let g1_m = client_conn.get_geometry(win1).unwrap().reply().unwrap();
+        let g2_m = client_conn.get_geometry(win2).unwrap().reply().unwrap();
+        let g3_m = client_conn.get_geometry(win3).unwrap().reply().unwrap();
+
+        assert_eq!(g1_m.x, 10);
+        assert_eq!(g1_m.y, 10);
+        assert_eq!(g1_m.width, 976);
+        assert_eq!(g1_m.height, 776);
+        assert_eq!(g2_m.x, 10);
+        assert_eq!(g2_m.y, 10);
+        assert_eq!(g2_m.width, 976);
+        assert_eq!(g2_m.height, 776);
+        assert_eq!(g3_m.x, 10);
+        assert_eq!(g3_m.y, 10);
+        assert_eq!(g3_m.width, 976);
+        assert_eq!(g3_m.height, 776);
+
+        // 4. Test cycling layout: Monocle -> Bsp -> MasterStack -> Vertical
+        wm.execute_action(Action::CycleLayout).unwrap();
+        let current_ws = wm.workspace_manager.current_id();
+        assert_eq!(wm.workspace_manager.get(current_ws).unwrap().layout, LayoutType::Bsp);
+
+        wm.execute_action(Action::CycleLayout).unwrap();
+        assert_eq!(wm.workspace_manager.get(current_ws).unwrap().layout, LayoutType::MasterStack);
+
+        wm.execute_action(Action::CycleLayout).unwrap();
+        assert_eq!(wm.workspace_manager.get(current_ws).unwrap().layout, LayoutType::Vertical);
+
+        // 5. Test apply_layout standalone function from Phase 27
+        let area = Rect::new(0, 0, 1000, 800);
+        assert!(apply_layout(LayoutType::Monocle, &[win1, win2], &area, 0.5, &client_conn).is_ok());
+
+        wm.stop();
+    }
+}
+

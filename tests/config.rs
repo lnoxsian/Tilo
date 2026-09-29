@@ -278,3 +278,42 @@ fn test_wm_apply_config_in_xephyr() {
         assert!((wm.layout_config.master_ratio - 0.50).abs() < f32::EPSILON);
     }
 }
+
+#[test]
+fn test_parse_layout_directives_and_actions() {
+    let input = r#"
+mod Mod4
+layout monocle
+bind Mod4+space cycle_layout
+bind Mod4+m layout monocle
+bind Mod4+v layout vertical
+bind Mod4+t layout master
+"#;
+    let tokens = tokenize(input).unwrap();
+    let config = parse(&tokens).unwrap();
+
+    assert_eq!(config.layout, tilo::layout::LayoutType::Monocle);
+    assert_eq!(config.bindings.len(), 4);
+    assert_eq!(config.bindings[0].action, Action::CycleLayout);
+    assert_eq!(config.bindings[1].action, Action::SetLayout(tilo::layout::LayoutType::Monocle));
+    assert_eq!(config.bindings[2].action, Action::SetLayout(tilo::layout::LayoutType::Vertical));
+    assert_eq!(config.bindings[3].action, Action::SetLayout(tilo::layout::LayoutType::MasterStack));
+
+    // Test other layout directives
+    let t_master = tokenize("layout master\n").unwrap();
+    assert_eq!(parse(&t_master).unwrap().layout, tilo::layout::LayoutType::MasterStack);
+
+    let t_vert = tokenize("layout vertical\n").unwrap();
+    assert_eq!(parse(&t_vert).unwrap().layout, tilo::layout::LayoutType::Vertical);
+
+    let t_horiz = tokenize("layout horizontal\n").unwrap();
+    assert_eq!(parse(&t_horiz).unwrap().layout, tilo::layout::LayoutType::Horizontal);
+
+    let t_bsp = tokenize("layout bsp\n").unwrap();
+    assert_eq!(parse(&t_bsp).unwrap().layout, tilo::layout::LayoutType::Bsp);
+
+    // Test invalid layout
+    let t_err = tokenize("layout non_existent\n").unwrap();
+    assert!(parse(&t_err).is_err());
+}
+

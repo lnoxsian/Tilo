@@ -83,6 +83,8 @@ pub struct Config {
     pub master_ratio: f32,
     /// The default terminal emulator command.
     pub terminal: String,
+    /// Default window tiling layout (Phase 27).
+    pub layout: crate::layout::LayoutType,
     /// A list of defined keybindings.
     pub bindings: Vec<KeyBind>,
     /// Optional startup/autostart commands.
@@ -102,6 +104,7 @@ impl Default for Config {
             outer_gap: 8,
             master_ratio: 0.60,
             terminal: "foot".to_string(),
+            layout: crate::layout::LayoutType::Bsp,
             bindings: default_keybindings(),
             autostart: Vec::new(),
         }
@@ -403,6 +406,20 @@ fn parse_line(
             let words: Vec<String> = line[1..].iter().map(|t| token_to_string(t)).collect();
             config.terminal = words.join(" ");
         }
+        "layout" => {
+            if line.len() < 2 {
+                return Err(ConfigError::ParseError {
+                    line: line_number,
+                    message: "Directive 'layout' requires a layout type (e.g. 'layout master', 'layout monocle', 'layout vertical')".to_string(),
+                });
+            }
+            let name = token_to_string(line[1]);
+            let lt = name.parse::<crate::layout::LayoutType>().map_err(|_| ConfigError::InvalidValue {
+                line: line_number,
+                value: name,
+            })?;
+            config.layout = lt;
+        }
         "bind" => {
             if line.len() < 3 {
                 return Err(ConfigError::ParseError {
@@ -602,6 +619,56 @@ fn parse_action(tokens: &[&Token], line: usize, config: &Config) -> Result<Actio
         "reload" => Ok(Action::Reload),
         "exit_menu" | "powermenu" | "power_menu" => Ok(Action::ExitMenu),
         "exit" | "quit" => Ok(Action::Exit),
+        "resize" | "resize_tile" => {
+            if tokens.len() < 2 {
+                return Err(ConfigError::ParseError {
+                    line,
+                    message: "Action 'resize' requires a direction (left, right, up, down)".to_string(),
+                });
+            }
+            let dir_str = token_to_string(tokens[1]);
+            let dir = parse_direction(&dir_str, line)?;
+            Ok(Action::ResizeTile(dir))
+        }
+        "split" | "preselect_split" => {
+            if tokens.len() < 2 {
+                return Err(ConfigError::ParseError {
+                    line,
+                    message: "Action 'split' requires 'vertical' or 'horizontal'".to_string(),
+                });
+            }
+            let s = token_to_string(tokens[1]).to_lowercase();
+            match s.as_str() {
+                "vertical" | "v" => Ok(Action::PreselectSplit(crate::layout::SplitType::Vertical)),
+                "horizontal" | "h" => Ok(Action::PreselectSplit(crate::layout::SplitType::Horizontal)),
+                _ => Err(ConfigError::InvalidValue {
+                    line,
+                    value: s,
+                }),
+            }
+        }
+        "split_vertical" => Ok(Action::PreselectSplit(crate::layout::SplitType::Vertical)),
+        "split_horizontal" => Ok(Action::PreselectSplit(crate::layout::SplitType::Horizontal)),
+        "cycle_layout" | "cyclelayout" => Ok(Action::CycleLayout),
+        "layout" | "set_layout" => {
+            if tokens.len() < 2 {
+                return Err(ConfigError::ParseError {
+                    line,
+                    message: "Action 'layout' requires a layout type (master, monocle, vertical, horizontal, bsp)".to_string(),
+                });
+            }
+            let name = token_to_string(tokens[1]);
+            let lt = name.parse::<crate::layout::LayoutType>().map_err(|_| ConfigError::InvalidValue {
+                line,
+                value: name,
+            })?;
+            Ok(Action::SetLayout(lt))
+        }
+        "layout_master" => Ok(Action::SetLayout(crate::layout::LayoutType::MasterStack)),
+        "layout_monocle" => Ok(Action::SetLayout(crate::layout::LayoutType::Monocle)),
+        "layout_vertical" => Ok(Action::SetLayout(crate::layout::LayoutType::Vertical)),
+        "layout_horizontal" => Ok(Action::SetLayout(crate::layout::LayoutType::Horizontal)),
+        "layout_bsp" => Ok(Action::SetLayout(crate::layout::LayoutType::Bsp)),
         unknown => Err(ConfigError::InvalidValue {
             line,
             value: unknown.to_string(),

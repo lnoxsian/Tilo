@@ -24,7 +24,10 @@ use crate::icccm::{
 };
 use crate::input::InputManager;
 use crate::keybind::{parse_modifier, Action, MOD_LOCK, MOD_SUPER};
-use crate::layout::{apply_layout_with_border, calculate_master_stack, LayoutConfig, Rect};
+use crate::layout::{
+    apply_layout_with_border, calculate_horizontal, calculate_master_stack, calculate_monocle,
+    calculate_vertical, LayoutConfig, LayoutType, Rect,
+};
 use crate::rules::{apply_rules as apply_window_rules, RuleAction, WindowRule};
 use crate::statusbar::{create_statusbar_window, Statusbar, StatusbarError};
 use crate::workspace::{WorkspaceId, WorkspaceManager};
@@ -167,7 +170,10 @@ impl WindowManager {
 
         let mut input_manager = InputManager::new(config.bindings.clone());
         let _ = input_manager.setup(&context.connection, context.root_window);
-        let workspace_manager = WorkspaceManager::new();
+        let mut workspace_manager = WorkspaceManager::new();
+        for ws in workspace_manager.workspaces.values_mut() {
+            ws.layout = config.layout;
+        }
 
         let mut monitor_manager = MonitorManager::new(
             context.screen_width as u32,
@@ -226,6 +232,7 @@ impl WindowManager {
         self.layout_config.inner_gap = config.inner_gap;
         self.layout_config.outer_gap = config.outer_gap;
         self.layout_config.master_ratio = config.master_ratio;
+        self.workspace_manager.current_workspace_mut().layout = config.layout;
 
         self.input_manager.re_register(
             &self.context.connection,
@@ -402,9 +409,10 @@ impl WindowManager {
         let current_ws = self.current_workspace;
         let occupied = self.workspace_manager.occupied_workspaces();
         let focused = self.focused_window();
+        let ws_layout = self.workspace_manager.get(current_ws).map(|ws| ws.layout).unwrap_or_default();
         let layout_symbol = match focused {
             Some(w) if self.client_state.get_client(w).map(|c| c.floating).unwrap_or(false) => "><>",
-            _ => "[]=",
+            _ => ws_layout.symbol(),
         };
         let title = focused.map(|w| self.get_window_title(w)).unwrap_or_default();
         if let Some(ref mut bar) = self.statusbar {
@@ -1166,6 +1174,47 @@ impl WindowManager {
         removed
     }
 
+    /// Computes the bounding rectangles for visible tiled windows on a workspace using its active layout.
+    pub fn get_workspace_window_geometries(
+        &mut self,
+        ws_id: WorkspaceId,
+        usable_rect: &Rect,
+    ) -> Vec<(Window, Rect)> {
+        let visible_tiled = self.client_state.visible_tiled_clients_on_workspace(ws_id);
+        if visible_tiled.is_empty() {
+            return Vec::new();
+        }
+
+        if let Some(ws) = self.workspace_manager.get_mut(ws_id) {
+            match ws.layout {
+                LayoutType::Bsp => {
+                    let focused = self.workspace_focus.focused_window_on(ws_id);
+                    ws.bsp_tree.sync_clients(&visible_tiled, focused, usable_rect, self.layout_config.inner_gap);
+                    ws.bsp_tree.calculate_rects(usable_rect, &self.layout_config)
+                }
+                LayoutType::MasterStack => {
+                    let rects = calculate_master_stack(&visible_tiled, usable_rect, &self.layout_config);
+                    visible_tiled.into_iter().zip(rects.into_iter()).collect()
+                }
+                LayoutType::Vertical => {
+                    let rects = calculate_vertical(&visible_tiled, usable_rect, &self.layout_config);
+                    visible_tiled.into_iter().zip(rects.into_iter()).collect()
+                }
+                LayoutType::Horizontal => {
+                    let rects = calculate_horizontal(&visible_tiled, usable_rect, &self.layout_config);
+                    visible_tiled.into_iter().zip(rects.into_iter()).collect()
+                }
+                LayoutType::Monocle | LayoutType::Tabbed | LayoutType::Stacked => {
+                    let rects = calculate_monocle(&visible_tiled, usable_rect, &self.layout_config);
+                    visible_tiled.into_iter().zip(rects.into_iter()).collect()
+                }
+            }
+        } else {
+            let rects = calculate_master_stack(&visible_tiled, usable_rect, &self.layout_config);
+            visible_tiled.into_iter().zip(rects.into_iter()).collect()
+        }
+    }
+
     /// Recalculates and applies the tiling layout to all visible managed clients on each monitor's active workspace.
     pub fn retile(&mut self) -> Result<(), X11Error> {
         let monitors = self.monitor_manager.monitors.clone();
@@ -1193,13 +1242,27 @@ impl WindowManager {
             let visible_tiled = self.client_state.visible_tiled_clients_on_workspace(mon_ws);
 
             if !visible_tiled.is_empty() {
-                let rects = calculate_master_stack(&visible_tiled, &usable_rect, &self.layout_config);
+                let ws_layout = self.workspace_manager.get(mon_ws).map(|ws| ws.layout).unwrap_or_default();
+                let pairs = self.get_workspace_window_geometries(mon_ws, &usable_rect);
+
+                let windows: Vec<Window> = pairs.iter().map(|(w, _)| *w).collect();
+                let geometries: Vec<Rect> = pairs.iter().map(|(_, r)| *r).collect();
                 apply_layout_with_border(
                     &self.context.connection,
-                    &visible_tiled,
-                    &rects,
+                    &windows,
+                    &geometries,
                     self.layout_config.border_width,
                 )?;
+
+                // If Monocle layout, raise the focused window above other tiled windows
+                if ws_layout == LayoutType::Monocle {
+                    if let Some(focused) = self.workspace_focus.focused_window_on(mon_ws) {
+                        let _ = self.context.connection.configure_window(
+                            focused,
+                            &ConfigureWindowAux::default().stack_mode(StackMode::ABOVE),
+                        );
+                    }
+                }
             }
 
             // Keep all mapped floating windows on this monitor's workspace stacked above tiled windows
@@ -1422,11 +1485,7 @@ impl WindowManager {
         } else {
             monitor_rect
         };
-        let rects = calculate_master_stack(&visible_tiled, &usable_rect, &self.layout_config);
-        let pairs: Vec<(Window, Rect)> = visible_tiled
-            .into_iter()
-            .zip(rects.into_iter())
-            .collect();
+        let pairs = self.get_workspace_window_geometries(current_ws, &usable_rect);
 
         if let Some(target) = find_neighbor(direction, current, &pairs, wrap) {
             self.focus_client(target)?;
@@ -2424,6 +2483,61 @@ impl WindowManager {
             Action::ExitMenu | Action::Exit => {
                 let _ = self.open_exit_launcher();
             }
+            Action::ResizeTile(dir) => {
+                let current_ws = self.workspace_manager.current_id();
+                if let Some(focused) = self.workspace_focus.focused_window_on(current_ws) {
+                    if let Some(ws) = self.workspace_manager.get_mut(current_ws) {
+                        match ws.layout {
+                            LayoutType::Bsp => {
+                                let (split_type, delta) = match dir {
+                                    Direction::Left => (crate::layout::SplitType::Horizontal, -0.05),
+                                    Direction::Right => (crate::layout::SplitType::Horizontal, 0.05),
+                                    Direction::Up => (crate::layout::SplitType::Vertical, -0.05),
+                                    Direction::Down => (crate::layout::SplitType::Vertical, 0.05),
+                                };
+                                if ws.bsp_tree.resize_window(focused, delta, split_type) {
+                                    let _ = self.retile();
+                                }
+                            }
+                            LayoutType::MasterStack => {
+                                let delta = match dir {
+                                    Direction::Right => 0.05,
+                                    Direction::Left => -0.05,
+                                    _ => 0.0,
+                                };
+                                if delta != 0.0 {
+                                    self.layout_config.master_ratio = (self.layout_config.master_ratio + delta).clamp(0.10, 0.90);
+                                    let _ = self.retile();
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+            Action::PreselectSplit(split_type) => {
+                let current_ws = self.workspace_manager.current_id();
+                if let Some(ws) = self.workspace_manager.get_mut(current_ws) {
+                    ws.layout = LayoutType::Bsp;
+                    ws.bsp_tree.preselect = Some(split_type);
+                }
+            }
+            Action::CycleLayout => {
+                let current_ws = self.workspace_manager.current_id();
+                if let Some(ws) = self.workspace_manager.get_mut(current_ws) {
+                    ws.cycle_layout();
+                }
+                self.retile()?;
+                self.render_statusbar().ok();
+            }
+            Action::SetLayout(layout) => {
+                let current_ws = self.workspace_manager.current_id();
+                if let Some(ws) = self.workspace_manager.get_mut(current_ws) {
+                    ws.set_layout(layout);
+                }
+                self.retile()?;
+                self.render_statusbar().ok();
+            }
         }
         Ok(())
     }
@@ -2464,31 +2578,28 @@ impl WindowManager {
             monitor_rect
         };
 
-        let rects = calculate_master_stack(&visible_tiled, &usable_rect, &self.layout_config);
-        let pairs: Vec<(Window, Rect)> = visible_tiled
-            .into_iter()
-            .zip(rects.into_iter())
-            .collect();
+        let pairs = self.get_workspace_window_geometries(current_ws, &usable_rect);
 
         let neighbor = find_neighbor(direction, Some(current), &pairs, false)
             .or_else(|| find_neighbor(direction, Some(current), &pairs, true));
 
         if let Some(target) = neighbor {
+            if let Some(ws) = self.workspace_manager.get_mut(current_ws) {
+                ws.bsp_tree.swap_windows(current, target);
+                let ws_idx_a = ws.clients.iter().position(|&w| w == current);
+                let ws_idx_b = ws.clients.iter().position(|&w| w == target);
+                if let (Some(wa), Some(wb)) = (ws_idx_a, ws_idx_b) {
+                    ws.clients.swap(wa, wb);
+                }
+            }
             let idx_a = self.client_state.client_order.iter().position(|&w| w == current);
             let idx_b = self.client_state.client_order.iter().position(|&w| w == target);
             if let (Some(a), Some(b)) = (idx_a, idx_b) {
                 self.client_state.client_order.swap(a, b);
-                if let Some(ws) = self.workspace_manager.get_mut(current_ws) {
-                    let ws_idx_a = ws.clients.iter().position(|&w| w == current);
-                    let ws_idx_b = ws.clients.iter().position(|&w| w == target);
-                    if let (Some(wa), Some(wb)) = (ws_idx_a, ws_idx_b) {
-                        ws.clients.swap(wa, wb);
-                    }
-                }
-                self.retile()?;
-                self.focus_client(current)?;
-                return Ok(Some(target));
             }
+            self.retile()?;
+            self.focus_client(current)?;
+            return Ok(Some(target));
         }
         Ok(None)
     }
@@ -2574,6 +2685,29 @@ impl WindowManager {
                 let _ = self.raise_window(window);
 
                 if !is_floating {
+                    let (win_x, win_y, win_w, win_h) = if let Some(reply) = self.context.connection.get_geometry(window).ok().and_then(|c| c.reply().ok()) {
+                        (reply.x as i32, reply.y as i32, reply.width as u32, reply.height as u32)
+                    } else {
+                        (0, 0, 400, 300)
+                    };
+
+                    self.mouse_action = crate::mouse::MouseAction::ResizingTiled {
+                        window,
+                        start_x: event.root_x as i32,
+                        start_y: event.root_y as i32,
+                        initial_rect: Rect::new(win_x, win_y, win_w, win_h),
+                    };
+
+                    let _ = self.context.connection.grab_pointer(
+                        false,
+                        self.context.root_window,
+                        EventMask::BUTTON_RELEASE | EventMask::POINTER_MOTION,
+                        GrabMode::ASYNC,
+                        GrabMode::ASYNC,
+                        x11rb::NONE,
+                        self.cursor_manager.resize_cursor,
+                        event_time,
+                    );
                     self.context.flush()?;
                     return Ok(());
                 }
@@ -2659,6 +2793,34 @@ impl WindowManager {
                         fg.height = new_h;
                     } else {
                         client.floating_geometry = Some(crate::floating::FloatingGeometry::new(0, 0, new_w, new_h));
+                    }
+                }
+            }
+            crate::mouse::MouseAction::ResizingTiled {
+                window,
+                start_x,
+                start_y,
+                initial_rect,
+            } => {
+                let delta_x = event.root_x as i32 - start_x;
+                let delta_y = event.root_y as i32 - start_y;
+                let current_ws = self.workspace_manager.current_id();
+                if let Some(ws) = self.workspace_manager.get_mut(current_ws) {
+                    match ws.layout {
+                        LayoutType::Bsp => {
+                            if ws.bsp_tree.resize_by_pointer(window, delta_x, delta_y, initial_rect) {
+                                let _ = self.retile();
+                            }
+                        }
+                        LayoutType::MasterStack => {
+                            let delta_ratio = delta_x as f32 / initial_rect.width.max(1) as f32 * 0.2;
+                            let new_ratio = (self.layout_config.master_ratio + delta_ratio).clamp(0.10, 0.90);
+                            if (new_ratio - self.layout_config.master_ratio).abs() > 0.001 {
+                                self.layout_config.master_ratio = new_ratio;
+                                let _ = self.retile();
+                            }
+                        }
+                        _ => {}
                     }
                 }
             }

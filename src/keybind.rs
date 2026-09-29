@@ -116,6 +116,14 @@ pub enum Action {
     ExitMenu,
     /// Exit the window manager gracefully.
     Exit,
+    /// Resize the focused tile along a direction by a delta (e.g. 0.05).
+    ResizeTile(Direction),
+    /// Preselect the split orientation for the next tiled window.
+    PreselectSplit(crate::layout::SplitType),
+    /// Cycle to the next window layout (Phase 27).
+    CycleLayout,
+    /// Set the layout of the current workspace (Phase 27).
+    SetLayout(crate::layout::LayoutType),
 }
 
 /// Represents a single keybinding configuration.
@@ -245,6 +253,7 @@ pub fn default_keybindings() -> Vec<KeyBind> {
         KeyBind::new(MOD_SUPER, XK_F, Action::ToggleFullscreen),
         KeyBind::new(MOD_SUPER, XK_D, Action::Launcher),
         KeyBind::new(MOD_SUPER | MOD_SHIFT, XK_SPACE, Action::ToggleFloating),
+        KeyBind::new(MOD_SUPER, XK_SPACE, Action::CycleLayout),
         KeyBind::new(MOD_SUPER, XK_GRAVE, Action::ToggleScratchpad),
         KeyBind::new(MOD_SUPER | MOD_SHIFT, XK_GRAVE, Action::SetScratchpad),
         // Workspaces 1-9
@@ -270,6 +279,14 @@ pub fn default_keybindings() -> Vec<KeyBind> {
         // Multi-Monitor Focus
         KeyBind::new(MOD_SUPER, XK_COMMA, Action::FocusMonitorLeft),
         KeyBind::new(MOD_SUPER, XK_PERIOD, Action::FocusMonitorRight),
+        // BSP Tile Resizing
+        KeyBind::new(MOD_SUPER | MOD_CONTROL, XK_LEFT, Action::ResizeTile(Direction::Left)),
+        KeyBind::new(MOD_SUPER | MOD_CONTROL, XK_RIGHT, Action::ResizeTile(Direction::Right)),
+        KeyBind::new(MOD_SUPER | MOD_CONTROL, XK_UP, Action::ResizeTile(Direction::Up)),
+        KeyBind::new(MOD_SUPER | MOD_CONTROL, XK_DOWN, Action::ResizeTile(Direction::Down)),
+        // BSP Split Preselection
+        KeyBind::new(MOD_SUPER, XK_V, Action::PreselectSplit(crate::layout::SplitType::Vertical)),
+        KeyBind::new(MOD_SUPER, XK_B, Action::PreselectSplit(crate::layout::SplitType::Horizontal)),
         // WM Controls
         KeyBind::new(MOD_SUPER | MOD_SHIFT, XK_R, Action::Reload),
         KeyBind::new(MOD_CONTROL | MOD_SHIFT, XK_Q, Action::Exit),

@@ -5,7 +5,7 @@
 
 use crate::x11::X11Error;
 use x11rb::connection::Connection;
-use x11rb::protocol::xproto::{ConfigureWindowAux, ConnectionExt, Window};
+use x11rb::protocol::xproto::{ConfigureWindowAux, ConnectionExt, StackMode, Window};
 
 /// Represents a 2D rectangle in screen space, typically used for window geometries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -56,6 +56,97 @@ impl Default for LayoutConfig {
             outer_gap: 12,
             border_width: 2,
         }
+    }
+}
+
+/// Available layout types.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LayoutType {
+    /// Traditional master and stack tiling.
+    MasterStack,
+    /// Evenly divide space vertically.
+    Vertical,
+    /// Evenly divide space horizontally.
+    Horizontal,
+    /// One window takes up the whole screen.
+    Monocle,
+    /// All windows share the full area with a horizontal tab bar at the top.
+    /// Requires window decoration rendering. Deferred to post-Phase 25.
+    Tabbed,
+    /// Window title bars stacked vertically; focused window takes remaining body.
+    /// Requires window decoration rendering. Deferred to post-Phase 25.
+    Stacked,
+    /// Recursive binary space partitioning tree.
+    Bsp,
+}
+
+impl Default for LayoutType {
+    fn default() -> Self {
+        Self::MasterStack
+    }
+}
+
+impl std::fmt::Display for LayoutType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::MasterStack => write!(f, "master"),
+            Self::Vertical => write!(f, "vertical"),
+            Self::Horizontal => write!(f, "horizontal"),
+            Self::Monocle => write!(f, "monocle"),
+            Self::Tabbed => write!(f, "tabbed"),
+            Self::Stacked => write!(f, "stacking"),
+            Self::Bsp => write!(f, "bsp"),
+        }
+    }
+}
+
+impl std::str::FromStr for LayoutType {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "master" | "masterstack" | "master_stack" | "default" => Ok(Self::MasterStack),
+            "vertical" | "vert" | "v" => Ok(Self::Vertical),
+            "horizontal" | "horiz" | "h" => Ok(Self::Horizontal),
+            "monocle" | "mono" | "fullscreen_layout" => Ok(Self::Monocle),
+            "tabbed" | "tabs" => Ok(Self::Tabbed),
+            "stacking" | "stacked" => Ok(Self::Stacked),
+            "bsp" | "bsptree" => Ok(Self::Bsp),
+            other => Err(format!("Unknown layout type: '{}'", other)),
+        }
+    }
+}
+
+impl LayoutType {
+    /// Returns the short statusbar symbol for this layout.
+    pub fn symbol(&self) -> &'static str {
+        match self {
+            Self::MasterStack => "[]=",
+            Self::Vertical => "|||",
+            Self::Horizontal => "===",
+            Self::Monocle => "[M]",
+            Self::Tabbed => "[T]",
+            Self::Stacked => "[S]",
+            Self::Bsp => "[B]",
+        }
+    }
+}
+
+/// Cycles to the next layout in the list.
+///
+/// # Arguments
+/// * `current` - The current layout.
+/// # Returns
+/// The next layout type.
+pub fn cycle_layout(current: LayoutType) -> LayoutType {
+    match current {
+        LayoutType::MasterStack => LayoutType::Vertical,
+        LayoutType::Vertical => LayoutType::Horizontal,
+        LayoutType::Horizontal => LayoutType::Monocle,
+        LayoutType::Monocle => LayoutType::Bsp,
+        LayoutType::Bsp => LayoutType::MasterStack,
+        LayoutType::Tabbed => LayoutType::Stacked,
+        LayoutType::Stacked => LayoutType::MasterStack,
     }
 }
 
@@ -135,16 +226,194 @@ pub fn calculate_master_stack(
     rects
 }
 
-/// Applies the computed layout geometries to the actual X11 windows using default border width.
+/// Calculates the bounding rectangles for a vertical layout (side-by-side columns).
+pub fn calculate_vertical(
+    clients: &[Window],
+    screen_rect: &Rect,
+    config: &LayoutConfig,
+) -> Vec<Rect> {
+    let n = clients.len();
+    if n == 0 {
+        return Vec::new();
+    }
+
+    let double_outer = 2 * config.outer_gap;
+    if screen_rect.width <= double_outer || screen_rect.height <= double_outer {
+        return vec![*screen_rect; n];
+    }
+
+    let usable_x = screen_rect.x + config.outer_gap as i32;
+    let usable_y = screen_rect.y + config.outer_gap as i32;
+    let usable_w = screen_rect.width - double_outer;
+    let usable_h = screen_rect.height - double_outer;
+
+    if n == 1 {
+        let mut r = Rect::new(usable_x, usable_y, usable_w, usable_h);
+        r.width = r.width.saturating_sub(2 * config.border_width);
+        r.height = r.height.saturating_sub(2 * config.border_width);
+        return vec![r];
+    }
+
+    let total_inner = config.inner_gap * (n as u32 - 1);
+    let total_available_w = usable_w.saturating_sub(total_inner);
+    let col_w = total_available_w / n as u32;
+    let remainder = total_available_w % n as u32;
+
+    let mut rects = Vec::with_capacity(n);
+    for i in 0..n {
+        let cur_x = usable_x + (i as u32 * (col_w + config.inner_gap)) as i32;
+        let w = if i == n - 1 { col_w + remainder } else { col_w };
+        let mut r = Rect::new(cur_x, usable_y, w, usable_h);
+        r.width = r.width.saturating_sub(2 * config.border_width);
+        r.height = r.height.saturating_sub(2 * config.border_width);
+        rects.push(r);
+    }
+    rects
+}
+
+/// Calculates the bounding rectangles for a horizontal layout (stacked rows).
+pub fn calculate_horizontal(
+    clients: &[Window],
+    screen_rect: &Rect,
+    config: &LayoutConfig,
+) -> Vec<Rect> {
+    let n = clients.len();
+    if n == 0 {
+        return Vec::new();
+    }
+
+    let double_outer = 2 * config.outer_gap;
+    if screen_rect.width <= double_outer || screen_rect.height <= double_outer {
+        return vec![*screen_rect; n];
+    }
+
+    let usable_x = screen_rect.x + config.outer_gap as i32;
+    let usable_y = screen_rect.y + config.outer_gap as i32;
+    let usable_w = screen_rect.width - double_outer;
+    let usable_h = screen_rect.height - double_outer;
+
+    if n == 1 {
+        let mut r = Rect::new(usable_x, usable_y, usable_w, usable_h);
+        r.width = r.width.saturating_sub(2 * config.border_width);
+        r.height = r.height.saturating_sub(2 * config.border_width);
+        return vec![r];
+    }
+
+    let total_inner = config.inner_gap * (n as u32 - 1);
+    let total_available_h = usable_h.saturating_sub(total_inner);
+    let row_h = total_available_h / n as u32;
+    let remainder = total_available_h % n as u32;
+
+    let mut rects = Vec::with_capacity(n);
+    for i in 0..n {
+        let cur_y = usable_y + (i as u32 * (row_h + config.inner_gap)) as i32;
+        let h = if i == n - 1 { row_h + remainder } else { row_h };
+        let mut r = Rect::new(usable_x, cur_y, usable_w, h);
+        r.width = r.width.saturating_sub(2 * config.border_width);
+        r.height = r.height.saturating_sub(2 * config.border_width);
+        rects.push(r);
+    }
+    rects
+}
+
+/// Calculates the bounding rectangles for a monocle layout (all windows take the full screen area).
+pub fn calculate_monocle(
+    clients: &[Window],
+    screen_rect: &Rect,
+    config: &LayoutConfig,
+) -> Vec<Rect> {
+    let n = clients.len();
+    if n == 0 {
+        return Vec::new();
+    }
+
+    let double_outer = 2 * config.outer_gap;
+    if screen_rect.width <= double_outer || screen_rect.height <= double_outer {
+        return vec![*screen_rect; n];
+    }
+
+    let usable_x = screen_rect.x + config.outer_gap as i32;
+    let usable_y = screen_rect.y + config.outer_gap as i32;
+    let usable_w = screen_rect.width - double_outer;
+    let usable_h = screen_rect.height - double_outer;
+
+    let mut r = Rect::new(usable_x, usable_y, usable_w, usable_h);
+    r.width = r.width.saturating_sub(2 * config.border_width);
+    r.height = r.height.saturating_sub(2 * config.border_width);
+    vec![r; n]
+}
+
+/// Dispatches calculation to the specified layout algorithm.
+pub fn calculate_layout(
+    layout: LayoutType,
+    clients: &[Window],
+    screen_rect: &Rect,
+    config: &LayoutConfig,
+) -> Vec<Rect> {
+    match layout {
+        LayoutType::MasterStack => calculate_master_stack(clients, screen_rect, config),
+        LayoutType::Vertical => calculate_vertical(clients, screen_rect, config),
+        LayoutType::Horizontal => calculate_horizontal(clients, screen_rect, config),
+        LayoutType::Monocle | LayoutType::Tabbed | LayoutType::Stacked => {
+            calculate_monocle(clients, screen_rect, config)
+        }
+        LayoutType::Bsp => {
+            if clients.is_empty() {
+                return Vec::new();
+            }
+            let mut tree = BspTree::new();
+            tree.sync_clients(clients, clients.first().copied(), screen_rect, config.inner_gap);
+            let pairs = tree.calculate_rects(screen_rect, config);
+            let mut map = std::collections::HashMap::new();
+            for (w, r) in pairs {
+                map.insert(w, r);
+            }
+            clients.iter().filter_map(|w| map.get(w).copied()).collect()
+        }
+    }
+}
+
+/// Applies the chosen layout algorithm to the list of visible clients.
 ///
 /// # Arguments
-/// * `conn` - The X11 connection.
-/// * `clients` - The windows to configure.
-/// * `rects` - The computed geometry for each window.
-///
-/// # Returns
-/// `Result<(), X11Error>` - Returns an error if an X11 configure request fails fatally.
-pub fn apply_layout<C: Connection>(
+/// * `layout` - The layout type to apply.
+/// * `clients` - List of window IDs to tile.
+/// * `area` - The available screen geometry (excluding bars).
+/// * `master_ratio` - The ratio of screen width given to the master area.
+/// * `conn` - The X11 connection to apply positions.
+pub fn apply_layout(
+    layout: LayoutType,
+    clients: &[u32],
+    area: &Rect,
+    master_ratio: f32,
+    conn: &impl Connection,
+) -> Result<(), X11Error> {
+    if clients.is_empty() {
+        return Ok(());
+    }
+    let config = LayoutConfig {
+        master_ratio,
+        inner_gap: 0,
+        outer_gap: 0,
+        border_width: 2,
+    };
+    let rects = calculate_layout(layout, clients, area, &config);
+    apply_layout_with_border(conn, clients, &rects, config.border_width)?;
+
+    if layout == LayoutType::Monocle {
+        if let Some(&first) = clients.first() {
+            let aux = ConfigureWindowAux::default()
+                .stack_mode(StackMode::ABOVE);
+            let _ = conn.configure_window(first, &aux);
+            conn.flush()?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Applies the computed layout geometries to the actual X11 windows using default border width.
+pub fn apply_layout_rects<C: Connection>(
     conn: &C,
     clients: &[Window],
     rects: &[Rect],
@@ -183,6 +452,477 @@ pub fn apply_layout_with_border<C: Connection>(
     conn.flush()?;
     Ok(())
 }
+
+/// Orientation of a binary split in the layout tree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SplitType {
+    /// Splits horizontally into Left and Right children.
+    Horizontal,
+    /// Splits vertically into Top and Bottom children.
+    Vertical,
+}
+
+impl SplitType {
+    /// Returns the opposite split orientation.
+    pub fn opposite(&self) -> Self {
+        match self {
+            SplitType::Horizontal => SplitType::Vertical,
+            SplitType::Vertical => SplitType::Horizontal,
+        }
+    }
+}
+
+/// A node in the Binary Space Partitioning (BSP) tree.
+#[derive(Debug, Clone, PartialEq)]
+pub enum BspNode {
+    /// A leaf node representing a single managed X11 client window.
+    Leaf {
+        window: Window,
+    },
+    /// An internal node dividing its allocated area between two child subtrees.
+    Split {
+        split_type: SplitType,
+        /// Fraction of width or height allocated to the first child (clamped 0.05..=0.95).
+        ratio: f32,
+        first: Box<BspNode>,
+        second: Box<BspNode>,
+    },
+}
+
+impl BspNode {
+    /// Checks if this subtree contains the given window.
+    pub fn contains(&self, target: Window) -> bool {
+        match self {
+            BspNode::Leaf { window } => *window == target,
+            BspNode::Split { first, second, .. } => first.contains(target) || second.contains(target),
+        }
+    }
+
+    /// Returns all window IDs in this subtree in pre-order traversal.
+    pub fn windows(&self) -> Vec<Window> {
+        let mut result = Vec::new();
+        self.collect_windows(&mut result);
+        result
+    }
+
+    fn collect_windows(&self, out: &mut Vec<Window>) {
+        match self {
+            BspNode::Leaf { window } => out.push(*window),
+            BspNode::Split { first, second, .. } => {
+                first.collect_windows(out);
+                second.collect_windows(out);
+            }
+        }
+    }
+
+    /// Returns the number of leaf windows in this subtree.
+    pub fn leaf_count(&self) -> usize {
+        match self {
+            BspNode::Leaf { .. } => 1,
+            BspNode::Split { first, second, .. } => first.leaf_count() + second.leaf_count(),
+        }
+    }
+
+    /// Finds the assigned bounding rectangle of `target` within the given screen space.
+    pub fn find_window_rect(&self, target: Window, rect: Rect, inner_gap: u32) -> Option<Rect> {
+        match self {
+            BspNode::Leaf { window } => {
+                if *window == target {
+                    Some(rect)
+                } else {
+                    None
+                }
+            }
+            BspNode::Split { split_type, ratio, first, second } => {
+                let (r1, r2) = split_rect(rect, *split_type, *ratio, inner_gap);
+                if first.contains(target) {
+                    first.find_window_rect(target, r1, inner_gap)
+                } else if second.contains(target) {
+                    second.find_window_rect(target, r2, inner_gap)
+                } else {
+                    None
+                }
+            }
+        }
+    }
+
+    /// Recursively computes bounding rectangles for all leaf windows.
+    pub fn calculate_rects(&self, rect: Rect, inner_gap: u32, out: &mut Vec<(Window, Rect)>) {
+        match self {
+            BspNode::Leaf { window } => {
+                out.push((*window, rect));
+            }
+            BspNode::Split { split_type, ratio, first, second } => {
+                let (r1, r2) = split_rect(rect, *split_type, *ratio, inner_gap);
+                first.calculate_rects(r1, inner_gap, out);
+                second.calculate_rects(r2, inner_gap, out);
+            }
+        }
+    }
+
+    /// Inserts `new_win` by replacing the leaf containing `target` with a split node.
+    pub fn insert_at(&mut self, target: Window, new_win: Window, split_type: SplitType, ratio: f32) -> bool {
+        match self {
+            BspNode::Leaf { window } if *window == target => {
+                let old_win = *window;
+                *self = BspNode::Split {
+                    split_type,
+                    ratio: ratio.clamp(0.05, 0.95),
+                    first: Box::new(BspNode::Leaf { window: old_win }),
+                    second: Box::new(BspNode::Leaf { window: new_win }),
+                };
+                true
+            }
+            BspNode::Split { first, second, .. } => {
+                first.insert_at(target, new_win, split_type, ratio)
+                    || second.insert_at(target, new_win, split_type, ratio)
+            }
+            _ => false,
+        }
+    }
+
+    /// Swaps the leaf positions of two windows in this subtree.
+    pub fn swap(&mut self, win_a: Window, win_b: Window) -> bool {
+        let mut leaf_a = None;
+        let mut leaf_b = None;
+        self.collect_leaf_mut(&mut |w| {
+            if *w == win_a {
+                leaf_a = Some(w as *mut Window);
+            } else if *w == win_b {
+                leaf_b = Some(w as *mut Window);
+            }
+        });
+
+        if let (Some(ptr_a), Some(ptr_b)) = (leaf_a, leaf_b) {
+            unsafe {
+                std::mem::swap(&mut *ptr_a, &mut *ptr_b);
+            }
+            true
+        } else {
+            false
+        }
+    }
+
+    fn collect_leaf_mut<F>(&mut self, f: &mut F)
+    where
+        F: FnMut(&mut Window),
+    {
+        match self {
+            BspNode::Leaf { window } => f(window),
+            BspNode::Split { first, second, .. } => {
+                first.collect_leaf_mut(f);
+                second.collect_leaf_mut(f);
+            }
+        }
+    }
+
+    /// Resizes the ancestor split of `target` that matches `target_split`.
+    pub fn resize_ancestor(&mut self, target: Window, delta: f32, target_split: SplitType) -> bool {
+        match self {
+            BspNode::Leaf { .. } => false,
+            BspNode::Split { split_type, ratio, first, second } => {
+                if *split_type == target_split {
+                    if first.contains(target) {
+                        *ratio = (*ratio + delta).clamp(0.05, 0.95);
+                        return true;
+                    } else if second.contains(target) {
+                        *ratio = (*ratio - delta).clamp(0.05, 0.95);
+                        return true;
+                    }
+                }
+                first.resize_ancestor(target, delta, target_split)
+                    || second.resize_ancestor(target, delta, target_split)
+            }
+        }
+    }
+
+    /// Resizes the closest ancestor split based on pointer drag deltas.
+    pub fn resize_by_pointer(&mut self, target: Window, delta_x: i32, delta_y: i32, initial_rect: Rect) -> bool {
+        match self {
+            BspNode::Leaf { .. } => false,
+            BspNode::Split { split_type, ratio, first, second } => {
+                // If this split directly contains `target`, check if the drag movement corresponds to its split orientation
+                if first.contains(target) || second.contains(target) {
+                    let is_first = first.contains(target);
+                    let handled = match split_type {
+                        SplitType::Horizontal => {
+                            if initial_rect.width > 0 && delta_x != 0 {
+                                let frac = delta_x as f32 / initial_rect.width as f32;
+                                if is_first {
+                                    *ratio = (*ratio + frac).clamp(0.05, 0.95);
+                                } else {
+                                    *ratio = (*ratio - frac).clamp(0.05, 0.95);
+                                }
+                                true
+                            } else {
+                                false
+                            }
+                        }
+                        SplitType::Vertical => {
+                            if initial_rect.height > 0 && delta_y != 0 {
+                                let frac = delta_y as f32 / initial_rect.height as f32;
+                                if is_first {
+                                    *ratio = (*ratio + frac).clamp(0.05, 0.95);
+                                } else {
+                                    *ratio = (*ratio - frac).clamp(0.05, 0.95);
+                                }
+                                true
+                            } else {
+                                false
+                            }
+                        }
+                    };
+
+                    if handled {
+                        return true;
+                    }
+                }
+
+                first.resize_by_pointer(target, delta_x, delta_y, initial_rect)
+                    || second.resize_by_pointer(target, delta_x, delta_y, initial_rect)
+            }
+        }
+    }
+}
+
+/// Recursively removes `target` from the subtree, collapsing the parent node with the remaining sibling.
+fn remove_node(node: Box<BspNode>, target: Window) -> Option<Box<BspNode>> {
+    match *node {
+        BspNode::Leaf { window } => {
+            if window == target {
+                None
+            } else {
+                Some(Box::new(BspNode::Leaf { window }))
+            }
+        }
+        BspNode::Split { split_type, ratio, first, second } => {
+            if first.contains(target) {
+                let new_first = remove_node(first, target);
+                match new_first {
+                    None => Some(second), // First was removed, collapse to second child
+                    Some(f) => Some(Box::new(BspNode::Split {
+                        split_type,
+                        ratio,
+                        first: f,
+                        second,
+                    })),
+                }
+            } else if second.contains(target) {
+                let new_second = remove_node(second, target);
+                match new_second {
+                    None => Some(first), // Second was removed, collapse to first child
+                    Some(s) => Some(Box::new(BspNode::Split {
+                        split_type,
+                        ratio,
+                        first,
+                        second: s,
+                    })),
+                }
+            } else {
+                Some(Box::new(BspNode::Split {
+                    split_type,
+                    ratio,
+                    first,
+                    second,
+                }))
+            }
+        }
+    }
+}
+
+/// Helper function to divide a rectangle into two children based on split type, ratio, and gap.
+fn split_rect(rect: Rect, split_type: SplitType, ratio: f32, inner_gap: u32) -> (Rect, Rect) {
+    match split_type {
+        SplitType::Horizontal => {
+            if rect.width <= inner_gap {
+                let w = rect.width / 2;
+                (
+                    Rect::new(rect.x, rect.y, w, rect.height),
+                    Rect::new(rect.x + w as i32, rect.y, rect.width.saturating_sub(w), rect.height),
+                )
+            } else {
+                let available = rect.width - inner_gap;
+                let w1 = ((available as f32 * ratio).round() as u32).clamp(1, available.saturating_sub(1));
+                let w2 = available - w1;
+                (
+                    Rect::new(rect.x, rect.y, w1, rect.height),
+                    Rect::new(rect.x + w1 as i32 + inner_gap as i32, rect.y, w2, rect.height),
+                )
+            }
+        }
+        SplitType::Vertical => {
+            if rect.height <= inner_gap {
+                let h = rect.height / 2;
+                (
+                    Rect::new(rect.x, rect.y, rect.width, h),
+                    Rect::new(rect.x, rect.y + h as i32, rect.width, rect.height.saturating_sub(h)),
+                )
+            } else {
+                let available = rect.height - inner_gap;
+                let h1 = ((available as f32 * ratio).round() as u32).clamp(1, available.saturating_sub(1));
+                let h2 = available - h1;
+                (
+                    Rect::new(rect.x, rect.y, rect.width, h1),
+                    Rect::new(rect.x, rect.y + h1 as i32 + inner_gap as i32, rect.width, h2),
+                )
+            }
+        }
+    }
+}
+
+/// Binary Space Partitioning (BSP) tree layout manager for a single workspace.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct BspTree {
+    /// Root node of the partition tree.
+    pub root: Option<Box<BspNode>>,
+    /// Pre-selected split direction for the next inserted window.
+    pub preselect: Option<SplitType>,
+}
+
+impl BspTree {
+    /// Creates a new empty `BspTree`.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Returns `true` if the tree contains no windows.
+    pub fn is_empty(&self) -> bool {
+        self.root.is_none()
+    }
+
+    /// Returns the number of tiled windows in the tree.
+    pub fn len(&self) -> usize {
+        self.root.as_ref().map(|r| r.leaf_count()).unwrap_or(0)
+    }
+
+    /// Checks if a window is managed by this tree.
+    pub fn contains(&self, window: Window) -> bool {
+        self.root.as_ref().map(|r| r.contains(window)).unwrap_or(false)
+    }
+
+    /// Returns all window IDs in pre-order traversal.
+    pub fn windows(&self) -> Vec<Window> {
+        self.root.as_ref().map(|r| r.windows()).unwrap_or_default()
+    }
+
+    /// Inserts a window into the tree, auto-splitting or using a pre-selected split.
+    pub fn insert(&mut self, target: Option<Window>, new_win: Window, usable_rect: &Rect, inner_gap: u32) {
+        if self.contains(new_win) {
+            return;
+        }
+
+        let Some(ref mut root) = self.root else {
+            self.root = Some(Box::new(BspNode::Leaf { window: new_win }));
+            return;
+        };
+
+        let target_win = target
+            .filter(|&w| root.contains(w))
+            .or_else(|| root.windows().last().copied())
+            .unwrap_or(new_win);
+
+        if target_win == new_win {
+            return;
+        }
+
+        let split_type = if let Some(pre) = self.preselect.take() {
+            pre
+        } else {
+            let target_rect = root.find_window_rect(target_win, *usable_rect, inner_gap)
+                .unwrap_or(*usable_rect);
+            if target_rect.width >= target_rect.height {
+                SplitType::Horizontal
+            } else {
+                SplitType::Vertical
+            }
+        };
+
+        root.insert_at(target_win, new_win, split_type, 0.5);
+    }
+
+    /// Removes a window from the tree and collapses the sibling into the parent split.
+    pub fn remove(&mut self, window: Window) -> bool {
+        if let Some(root) = self.root.take() {
+            let was_present = root.contains(window);
+            self.root = remove_node(root, window);
+            was_present
+        } else {
+            false
+        }
+    }
+
+    /// Swaps two windows' positions in the tree.
+    pub fn swap_windows(&mut self, win_a: Window, win_b: Window) -> bool {
+        if let Some(ref mut root) = self.root {
+            root.swap(win_a, win_b)
+        } else {
+            false
+        }
+    }
+
+    /// Resizes the ancestor split of `window` by `delta_ratio` ($\pm 0.05$).
+    pub fn resize_window(&mut self, window: Window, delta_ratio: f32, split_type: SplitType) -> bool {
+        if let Some(ref mut root) = self.root {
+            root.resize_ancestor(window, delta_ratio, split_type)
+        } else {
+            false
+        }
+    }
+
+    /// Dynamically resizes a window's split during mouse drag.
+    pub fn resize_by_pointer(&mut self, window: Window, delta_x: i32, delta_y: i32, initial_rect: Rect) -> bool {
+        if let Some(ref mut root) = self.root {
+            root.resize_by_pointer(window, delta_x, delta_y, initial_rect)
+        } else {
+            false
+        }
+    }
+
+    /// Calculates bounding rectangles for all windows in the tree.
+    pub fn calculate_rects(&self, screen_rect: &Rect, config: &LayoutConfig) -> Vec<(Window, Rect)> {
+        let Some(ref root) = self.root else {
+            return Vec::new();
+        };
+
+        let double_outer = 2 * config.outer_gap;
+        let (usable_x, usable_y, usable_w, usable_h) = if screen_rect.width <= double_outer || screen_rect.height <= double_outer {
+            (screen_rect.x, screen_rect.y, screen_rect.width, screen_rect.height)
+        } else {
+            (
+                screen_rect.x + config.outer_gap as i32,
+                screen_rect.y + config.outer_gap as i32,
+                screen_rect.width - double_outer,
+                screen_rect.height - double_outer,
+            )
+        };
+
+        let usable_rect = Rect::new(usable_x, usable_y, usable_w, usable_h);
+        let mut pairs = Vec::new();
+        root.calculate_rects(usable_rect, config.inner_gap, &mut pairs);
+
+        for (_, rect) in &mut pairs {
+            rect.width = rect.width.saturating_sub(2 * config.border_width);
+            rect.height = rect.height.saturating_sub(2 * config.border_width);
+        }
+
+        pairs
+    }
+
+    /// Synchronizes the tree with a list of currently visible tiled windows.
+    pub fn sync_clients(&mut self, visible_clients: &[Window], focused: Option<Window>, usable_rect: &Rect, inner_gap: u32) {
+        for w in self.windows() {
+            if !visible_clients.contains(&w) {
+                self.remove(w);
+            }
+        }
+        for &w in visible_clients {
+            if !self.contains(w) {
+                self.insert(focused, w, usable_rect, inner_gap);
+            }
+        }
+    }
+}
+
 
 #[cfg(test)]
 mod tests {
@@ -283,5 +1023,213 @@ mod tests {
                 idx
             );
         }
+    }
+
+    #[test]
+    fn test_bsp_tree_lifecycle_and_auto_splits() {
+        let mut tree = BspTree::new();
+        assert!(tree.is_empty());
+        assert_eq!(tree.len(), 0);
+
+        let screen = Rect::new(0, 0, 1920, 1080);
+        let config = LayoutConfig {
+            master_ratio: 0.55,
+            inner_gap: 10,
+            outer_gap: 10,
+            border_width: 2,
+        };
+
+        // Window 1: fills usable area
+        tree.insert(None, 100, &screen, config.inner_gap);
+        assert_eq!(tree.len(), 1);
+        assert!(tree.contains(100));
+
+        let rects = tree.calculate_rects(&screen, &config);
+        assert_eq!(rects.len(), 1);
+        assert_eq!(rects[0].0, 100);
+
+        // Window 2: splits horizontally (since 1920 >= 1080)
+        tree.insert(Some(100), 200, &screen, config.inner_gap);
+        assert_eq!(tree.len(), 2);
+        assert_eq!(tree.windows(), vec![100, 200]);
+
+        let rects2 = tree.calculate_rects(&screen, &config);
+        assert_eq!(rects2.len(), 2);
+        let r1 = rects2[0].1;
+        let r2 = rects2[1].1;
+        // Should be side by side
+        assert!(r1.x < r2.x);
+        assert!(!r1.overlaps(&r2));
+
+        // Window 3: focused on 200 (which has height > width in a 1920x1080 split) -> auto splits vertically
+        tree.insert(Some(200), 300, &screen, config.inner_gap);
+        assert_eq!(tree.len(), 3);
+        assert_eq!(tree.windows(), vec![100, 200, 300]);
+
+        let rects3 = tree.calculate_rects(&screen, &config);
+        assert_eq!(rects3.len(), 3);
+        // None of the 3 windows should overlap
+        for i in 0..3 {
+            for j in (i + 1)..3 {
+                assert!(!rects3[i].1.overlaps(&rects3[j].1));
+            }
+        }
+
+        // Test swapping windows
+        assert!(tree.swap_windows(100, 300));
+        assert_eq!(tree.windows(), vec![300, 200, 100]);
+
+        // Test resizing ancestor split
+        let pre_resize = tree.calculate_rects(&screen, &config);
+        assert!(tree.resize_window(300, 0.1, SplitType::Horizontal));
+        let post_resize = tree.calculate_rects(&screen, &config);
+        assert!(post_resize[0].1.width > pre_resize[0].1.width);
+
+        // Test pointer resize
+        let initial = post_resize[0].1;
+        assert!(tree.resize_by_pointer(300, 50, 0, initial));
+
+        // Test removal and tree collapse
+        assert!(tree.remove(200));
+        assert_eq!(tree.len(), 2);
+        assert!(!tree.contains(200));
+
+        let rects_post_remove = tree.calculate_rects(&screen, &config);
+        assert_eq!(rects_post_remove.len(), 2);
+        assert!(!rects_post_remove[0].1.overlaps(&rects_post_remove[1].1));
+
+        // Test sync_clients
+        tree.sync_clients(&[300, 400], Some(300), &screen, config.inner_gap);
+        assert!(tree.contains(300));
+        assert!(tree.contains(400));
+        assert!(!tree.contains(100));
+    }
+
+    #[test]
+    fn test_phase27_layout_types_and_cycling() {
+        assert_eq!(LayoutType::default(), LayoutType::MasterStack);
+
+        assert_eq!(cycle_layout(LayoutType::MasterStack), LayoutType::Vertical);
+        assert_eq!(cycle_layout(LayoutType::Vertical), LayoutType::Horizontal);
+        assert_eq!(cycle_layout(LayoutType::Horizontal), LayoutType::Monocle);
+        assert_eq!(cycle_layout(LayoutType::Monocle), LayoutType::Bsp);
+        assert_eq!(cycle_layout(LayoutType::Bsp), LayoutType::MasterStack);
+
+        // Deferred fallback/loop
+        assert_eq!(cycle_layout(LayoutType::Tabbed), LayoutType::Stacked);
+        assert_eq!(cycle_layout(LayoutType::Stacked), LayoutType::MasterStack);
+
+        // Parsing
+        assert_eq!("master".parse::<LayoutType>().unwrap(), LayoutType::MasterStack);
+        assert_eq!("vertical".parse::<LayoutType>().unwrap(), LayoutType::Vertical);
+        assert_eq!("horizontal".parse::<LayoutType>().unwrap(), LayoutType::Horizontal);
+        assert_eq!("monocle".parse::<LayoutType>().unwrap(), LayoutType::Monocle);
+        assert_eq!("bsp".parse::<LayoutType>().unwrap(), LayoutType::Bsp);
+        assert!("invalid".parse::<LayoutType>().is_err());
+
+        // Display
+        assert_eq!(format!("{}", LayoutType::MasterStack), "master");
+        assert_eq!(format!("{}", LayoutType::Vertical), "vertical");
+        assert_eq!(format!("{}", LayoutType::Horizontal), "horizontal");
+        assert_eq!(format!("{}", LayoutType::Monocle), "monocle");
+
+        // Symbols
+        assert_eq!(LayoutType::MasterStack.symbol(), "[]=");
+        assert_eq!(LayoutType::Vertical.symbol(), "|||");
+        assert_eq!(LayoutType::Horizontal.symbol(), "===");
+        assert_eq!(LayoutType::Monocle.symbol(), "[M]");
+        assert_eq!(LayoutType::Bsp.symbol(), "[B]");
+    }
+
+    #[test]
+    fn test_vertical_layout_math() {
+        let screen = Rect::new(0, 0, 1000, 600);
+        let config = LayoutConfig {
+            master_ratio: 0.55,
+            inner_gap: 10,
+            outer_gap: 10,
+            border_width: 2,
+        };
+
+        // 0 windows
+        assert!(calculate_vertical(&[], &screen, &config).is_empty());
+
+        // 1 window takes full usable area
+        let r1 = calculate_vertical(&[1], &screen, &config);
+        assert_eq!(r1.len(), 1);
+        assert_eq!(r1[0].x, 10);
+        assert_eq!(r1[0].y, 10);
+        assert_eq!(r1[0].width, 1000 - 20 - 4);
+        assert_eq!(r1[0].height, 600 - 20 - 4);
+
+        // 3 windows side-by-side
+        let r3 = calculate_vertical(&[1, 2, 3], &screen, &config);
+        assert_eq!(r3.len(), 3);
+        assert!(r3[0].x < r3[1].x);
+        assert!(r3[1].x < r3[2].x);
+        // All windows have same y and height
+        assert_eq!(r3[0].y, r3[1].y);
+        assert_eq!(r3[1].y, r3[2].y);
+        assert_eq!(r3[0].height, r3[2].height);
+        // No overlaps
+        assert!(!r3[0].overlaps(&r3[1]));
+        assert!(!r3[1].overlaps(&r3[2]));
+        assert!(!r3[0].overlaps(&r3[2]));
+    }
+
+    #[test]
+    fn test_horizontal_layout_math() {
+        let screen = Rect::new(0, 0, 1000, 600);
+        let config = LayoutConfig {
+            master_ratio: 0.55,
+            inner_gap: 10,
+            outer_gap: 10,
+            border_width: 2,
+        };
+
+        // 0 windows
+        assert!(calculate_horizontal(&[], &screen, &config).is_empty());
+
+        // 1 window takes full usable area
+        let r1 = calculate_horizontal(&[1], &screen, &config);
+        assert_eq!(r1.len(), 1);
+        assert_eq!(r1[0].x, 10);
+        assert_eq!(r1[0].y, 10);
+
+        // 3 windows stacked top to bottom
+        let r3 = calculate_horizontal(&[1, 2, 3], &screen, &config);
+        assert_eq!(r3.len(), 3);
+        assert!(r3[0].y < r3[1].y);
+        assert!(r3[1].y < r3[2].y);
+        // All windows have same x and width
+        assert_eq!(r3[0].x, r3[1].x);
+        assert_eq!(r3[1].x, r3[2].x);
+        assert_eq!(r3[0].width, r3[2].width);
+        // No overlaps
+        assert!(!r3[0].overlaps(&r3[1]));
+        assert!(!r3[1].overlaps(&r3[2]));
+        assert!(!r3[0].overlaps(&r3[2]));
+    }
+
+    #[test]
+    fn test_monocle_layout_math() {
+        let screen = Rect::new(0, 0, 1000, 600);
+        let config = LayoutConfig {
+            master_ratio: 0.55,
+            inner_gap: 10,
+            outer_gap: 10,
+            border_width: 2,
+        };
+
+        // 0 windows
+        assert!(calculate_monocle(&[], &screen, &config).is_empty());
+
+        // 3 windows all have identical full screen bounds
+        let r3 = calculate_monocle(&[1, 2, 3], &screen, &config);
+        assert_eq!(r3.len(), 3);
+        assert_eq!(r3[0], r3[1]);
+        assert_eq!(r3[1], r3[2]);
+        assert_eq!(r3[0].width, 1000 - 20 - 4);
+        assert_eq!(r3[0].height, 600 - 20 - 4);
     }
 }

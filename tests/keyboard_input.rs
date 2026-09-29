@@ -8,7 +8,7 @@ use tilo::wm::WindowManager;
 use tilo::x11::X11Context;
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::{
-    ConnectionExt, CreateWindowAux, KeyButMask, KeyPressEvent, WindowClass,
+    ConnectionExt, CreateWindowAux, EventMask, KeyButMask, KeyPressEvent, WindowClass,
 };
 use x11rb::wrapper::ConnectionExt as _;
 
@@ -565,5 +565,95 @@ fn test_window_movement_and_focus_with_vim_and_arrow_keys_in_xephyr() {
         assert_eq!(wm.workspace_manager.get(1).unwrap().clients, vec![win1, win2, win3]);
     }
 }
+
+#[test]
+fn test_bsp_keyboard_tile_resizing_and_preselection_in_xephyr() {
+    if !Command::new("which")
+        .arg("Xephyr")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+    {
+        eprintln!("Xephyr not found in PATH, skipping integration test");
+        return;
+    }
+
+    let _server = match XephyrServer::start(151) {
+        Some(s) => s,
+        None => {
+            eprintln!("Could not start Xephyr on display :151, skipping integration test");
+            return;
+        }
+    };
+
+    let ctx = X11Context::connect_to(Some(":151")).expect("Connect to Xephyr");
+    let mut wm = WindowManager::new(ctx).expect("Create WindowManager");
+
+    let root_depth = wm.context.connection.setup().roots[wm.context.screen_num].root_depth;
+    let root_visual = wm.context.connection.setup().roots[wm.context.screen_num].root_visual;
+    let root_win = wm.context.root_window;
+    let w1 = wm.context.connection.generate_id().unwrap();
+    let w2 = wm.context.connection.generate_id().unwrap();
+
+    wm.context.connection.create_window(
+        root_depth,
+        w1,
+        root_win,
+        0, 0, 200, 200, 0,
+        WindowClass::INPUT_OUTPUT,
+        root_visual,
+        &CreateWindowAux::new().event_mask(EventMask::STRUCTURE_NOTIFY),
+    ).unwrap();
+
+    wm.context.connection.create_window(
+        root_depth,
+        w2,
+        root_win,
+        0, 0, 200, 200, 0,
+        WindowClass::INPUT_OUTPUT,
+        root_visual,
+        &CreateWindowAux::new().event_mask(EventMask::STRUCTURE_NOTIFY),
+    ).unwrap();
+
+    wm.manage_window(w1).unwrap();
+    wm.manage_window(w2).unwrap();
+    wm.focus_client(w1).unwrap();
+    wm.retile().unwrap();
+
+    let geom1_before = wm.context.connection.get_geometry(w1).unwrap().reply().unwrap();
+
+    // Grow tile width using Action::ResizeTile(Direction::Right)
+    wm.execute_action(Action::ResizeTile(Direction::Right)).unwrap();
+    let geom1_after_grow = wm.context.connection.get_geometry(w1).unwrap().reply().unwrap();
+    assert!(geom1_after_grow.width > geom1_before.width, "Window 1 should have grown after Right resize");
+
+    // Shrink tile width using Action::ResizeTile(Direction::Left)
+    wm.execute_action(Action::ResizeTile(Direction::Left)).unwrap();
+    let geom1_after_shrink = wm.context.connection.get_geometry(w1).unwrap().reply().unwrap();
+    assert!(geom1_after_shrink.width < geom1_after_grow.width, "Window 1 should have shrunk after Left resize");
+
+    // Test split preselection: preselect vertical split
+    wm.execute_action(Action::PreselectSplit(tilo::layout::SplitType::Vertical)).unwrap();
+    let w3 = wm.context.connection.generate_id().unwrap();
+    wm.context.connection.create_window(
+        root_depth,
+        w3,
+        root_win,
+        0, 0, 200, 200, 0,
+        WindowClass::INPUT_OUTPUT,
+        root_visual,
+        &CreateWindowAux::new().event_mask(EventMask::STRUCTURE_NOTIFY),
+    ).unwrap();
+
+        wm.manage_window(w3).unwrap();
+        wm.retile().unwrap();
+
+        // Window 1 and 3 should now be stacked vertically on the left side
+        let geom1_stacked = wm.context.connection.get_geometry(w1).unwrap().reply().unwrap();
+        let geom3_stacked = wm.context.connection.get_geometry(w3).unwrap().reply().unwrap();
+        assert_eq!(geom1_stacked.x, geom3_stacked.x);
+        assert!(geom1_stacked.y < geom3_stacked.y);
+    }
+
 
 
