@@ -357,13 +357,25 @@ fn test_exit_menu_options_and_filtering() {
 }
 
 #[test]
-fn test_ctrl_shift_q_keybinding_and_cancel() {
-    // 1. Default keybindings should include Ctrl+Shift+Q -> Action::Exit
+fn test_mod4_shift_q_keybinding_and_cancel() {
+    // 1. Default keybindings should include Mod4+Shift+Q -> Action::Exit
     let binds = default_keybindings();
-    let has_ctrl_shift_q = binds.iter().any(|b| {
-        b.modifiers == (MOD_CONTROL | MOD_SHIFT) && b.keysym == XK_Q && b.action == Action::Exit
+    let has_mod4_shift_q = binds.iter().any(|b| {
+        b.modifiers == (tilo::keybind::MOD_SUPER | MOD_SHIFT) && b.keysym == XK_Q && b.action == Action::Exit
     });
-    assert!(has_ctrl_shift_q, "Default keybindings must include Ctrl+Shift+Q -> Action::Exit");
+    assert!(has_mod4_shift_q, "Default keybindings must include Mod4+Shift+Q -> Action::Exit");
+
+    // And verify instant exit on Mod4+Shift+Q is removed
+    let has_instant_quit = binds.iter().any(|b| {
+        b.modifiers == (tilo::keybind::MOD_SUPER | MOD_SHIFT) && b.keysym == XK_Q && b.action == Action::Quit
+    });
+    assert!(!has_instant_quit, "Instant exit Mod4+Shift+Q must be removed");
+
+    // And verify Ctrl+Shift+Q is replaced
+    let has_ctrl_shift_q = binds.iter().any(|b| {
+        b.modifiers == (MOD_CONTROL | MOD_SHIFT) && b.keysym == XK_Q
+    });
+    assert!(!has_ctrl_shift_q, "Ctrl+Shift+Q must be replaced by Mod4+Shift+Q");
 
     // And verify unnecessary Mod+Shift+E keybinding is removed
     let has_super_shift_e = binds.iter().any(|b| {
@@ -371,7 +383,7 @@ fn test_ctrl_shift_q_keybinding_and_cancel() {
     });
     assert!(!has_super_shift_e, "Unnecessary Mod+Shift+E keybinding must be removed");
 
-    // 2. Pressing Ctrl+Shift+Q while launcher is open should emit Cancel action
+    // 2. Pressing Mod4+Shift+Q while launcher is open should emit Cancel action
     let mapping = KeyboardMapping {
         min_keycode: 8,
         max_keycode: 60,
@@ -384,7 +396,7 @@ fn test_ctrl_shift_q_keybinding_and_cancel() {
         },
     };
 
-    let action = handle_launcher_keypress(24, MOD_CONTROL | MOD_SHIFT, &mapping);
+    let action = handle_launcher_keypress(24, tilo::keybind::MOD_SUPER | MOD_SHIFT, &mapping);
     assert_eq!(action, Some(LauncherAction::Cancel));
 }
 

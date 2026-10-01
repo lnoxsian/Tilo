@@ -1118,7 +1118,7 @@ pub fn handle_launcher_keypress(
 
     let is_mod = (modifiers & MOD_SUPER) != 0;
     if is_mod {
-        if keysym == XK_D || keysym == XK_ESCAPE {
+        if keysym == XK_D || keysym == XK_ESCAPE || (shift && keysym == XK_Q) {
             return Some(LauncherAction::Cancel);
         }
         return None;

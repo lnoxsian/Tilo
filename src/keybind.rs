@@ -247,7 +247,7 @@ pub fn default_keybindings() -> Vec<KeyBind> {
             Action::Spawn("alacritty".to_string()),
         ),
         // Window Management & Exit
-        KeyBind::new(MOD_SUPER | MOD_SHIFT, XK_Q, Action::Quit),
+        KeyBind::new(MOD_SUPER | MOD_SHIFT, XK_Q, Action::Exit),
         KeyBind::new(MOD_SUPER, XK_Q, Action::Close),
         // Spatial Focus (Vim keys)
         KeyBind::new(MOD_SUPER, XK_H, Action::Focus(Direction::Left)),
@@ -312,7 +312,6 @@ pub fn default_keybindings() -> Vec<KeyBind> {
         KeyBind::new(MOD_SUPER, XK_B, Action::PreselectSplit(crate::layout::SplitType::Horizontal)),
         // WM Controls
         KeyBind::new(MOD_SUPER | MOD_SHIFT, XK_R, Action::Reload),
-        KeyBind::new(MOD_CONTROL | MOD_SHIFT, XK_Q, Action::Exit),
     ]
 }
 

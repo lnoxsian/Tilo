@@ -72,7 +72,7 @@ fn test_default_keybindings_include_mod4_shift_q_exit() {
         exit_bind.is_some(),
         "Mod4 + Shift + Q must be configured in default keybindings"
     );
-    assert_eq!(exit_bind.unwrap().action, Action::Quit);
+    assert_eq!(exit_bind.unwrap().action, Action::Exit);
 }
 
 #[test]
