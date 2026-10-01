@@ -3,11 +3,21 @@
 //! This module manages application windows tracked by the window manager,
 //! maintaining the window lookup table (`Window -> Client`) and the focus stack.
 
+pub mod decoration;
+pub mod floating;
+pub mod fullscreen;
+pub mod rules;
+pub mod scratchpad;
+
+pub use decoration::*;
+pub use floating::*;
+pub use fullscreen::*;
+pub use rules::*;
+pub use scratchpad::*;
+
 use std::collections::HashMap;
 use x11rb::protocol::xproto::Window;
 
-use crate::floating::{ClientLayoutState, FloatingGeometry};
-use crate::fullscreen::{FullscreenState, Geometry};
 
 /// Represents a single tracked application window.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

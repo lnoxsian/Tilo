@@ -1,31 +1,34 @@
 //! tilo - Minimal Rust X11 Tiling Window Manager
 
-pub mod atoms;
 pub mod autostart;
 pub mod bar;
 pub mod client;
 pub mod config;
-pub mod cursor;
-pub mod decoration;
-pub mod ewmh;
-pub mod floating;
-pub mod focus;
-pub mod fullscreen;
-pub mod icccm;
 pub mod input;
-pub mod keybind;
 pub mod layout;
 pub mod launcher;
 pub mod monitor;
-pub mod mouse;
 pub mod render;
-pub mod rules;
-pub mod scratchpad;
-pub mod error;
-pub mod statusbar;
 pub mod wm;
 pub mod workspace;
 pub mod x11;
+
+pub use bar as statusbar;
+pub use workspace::focus;
+pub use input::keybind;
+pub use input::mouse;
+
+pub use client::decoration;
+pub use client::floating;
+pub use client::fullscreen;
+pub use client::rules;
+pub use client::scratchpad;
+
+pub use x11::atoms;
+pub use x11::cursor;
+pub use x11::error;
+pub use x11::ewmh;
+pub use x11::icccm;
 
 pub use error::WmError;
 pub use wm::{manage_existing_windows, perform_graceful_shutdown};

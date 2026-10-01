@@ -3,6 +3,17 @@
 //! This module provides [`X11Context`], which manages the connection to the X11
 //! server, caches screen geometry, root window ID, and centralizes X11 calls.
 
+pub mod atoms;
+pub mod cursor;
+pub mod error;
+pub mod ewmh;
+pub mod icccm;
+
+pub use atoms::Atoms;
+pub use cursor::CursorManager;
+pub use ewmh::*;
+pub use icccm::*;
+
 use thiserror::Error;
 use x11rb::connection::Connection;
 use x11rb::errors::{ConnectError, ConnectionError, ReplyError, ReplyOrIdError};

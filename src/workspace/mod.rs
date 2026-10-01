@@ -4,6 +4,9 @@
 //! focused client and layout. Workspaces 1 through 9 are created by default,
 //! and additional workspaces are created on demand.
 
+pub mod focus;
+pub use focus::*;
+
 use crate::layout::LayoutType;
 use std::collections::BTreeMap;
 use x11rb::protocol::xproto::Window;

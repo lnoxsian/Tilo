@@ -6,13 +6,16 @@
 //! - [`grab_keys`]: Binds configured shortcuts on the root window.
 //! - [`handle_key_press`]: Translates raw X11 `KeyPress` events into [`Action`] commands.
 
-use crate::keybind::{
-    Action, KeyBind, MOD_LOCK, MOD_MOD2, MOD_SHIFT, XK_NUM_LOCK,
-};
+pub mod keybind;
+pub mod mouse;
+
+pub use keybind::*;
+pub use mouse::*;
+
 use crate::x11::X11Error;
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::{
-    ConnectionExt, GrabMode, KeyPressEvent, Keysym, ModMask, Window,
+    ConnectionExt, GrabMode, KeyPressEvent, ModMask, Window,
 };
 
 /// Caches X11 keyboard layout mappings to translate keycodes into keysyms.
