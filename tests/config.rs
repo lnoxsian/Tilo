@@ -314,6 +314,12 @@ bind Mod4+t layout master
     let t_bsp = tokenize("layout bsp\n").unwrap();
     assert_eq!(parse(&t_bsp).unwrap().layout, tilo::layout::LayoutType::Bsp);
 
+    let t_grid = tokenize("layout grid\n").unwrap();
+    assert_eq!(parse(&t_grid).unwrap().layout, tilo::layout::LayoutType::Grid);
+
+    let t_grid_action = tokenize("bind Mod4+g layout_grid\n").unwrap();
+    assert_eq!(parse(&t_grid_action).unwrap().bindings[0].action, Action::SetLayout(tilo::layout::LayoutType::Grid));
+
     // Test invalid layout
     let t_err = tokenize("layout non_existent\n").unwrap();
     assert!(parse(&t_err).is_err());

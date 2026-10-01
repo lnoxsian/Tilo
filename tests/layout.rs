@@ -298,10 +298,22 @@ fn test_layout_switching_and_cycling_live_in_xephyr() {
         assert_eq!(g3_m.width, 976);
         assert_eq!(g3_m.height, 776);
 
-        // 4. Test cycling layout: Monocle -> Bsp -> MasterStack -> Vertical
+        // 4. Test cycling layout: Monocle -> Bsp -> Grid -> MasterStack -> Vertical
         wm.execute_action(Action::CycleLayout).unwrap();
         let current_ws = wm.workspace_manager.current_id();
         assert_eq!(wm.workspace_manager.get(current_ws).unwrap().layout, LayoutType::Bsp);
+
+        wm.execute_action(Action::CycleLayout).unwrap();
+        assert_eq!(wm.workspace_manager.get(current_ws).unwrap().layout, LayoutType::Grid);
+
+        // Windows should tile in a grid
+        let g1_grid = client_conn.get_geometry(win1).unwrap().reply().unwrap();
+        let g2_grid = client_conn.get_geometry(win2).unwrap().reply().unwrap();
+        let g3_grid = client_conn.get_geometry(win3).unwrap().reply().unwrap();
+        // Row 0 has 2 windows, Row 1 has 1 window
+        assert_eq!(g1_grid.y, g2_grid.y);
+        assert!(g1_grid.x < g2_grid.x);
+        assert!(g3_grid.y > g1_grid.y);
 
         wm.execute_action(Action::CycleLayout).unwrap();
         assert_eq!(wm.workspace_manager.get(current_ws).unwrap().layout, LayoutType::MasterStack);

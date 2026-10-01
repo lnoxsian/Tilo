@@ -564,6 +564,8 @@ impl LayoutModule {
             "master-right" | "=[]" => "=[]".to_string(),
             "master-top" | "TT=" => "TT=".to_string(),
             "master-bottom" | "=TT" => "=TT".to_string(),
+            "center-master" | "centered-master" | "|M|" | "=M=" => "|M|".to_string(),
+            "grid" | "[G]" => "[G]".to_string(),
             _ => {
                 if layout.starts_with('[') && layout.ends_with(']') {
                     layout.to_string()
@@ -1253,6 +1255,8 @@ Cached:          2000000 kB
         assert_eq!(layout.current_text(), "><>");
         layout.set_layout("tabbed");
         assert_eq!(layout.current_text(), "[T]");
+        layout.set_layout("grid");
+        assert_eq!(layout.current_text(), "[G]");
     }
 
     #[test]

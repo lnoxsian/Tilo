@@ -72,6 +72,10 @@ pub enum LayoutType {
     MasterTop,
     /// Master Bottom, Stack Top.
     MasterBottom,
+    /// Centered Master (Stack Left, Master Center, Stack Right).
+    CenterMaster,
+    /// Grid layout (divides space into rows and columns evenly).
+    Grid,
     /// Evenly divide space vertically.
     Vertical,
     /// Evenly divide space horizontally.
@@ -95,6 +99,8 @@ impl std::fmt::Display for LayoutType {
             Self::MasterRight => write!(f, "master-right"),
             Self::MasterTop => write!(f, "master-top"),
             Self::MasterBottom => write!(f, "master-bottom"),
+            Self::CenterMaster => write!(f, "center-master"),
+            Self::Grid => write!(f, "grid"),
             Self::Vertical => write!(f, "vertical"),
             Self::Horizontal => write!(f, "horizontal"),
             Self::Monocle => write!(f, "monocle"),
@@ -114,6 +120,8 @@ impl std::str::FromStr for LayoutType {
             "master-right" | "master_right" | "masterright" => Ok(Self::MasterRight),
             "master-top" | "master_top" | "mastertop" => Ok(Self::MasterTop),
             "master-bottom" | "master_bottom" | "masterbottom" => Ok(Self::MasterBottom),
+            "center-master" | "center_master" | "centermaster" | "centered-master" | "centered_master" | "centeredmaster" => Ok(Self::CenterMaster),
+            "grid" | "g" => Ok(Self::Grid),
             "vertical" | "vert" | "v" => Ok(Self::Vertical),
             "horizontal" | "horiz" | "h" => Ok(Self::Horizontal),
             "monocle" | "mono" | "fullscreen_layout" => Ok(Self::Monocle),
@@ -130,11 +138,15 @@ impl LayoutType {
     #[allow(non_upper_case_globals)]
     pub const MasterLeft: Self = Self::MasterStack;
 
+    /// Alias for CenterMaster representing Centered Master.
+    #[allow(non_upper_case_globals)]
+    pub const CenteredMaster: Self = Self::CenterMaster;
+
     /// Returns true if this layout is any orientation of master/stack.
     pub fn is_master(&self) -> bool {
         matches!(
             self,
-            Self::MasterStack | Self::MasterRight | Self::MasterTop | Self::MasterBottom
+            Self::MasterStack | Self::MasterRight | Self::MasterTop | Self::MasterBottom | Self::CenterMaster
         )
     }
 
@@ -145,6 +157,8 @@ impl LayoutType {
             Self::MasterRight => "master-right",
             Self::MasterTop => "master-top",
             Self::MasterBottom => "master-bottom",
+            Self::CenterMaster => "center-master",
+            Self::Grid => "grid",
             Self::Vertical => "vertical",
             Self::Horizontal => "horizontal",
             Self::Monocle => "monocle",
@@ -161,6 +175,8 @@ impl LayoutType {
             Self::MasterRight => "=[]",
             Self::MasterTop => "TT=",
             Self::MasterBottom => "=TT",
+            Self::CenterMaster => "|M|",
+            Self::Grid => "[G]",
             Self::Vertical => "|||",
             Self::Horizontal => "===",
             Self::Monocle => "[M]",
@@ -171,14 +187,15 @@ impl LayoutType {
     }
 }
 
-/// Rotates the master stack layout through its 4 orientations:
-/// MasterLeft -> MasterRight -> MasterTop -> MasterBottom -> MasterLeft.
+/// Rotates the master stack layout through its 5 orientations:
+/// MasterLeft -> MasterRight -> MasterTop -> MasterBottom -> CenterMaster -> MasterLeft.
 pub fn rotate_master_layout(current: LayoutType) -> LayoutType {
     match current {
         LayoutType::MasterStack => LayoutType::MasterRight,
         LayoutType::MasterRight => LayoutType::MasterTop,
         LayoutType::MasterTop => LayoutType::MasterBottom,
-        LayoutType::MasterBottom => LayoutType::MasterStack,
+        LayoutType::MasterBottom => LayoutType::CenterMaster,
+        LayoutType::CenterMaster => LayoutType::MasterStack,
         other => other,
     }
 }
@@ -191,11 +208,12 @@ pub fn rotate_master_layout(current: LayoutType) -> LayoutType {
 /// The next layout type.
 pub fn cycle_layout(current: LayoutType) -> LayoutType {
     match current {
-        LayoutType::MasterStack | LayoutType::MasterRight | LayoutType::MasterTop | LayoutType::MasterBottom => LayoutType::Vertical,
+        LayoutType::MasterStack | LayoutType::MasterRight | LayoutType::MasterTop | LayoutType::MasterBottom | LayoutType::CenterMaster => LayoutType::Vertical,
         LayoutType::Vertical => LayoutType::Horizontal,
         LayoutType::Horizontal => LayoutType::Monocle,
         LayoutType::Monocle => LayoutType::Bsp,
-        LayoutType::Bsp => LayoutType::MasterStack,
+        LayoutType::Bsp => LayoutType::Grid,
+        LayoutType::Grid => LayoutType::MasterStack,
         LayoutType::Tabbed => LayoutType::Stacked,
         LayoutType::Stacked => LayoutType::MasterStack,
     }
@@ -562,6 +580,110 @@ pub fn calculate_horizontal(
     rects
 }
 
+/// Calculates the bounding rectangles for a centered master layout (Stack Left, Master Center, Stack Right).
+pub fn calculate_center_master(
+    clients: &[Window],
+    screen_rect: &Rect,
+    config: &LayoutConfig,
+) -> Vec<Rect> {
+    if clients.is_empty() {
+        return Vec::new();
+    }
+
+    let n = clients.len();
+    let mut rects = Vec::with_capacity(n);
+
+    let usable_x = screen_rect.x + config.outer_gap as i32;
+    let usable_y = screen_rect.y + config.outer_gap as i32;
+    let usable_w = screen_rect.width.saturating_sub(2 * config.outer_gap);
+    let usable_h = screen_rect.height.saturating_sub(2 * config.outer_gap);
+
+    if n == 1 {
+        let mut r = Rect::new(usable_x, usable_y, usable_w, usable_h);
+        r.width = r.width.saturating_sub(2 * config.border_width);
+        r.height = r.height.saturating_sub(2 * config.border_width);
+        rects.push(r);
+        return rects;
+    }
+
+    if n == 2 {
+        let half_inner = config.inner_gap / 2;
+        let master_w = ((usable_w as f32 * config.master_ratio) as u32).saturating_sub(half_inner);
+        let stack_w = usable_w.saturating_sub(master_w + config.inner_gap);
+
+        let master_x = usable_x + stack_w as i32 + config.inner_gap as i32;
+        rects.push(Rect::new(master_x, usable_y, master_w, usable_h));
+        rects.push(Rect::new(usable_x, usable_y, stack_w, usable_h));
+
+        for rect in &mut rects {
+            rect.width = rect.width.saturating_sub(2 * config.border_width);
+            rect.height = rect.height.saturating_sub(2 * config.border_width);
+        }
+        return rects;
+    }
+
+    let left_count = (n - 1).div_ceil(2);
+    let right_count = (n - 1) - left_count;
+
+    let total_horizontal_gaps = 2 * config.inner_gap;
+    let available_w = usable_w.saturating_sub(total_horizontal_gaps);
+    let master_w = (available_w as f32 * config.master_ratio.clamp(0.1, 0.8)) as u32;
+    let remaining_w = available_w.saturating_sub(master_w);
+    let left_w = remaining_w / 2;
+    let right_w = remaining_w.saturating_sub(left_w);
+
+    let left_x = usable_x;
+    let master_x = left_x + left_w as i32 + config.inner_gap as i32;
+    let right_x = master_x + master_w as i32 + config.inner_gap as i32;
+
+    rects.push(Rect::new(master_x, usable_y, master_w, usable_h));
+
+    let calc_column_rects = |count: usize, x: i32, w: u32| -> Vec<Rect> {
+        if count == 0 {
+            return Vec::new();
+        }
+        let count_u = count as u32;
+        let total_inner_gaps = config.inner_gap * (count_u - 1);
+        let total_h = usable_h.saturating_sub(total_inner_gaps);
+        let row_h = total_h / count_u;
+        let remainder = total_h % count_u;
+
+        let mut col_rects = Vec::with_capacity(count);
+        for i in 0..count_u {
+            let current_y = usable_y + (i * (row_h + config.inner_gap)) as i32;
+            let h = if i == count_u - 1 {
+                row_h + remainder
+            } else {
+                row_h
+            };
+            col_rects.push(Rect::new(x, current_y, w, h));
+        }
+        col_rects
+    };
+
+    let left_rects = calc_column_rects(left_count, left_x, left_w);
+    let right_rects = calc_column_rects(right_count, right_x, right_w);
+
+    let mut left_idx = 0;
+    let mut right_idx = 0;
+    for i in 1..n {
+        if i % 2 == 1 {
+            rects.push(left_rects[left_idx]);
+            left_idx += 1;
+        } else {
+            rects.push(right_rects[right_idx]);
+            right_idx += 1;
+        }
+    }
+
+    for rect in &mut rects {
+        rect.width = rect.width.saturating_sub(2 * config.border_width);
+        rect.height = rect.height.saturating_sub(2 * config.border_width);
+    }
+
+    rects
+}
+
 /// Calculates the bounding rectangles for a monocle layout (all windows take the full screen area).
 pub fn calculate_monocle(
     clients: &[Window],
@@ -589,6 +711,92 @@ pub fn calculate_monocle(
     vec![r; n]
 }
 
+/// Calculates the bounding rectangles for a grid layout.
+///
+/// Divides `n` windows into an even grid of rows and columns.
+/// Windows in each row share the full usable width evenly.
+pub fn calculate_grid(
+    clients: &[Window],
+    screen_rect: &Rect,
+    config: &LayoutConfig,
+) -> Vec<Rect> {
+    let n = clients.len();
+    if n == 0 {
+        return Vec::new();
+    }
+
+    let double_outer = 2 * config.outer_gap;
+    if screen_rect.width <= double_outer || screen_rect.height <= double_outer {
+        return vec![*screen_rect; n];
+    }
+
+    let usable_x = screen_rect.x + config.outer_gap as i32;
+    let usable_y = screen_rect.y + config.outer_gap as i32;
+    let usable_w = screen_rect.width - double_outer;
+    let usable_h = screen_rect.height - double_outer;
+
+    if n == 1 {
+        let mut r = Rect::new(usable_x, usable_y, usable_w, usable_h);
+        r.width = r.width.saturating_sub(2 * config.border_width);
+        r.height = r.height.saturating_sub(2 * config.border_width);
+        return vec![r];
+    }
+
+    let cols = (n as f32).sqrt().ceil() as usize;
+    let rows = n.div_ceil(cols);
+
+    let total_v_gaps = config.inner_gap * (rows as u32 - 1);
+    let total_available_h = usable_h.saturating_sub(total_v_gaps);
+    let row_h = total_available_h / rows as u32;
+    let row_rem = total_available_h % rows as u32;
+
+    let base_cols = n / rows;
+    let extra_rows = n % rows;
+
+    let mut rects = Vec::with_capacity(n);
+    let mut current_y = usable_y;
+
+    for r in 0..rows {
+        let h = if r == rows - 1 {
+            row_h + row_rem
+        } else {
+            row_h
+        };
+
+        let cols_in_row = if r < extra_rows {
+            base_cols + 1
+        } else {
+            base_cols
+        };
+
+        if cols_in_row > 0 {
+            let total_h_gaps = config.inner_gap * (cols_in_row as u32 - 1);
+            let total_available_w = usable_w.saturating_sub(total_h_gaps);
+            let col_w = total_available_w / cols_in_row as u32;
+            let col_rem = total_available_w % cols_in_row as u32;
+
+            let mut current_x = usable_x;
+            for c in 0..cols_in_row {
+                let w = if c == cols_in_row - 1 {
+                    col_w + col_rem
+                } else {
+                    col_w
+                };
+                let mut rect = Rect::new(current_x, current_y, w, h);
+                rect.width = rect.width.saturating_sub(2 * config.border_width);
+                rect.height = rect.height.saturating_sub(2 * config.border_width);
+                rects.push(rect);
+
+                current_x += (w + config.inner_gap) as i32;
+            }
+        }
+
+        current_y += (h + config.inner_gap) as i32;
+    }
+
+    rects
+}
+
 /// Dispatches calculation to the specified layout algorithm.
 pub fn calculate_layout(
     layout: LayoutType,
@@ -601,6 +809,8 @@ pub fn calculate_layout(
         LayoutType::MasterRight => calculate_master_right(clients, screen_rect, config),
         LayoutType::MasterTop => calculate_master_top(clients, screen_rect, config),
         LayoutType::MasterBottom => calculate_master_bottom(clients, screen_rect, config),
+        LayoutType::CenterMaster => calculate_center_master(clients, screen_rect, config),
+        LayoutType::Grid => calculate_grid(clients, screen_rect, config),
         LayoutType::Vertical => calculate_vertical(clients, screen_rect, config),
         LayoutType::Horizontal => calculate_horizontal(clients, screen_rect, config),
         LayoutType::Monocle | LayoutType::Tabbed | LayoutType::Stacked => {
@@ -1182,6 +1392,13 @@ impl BspTree {
             (LayoutType::MasterRight, Some(BspNode::Split { split_type: SplitType::Horizontal, ratio, .. })) => Some(1.0 - *ratio),
             (LayoutType::MasterTop, Some(BspNode::Split { split_type: SplitType::Vertical, ratio, .. })) => Some(*ratio),
             (LayoutType::MasterBottom, Some(BspNode::Split { split_type: SplitType::Vertical, ratio, .. })) => Some(1.0 - *ratio),
+            (LayoutType::CenterMaster, Some(BspNode::Split { split_type: SplitType::Horizontal, ratio, second, .. })) => {
+                if matches!(**second, BspNode::Leaf { .. }) {
+                    Some(1.0 - *ratio)
+                } else {
+                    Some((1.0 - 2.0 * *ratio).clamp(0.05, 0.95))
+                }
+            }
             _ => None,
         }
     }
@@ -1324,6 +1541,52 @@ impl BspTree {
         }
     }
 
+    /// Builds a Centered Master binary layout tree (Stack Left, Master Center, Stack Right).
+    pub fn build_center_master(clients: &[Window], master_ratio: f32) -> Option<Box<BspNode>> {
+        match clients.len() {
+            0 => None,
+            1 => Some(Box::new(BspNode::Leaf { window: clients[0] })),
+            2 => {
+                let master = clients[0];
+                let stack = clients[1];
+                let stack_ratio = (1.0 - master_ratio).clamp(0.05, 0.95);
+                Some(Box::new(BspNode::Split {
+                    split_type: SplitType::Horizontal,
+                    ratio: stack_ratio,
+                    first: Box::new(BspNode::Leaf { window: stack }),
+                    second: Box::new(BspNode::Leaf { window: master }),
+                }))
+            }
+            _ => {
+                let master = clients[0];
+                let left_wins: Vec<Window> = clients.iter().skip(1).step_by(2).copied().collect();
+                let right_wins: Vec<Window> = clients.iter().skip(2).step_by(2).copied().collect();
+
+                let master_r = master_ratio.clamp(0.10, 0.80);
+                let stack_r = 1.0 - master_r;
+                let left_fraction = stack_r / 2.0;
+                let remaining_fraction = 1.0 - left_fraction;
+                let master_in_rem_ratio = (master_r / remaining_fraction).clamp(0.05, 0.95);
+
+                let right_node = Self::build_linear(&right_wins, SplitType::Vertical);
+                let center_and_right = Box::new(BspNode::Split {
+                    split_type: SplitType::Horizontal,
+                    ratio: master_in_rem_ratio,
+                    first: Box::new(BspNode::Leaf { window: master }),
+                    second: right_node,
+                });
+
+                let left_node = Self::build_linear(&left_wins, SplitType::Vertical);
+                Some(Box::new(BspNode::Split {
+                    split_type: SplitType::Horizontal,
+                    ratio: left_fraction.clamp(0.05, 0.95),
+                    first: left_node,
+                    second: center_and_right,
+                }))
+            }
+        }
+    }
+
     /// Builds a Vertical (side-by-side columns) binary layout tree.
     pub fn build_vertical(clients: &[Window]) -> Option<Box<BspNode>> {
         if clients.is_empty() {
@@ -1340,6 +1603,56 @@ impl BspTree {
         } else {
             Some(Self::build_linear(clients, SplitType::Vertical))
         }
+    }
+
+    /// Builds a balanced Grid binary layout tree.
+    pub fn build_grid(clients: &[Window]) -> Option<Box<BspNode>> {
+        let n = clients.len();
+        if n == 0 {
+            return None;
+        }
+        if n == 1 {
+            return Some(Box::new(BspNode::Leaf { window: clients[0] }));
+        }
+
+        let cols = (n as f32).sqrt().ceil() as usize;
+        let rows = n.div_ceil(cols);
+        let base_cols = n / rows;
+        let extra_rows = n % rows;
+
+        let mut row_nodes = Vec::with_capacity(rows);
+        let mut idx = 0;
+        for r in 0..rows {
+            let cols_in_row = if r < extra_rows {
+                base_cols + 1
+            } else {
+                base_cols
+            };
+            let row_clients = &clients[idx..idx + cols_in_row];
+            idx += cols_in_row;
+            row_nodes.push(*Self::build_linear(row_clients, SplitType::Horizontal));
+        }
+
+        Self::combine_nodes(&row_nodes, SplitType::Vertical)
+    }
+
+    fn combine_nodes(nodes: &[BspNode], split_type: SplitType) -> Option<Box<BspNode>> {
+        if nodes.is_empty() {
+            return None;
+        }
+        if nodes.len() == 1 {
+            return Some(Box::new(nodes[0].clone()));
+        }
+        let k = nodes.len();
+        let ratio = (1.0 / k as f32).clamp(0.05, 0.95);
+        let first = Box::new(nodes[0].clone());
+        let second = Self::combine_nodes(&nodes[1..], split_type).unwrap();
+        Some(Box::new(BspNode::Split {
+            split_type,
+            ratio,
+            first,
+            second,
+        }))
     }
 
     fn build_linear(clients: &[Window], split_type: SplitType) -> Box<BspNode> {
@@ -1364,6 +1677,8 @@ impl BspTree {
             LayoutType::MasterRight => Self::build_master_right(clients, master_ratio),
             LayoutType::MasterTop => Self::build_master_top(clients, master_ratio),
             LayoutType::MasterBottom => Self::build_master_bottom(clients, master_ratio),
+            LayoutType::CenterMaster => Self::build_center_master(clients, master_ratio),
+            LayoutType::Grid => Self::build_grid(clients),
             LayoutType::Vertical => Self::build_vertical(clients),
             LayoutType::Horizontal => Self::build_horizontal(clients),
             LayoutType::Bsp => {
@@ -1420,7 +1735,7 @@ impl BspTree {
                             }
                         }
                     }
-                    LayoutType::MasterRight | LayoutType::MasterTop | LayoutType::MasterBottom => {
+                    LayoutType::MasterRight | LayoutType::MasterTop | LayoutType::MasterBottom | LayoutType::CenterMaster | LayoutType::Grid => {
                         let mut all = self.windows();
                         all.push(w);
                         self.rebuild_for_layout(layout, &all, master_ratio);
@@ -1643,7 +1958,8 @@ mod tests {
         assert_eq!(cycle_layout(LayoutType::Vertical), LayoutType::Horizontal);
         assert_eq!(cycle_layout(LayoutType::Horizontal), LayoutType::Monocle);
         assert_eq!(cycle_layout(LayoutType::Monocle), LayoutType::Bsp);
-        assert_eq!(cycle_layout(LayoutType::Bsp), LayoutType::MasterStack);
+        assert_eq!(cycle_layout(LayoutType::Bsp), LayoutType::Grid);
+        assert_eq!(cycle_layout(LayoutType::Grid), LayoutType::MasterStack);
 
         // Deferred fallback/loop
         assert_eq!(cycle_layout(LayoutType::Tabbed), LayoutType::Stacked);
@@ -1655,6 +1971,10 @@ mod tests {
         assert_eq!("master-right".parse::<LayoutType>().unwrap(), LayoutType::MasterRight);
         assert_eq!("master-top".parse::<LayoutType>().unwrap(), LayoutType::MasterTop);
         assert_eq!("master-bottom".parse::<LayoutType>().unwrap(), LayoutType::MasterBottom);
+        assert_eq!("center-master".parse::<LayoutType>().unwrap(), LayoutType::CenterMaster);
+        assert_eq!("centered-master".parse::<LayoutType>().unwrap(), LayoutType::CenterMaster);
+        assert_eq!("grid".parse::<LayoutType>().unwrap(), LayoutType::Grid);
+        assert_eq!("g".parse::<LayoutType>().unwrap(), LayoutType::Grid);
         assert_eq!("vertical".parse::<LayoutType>().unwrap(), LayoutType::Vertical);
         assert_eq!("horizontal".parse::<LayoutType>().unwrap(), LayoutType::Horizontal);
         assert_eq!("monocle".parse::<LayoutType>().unwrap(), LayoutType::Monocle);
@@ -1666,6 +1986,8 @@ mod tests {
         assert_eq!(format!("{}", LayoutType::MasterRight), "master-right");
         assert_eq!(format!("{}", LayoutType::MasterTop), "master-top");
         assert_eq!(format!("{}", LayoutType::MasterBottom), "master-bottom");
+        assert_eq!(format!("{}", LayoutType::CenterMaster), "center-master");
+        assert_eq!(format!("{}", LayoutType::Grid), "grid");
         assert_eq!(format!("{}", LayoutType::Vertical), "vertical");
         assert_eq!(format!("{}", LayoutType::Horizontal), "horizontal");
         assert_eq!(format!("{}", LayoutType::Monocle), "monocle");
@@ -1675,6 +1997,8 @@ mod tests {
         assert_eq!(LayoutType::MasterRight.symbol(), "=[]");
         assert_eq!(LayoutType::MasterTop.symbol(), "TT=");
         assert_eq!(LayoutType::MasterBottom.symbol(), "=TT");
+        assert_eq!(LayoutType::CenterMaster.symbol(), "|M|");
+        assert_eq!(LayoutType::Grid.symbol(), "[G]");
         assert_eq!(LayoutType::Vertical.symbol(), "|||");
         assert_eq!(LayoutType::Horizontal.symbol(), "===");
         assert_eq!(LayoutType::Monocle.symbol(), "[M]");
@@ -1684,7 +2008,8 @@ mod tests {
         assert_eq!(rotate_master_layout(LayoutType::MasterStack), LayoutType::MasterRight);
         assert_eq!(rotate_master_layout(LayoutType::MasterRight), LayoutType::MasterTop);
         assert_eq!(rotate_master_layout(LayoutType::MasterTop), LayoutType::MasterBottom);
-        assert_eq!(rotate_master_layout(LayoutType::MasterBottom), LayoutType::MasterStack);
+        assert_eq!(rotate_master_layout(LayoutType::MasterBottom), LayoutType::CenterMaster);
+        assert_eq!(rotate_master_layout(LayoutType::CenterMaster), LayoutType::MasterStack);
         assert_eq!(rotate_master_layout(LayoutType::Vertical), LayoutType::Vertical);
     }
 
@@ -1913,5 +2238,118 @@ mod tests {
         tree.rebuild_for_layout(LayoutType::MasterBottom, &[1, 2, 3], 0.60);
         let ratio = tree.master_ratio_for_layout(LayoutType::MasterBottom).unwrap();
         assert!((ratio - 0.60).abs() < 0.01);
+
+        // 5. Center Master (Stack Left: B, D; Master Center; Stack Right: C, E)
+        let r_center = calculate_center_master(&[1, 2, 3, 4, 5], &screen, &config);
+        assert_eq!(r_center.len(), 5);
+        let master = r_center[0];
+        let b = r_center[1]; // top-left
+        let c = r_center[2]; // top-right
+        let d = r_center[3]; // bottom-left
+        let e = r_center[4]; // bottom-right
+
+        // Master must be horizontally between Left stack (B, D) and Right stack (C, E)
+        assert!(master.x > b.x, "Master must be to the right of left stack");
+        assert!(master.x < c.x, "Master must be to the left of right stack");
+        assert_eq!(b.x, d.x, "B and D must be in left column");
+        assert_eq!(c.x, e.x, "C and E must be in right column");
+        assert!(b.y < d.y, "B must be above D");
+        assert!(c.y < e.y, "C must be above E");
+
+        for i in 0..5 {
+            for j in (i + 1)..5 {
+                assert!(!r_center[i].overlaps(&r_center[j]), "Windows must not overlap in center-master");
+            }
+        }
+
+        tree.rebuild_for_layout(LayoutType::CenterMaster, &[1, 2, 3, 4, 5], 0.60);
+        let ratio = tree.master_ratio_for_layout(LayoutType::CenterMaster).unwrap();
+        assert!((ratio - 0.60).abs() < 0.05);
+    }
+
+    #[test]
+    fn test_grid_layout_math() {
+        let screen = Rect::new(0, 0, 1000, 600);
+        let config = LayoutConfig {
+            master_ratio: 0.55,
+            inner_gap: 10,
+            outer_gap: 10,
+            border_width: 2,
+        };
+
+        // 0 windows: empty
+        assert!(calculate_grid(&[], &screen, &config).is_empty());
+
+        // 1 window: fills usable area
+        let r1 = calculate_grid(&[1], &screen, &config);
+        assert_eq!(r1.len(), 1);
+        assert_eq!(r1[0].x, 10);
+        assert_eq!(r1[0].y, 10);
+        assert_eq!(r1[0].width, 1000 - 20 - 4);
+        assert_eq!(r1[0].height, 600 - 20 - 4);
+
+        // 2 windows: 1 row, 2 columns side-by-side
+        let r2 = calculate_grid(&[1, 2], &screen, &config);
+        assert_eq!(r2.len(), 2);
+        assert_eq!(r2[0].y, r2[1].y);
+        assert!(r2[0].x < r2[1].x);
+        assert!(!r2[0].overlaps(&r2[1]));
+
+        // 3 windows: 2 rows (row 0: 2 windows, row 1: 1 window full width)
+        let r3 = calculate_grid(&[1, 2, 3], &screen, &config);
+        assert_eq!(r3.len(), 3);
+        assert_eq!(r3[0].y, r3[1].y);
+        assert!(r3[0].x < r3[1].x);
+        assert!(r3[2].y > r3[0].y);
+        assert!(r3[2].width > r3[0].width);
+        for i in 0..3 {
+            for j in (i + 1)..3 {
+                assert!(!r3[i].overlaps(&r3[j]), "Grid 3 windows must not overlap");
+            }
+        }
+
+        // 4 windows: 2x2 grid
+        let r4 = calculate_grid(&[1, 2, 3, 4], &screen, &config);
+        assert_eq!(r4.len(), 4);
+        assert_eq!(r4[0].y, r4[1].y);
+        assert_eq!(r4[2].y, r4[3].y);
+        assert!(r4[0].y < r4[2].y);
+        assert_eq!(r4[0].x, r4[2].x);
+        assert_eq!(r4[1].x, r4[3].x);
+        for i in 0..4 {
+            for j in (i + 1)..4 {
+                assert!(!r4[i].overlaps(&r4[j]), "Grid 4 windows must not overlap");
+            }
+        }
+
+        // 5 windows: 2 rows (row 0: 3 windows, row 1: 2 windows)
+        let r5 = calculate_grid(&[1, 2, 3, 4, 5], &screen, &config);
+        assert_eq!(r5.len(), 5);
+        for i in 0..5 {
+            for j in (i + 1)..5 {
+                assert!(!r5[i].overlaps(&r5[j]), "Grid 5 windows must not overlap");
+            }
+        }
+
+        // All windows within screen boundaries
+        for (idx, r) in r5.iter().enumerate() {
+            assert!(r.x >= screen.x, "Window {} x out of bounds", idx);
+            assert!(r.y >= screen.y, "Window {} y out of bounds", idx);
+            assert!(
+                r.x + (r.width + 2 * config.border_width) as i32 <= screen.x + screen.width as i32,
+                "Window {} width extends beyond screen",
+                idx
+            );
+            assert!(
+                r.y + (r.height + 2 * config.border_width) as i32 <= screen.y + screen.height as i32,
+                "Window {} height extends beyond screen",
+                idx
+            );
+        }
+
+        // BspTree rebuild_for_layout
+        let mut tree = BspTree::new();
+        tree.rebuild_for_layout(LayoutType::Grid, &[1, 2, 3, 4], 0.5);
+        assert_eq!(tree.windows(), vec![1, 2, 3, 4]);
     }
 }

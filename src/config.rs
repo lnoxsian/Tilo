@@ -669,10 +669,12 @@ fn parse_action(tokens: &[&Token], line: usize, config: &Config) -> Result<Actio
         "layout_master_right" => Ok(Action::SetLayout(crate::layout::LayoutType::MasterRight)),
         "layout_master_top" => Ok(Action::SetLayout(crate::layout::LayoutType::MasterTop)),
         "layout_master_bottom" => Ok(Action::SetLayout(crate::layout::LayoutType::MasterBottom)),
+        "layout_center_master" | "layout_centered_master" | "layout_centermaster" | "layout_centeredmaster" => Ok(Action::SetLayout(crate::layout::LayoutType::CenterMaster)),
         "layout_monocle" => Ok(Action::SetLayout(crate::layout::LayoutType::Monocle)),
         "layout_vertical" => Ok(Action::SetLayout(crate::layout::LayoutType::Vertical)),
         "layout_horizontal" => Ok(Action::SetLayout(crate::layout::LayoutType::Horizontal)),
         "layout_bsp" => Ok(Action::SetLayout(crate::layout::LayoutType::Bsp)),
+        "layout_grid" => Ok(Action::SetLayout(crate::layout::LayoutType::Grid)),
         unknown => Err(ConfigError::InvalidValue {
             line,
             value: unknown.to_string(),
@@ -900,17 +902,21 @@ bind $mod+1 layout_master_left
 bind $mod+2 layout_master_right
 bind $mod+3 layout_master_top
 bind $mod+4 layout_master_bottom
+bind $mod+5 layout_center_master
+bind $mod+6 layout_grid
 "#;
         let tokens = tokenize(input).unwrap();
         let config = parse(&tokens).unwrap();
 
         assert_eq!(config.layout, crate::layout::LayoutType::MasterTop);
-        assert_eq!(config.bindings.len(), 6);
+        assert_eq!(config.bindings.len(), 8);
         assert_eq!(config.bindings[0].action, Action::RotateMaster);
         assert_eq!(config.bindings[1].action, Action::RotateMaster);
         assert_eq!(config.bindings[2].action, Action::SetLayout(crate::layout::LayoutType::MasterStack));
         assert_eq!(config.bindings[3].action, Action::SetLayout(crate::layout::LayoutType::MasterRight));
         assert_eq!(config.bindings[4].action, Action::SetLayout(crate::layout::LayoutType::MasterTop));
         assert_eq!(config.bindings[5].action, Action::SetLayout(crate::layout::LayoutType::MasterBottom));
+        assert_eq!(config.bindings[6].action, Action::SetLayout(crate::layout::LayoutType::CenterMaster));
+        assert_eq!(config.bindings[7].action, Action::SetLayout(crate::layout::LayoutType::Grid));
     }
 }

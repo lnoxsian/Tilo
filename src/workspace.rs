@@ -382,6 +382,7 @@ mod tests {
         assert_eq!(ws.rotate_master_layout(), LayoutType::MasterRight);
         assert_eq!(ws.rotate_master_layout(), LayoutType::MasterTop);
         assert_eq!(ws.rotate_master_layout(), LayoutType::MasterBottom);
+        assert_eq!(ws.rotate_master_layout(), LayoutType::CenterMaster);
         assert_eq!(ws.rotate_master_layout(), LayoutType::MasterStack);
 
         let mut mgr = WorkspaceManager::new();
