@@ -570,6 +570,10 @@ impl WindowManager {
                 } else {
                     let _ = self.clear_focus();
                 }
+                #[cfg(target_os = "linux")]
+                unsafe {
+                    libc::malloc_trim(0);
+                }
             }
         Ok(())
     }
@@ -914,12 +918,13 @@ impl WindowManager {
 
             // Wait for incoming X11 events on the connection socket, waking immediately
             // upon input or timing out when the next periodic statusbar update is due.
-            // If statusbar is disabled, sleep indefinitely (-1) with zero CPU wakeups.
+            // If statusbar is disabled, wake up periodically (every 250ms) to check
+            // termination signals promptly with negligible CPU impact.
             let timeout_ms = if let Some(ref bar) = self.statusbar {
                 let next = bar.time_until_next_update();
                 (next.as_millis() as i32).clamp(10, 500)
             } else {
-                500
+                250
             };
 
             use std::os::fd::AsRawFd;
@@ -1420,6 +1425,10 @@ impl WindowManager {
                 }
             } else if self.focused_window() == Some(window) {
                 let _ = self.clear_focus();
+            }
+            #[cfg(target_os = "linux")]
+            unsafe {
+                libc::malloc_trim(0);
             }
         }
         removed

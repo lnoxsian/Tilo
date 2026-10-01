@@ -99,9 +99,12 @@ pub struct Launcher {
 }
 
 impl Launcher {
-    /// Creates a new `Launcher` instance and scans for executables and applications.
+    /// Creates a new `Launcher` instance without pre-scanning the filesystem.
+    ///
+    /// Filesystem scanning is deferred until the launcher is opened or refreshed,
+    /// eliminating startup latency and idle heap memory usage.
     pub fn new() -> Self {
-        let mut launcher = Self {
+        Self {
             window_id: 0,
             executable_cache: Vec::new(),
             query: String::new(),
@@ -118,9 +121,7 @@ impl Launcher {
             last_path_var: String::new(),
             dir_cache: HashMap::new(),
             last_check_instant: None,
-        };
-        launcher.refresh();
-        launcher
+        }
     }
 
     /// Returns the executable command line for a given item name.
