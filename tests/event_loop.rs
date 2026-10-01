@@ -131,3 +131,80 @@ fn test_event_loop_map_and_destroy_in_xephyr() {
         assert!(!wm.running);
     }
 }
+
+#[test]
+fn test_event_driven_run_loop_in_xephyr() {
+    if !Command::new("which").arg("Xephyr").output().map(|o| o.status.success()).unwrap_or(false) {
+        return;
+    }
+
+    let xephyr = XephyrServer::start(93);
+    if let Some(server) = xephyr {
+        let wm_ctx = X11Context::connect_to(Some(&server.display))
+            .expect("WM context connect failed");
+        assert!(wm_ctx.become_wm().is_ok(), "Failed to become WM on Xephyr");
+
+        let mut wm = WindowManager::new(wm_ctx).expect("Failed to initialize WindowManager");
+
+        // Spawn a thread to run the event-driven run loop
+        let (tx, rx) = std::sync::mpsc::channel();
+        let handle = std::thread::spawn(move || {
+            let start = std::time::Instant::now();
+            let _ = tx.send(());
+            let res = wm.run();
+            (res, start.elapsed())
+        });
+
+        // Wait until run() has started
+        let _ = rx.recv();
+        std::thread::sleep(std::time::Duration::from_millis(50));
+
+        // Connect client and send a MapRequest
+        let (client_conn, screen_num) = x11rb::connect(Some(&server.display))
+            .expect("Client connect failed");
+        let screen = &client_conn.setup().roots[screen_num];
+        let root = screen.root;
+
+        let test_window = client_conn.generate_id().expect("Failed to generate XID");
+        client_conn
+            .create_window(
+                x11rb::COPY_DEPTH_FROM_PARENT,
+                test_window,
+                root,
+                10,
+                10,
+                100,
+                100,
+                0,
+                WindowClass::INPUT_OUTPUT,
+                x11rb::COPY_FROM_PARENT,
+                &CreateWindowAux::default(),
+            )
+            .expect("Failed to create window");
+        client_conn.map_window(test_window).expect("Map window failed");
+        client_conn.flush().expect("Client flush failed");
+
+        // The event loop should process it almost immediately
+        std::thread::sleep(std::time::Duration::from_millis(100));
+
+        let attrs = client_conn
+            .get_window_attributes(test_window)
+            .expect("Failed getting attrs")
+            .reply()
+            .expect("Failed to get reply");
+        assert_eq!(
+            attrs.map_state,
+            MapState::VIEWABLE,
+            "Window should be mapped and viewable by event-driven WM"
+        );
+
+        // Send SIGTERM to self to test signal-driven wakeup and termination
+        unsafe {
+            libc::raise(libc::SIGTERM);
+        }
+
+        let (res, elapsed) = handle.join().expect("WM thread panicked");
+        assert!(res.is_ok(), "run() exited with error: {:?}", res);
+        assert!(elapsed < std::time::Duration::from_secs(2), "WM took too long to terminate: {:?}", elapsed);
+    }
+}

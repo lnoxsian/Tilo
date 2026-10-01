@@ -116,7 +116,7 @@ pub enum ModuleUpdate {
 }
 
 /// Trait defining the behavior of an independent statusbar module.
-pub trait StatusModule: std::fmt::Debug {
+pub trait StatusModule: std::fmt::Debug + Send {
     /// Returns the name of the module for debugging and identification.
     fn name(&self) -> &'static str;
 
@@ -128,6 +128,11 @@ pub trait StatusModule: std::fmt::Debug {
 
     /// Returns the current cached text to be drawn.
     fn current_text(&self) -> &str;
+
+    /// Returns the timestamp when this module was last updated, if available.
+    fn last_updated(&self) -> Option<Instant> {
+        None
+    }
 
     /// Returns a mutable reference to Any for downcasting if supported.
     fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> {
@@ -188,8 +193,13 @@ impl Statusbar {
     /// # Returns
     /// `true` if any module updated its text or entered an error state.
     pub fn update_all(&mut self) -> bool {
+        let now = Instant::now();
         let mut any_changed = false;
         for module in &mut self.modules {
+            if let Some(last) = module.last_updated()
+                && now.duration_since(last).as_millis() < module.update_interval() as u128 {
+                    continue;
+                }
             match module.update() {
                 Ok(ModuleUpdate::Changed(_)) | Ok(ModuleUpdate::Error(_)) => {
                     any_changed = true;
@@ -496,6 +506,10 @@ impl StatusModule for WorkspaceModule {
         &self.cached_text
     }
 
+    fn last_updated(&self) -> Option<Instant> {
+        self.last_updated
+    }
+
     fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> {
         Some(self)
     }
@@ -567,6 +581,10 @@ impl StatusModule for LayoutModule {
         &self.cached_text
     }
 
+    fn last_updated(&self) -> Option<Instant> {
+        self.last_updated
+    }
+
     fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> {
         Some(self)
     }
@@ -624,6 +642,10 @@ impl StatusModule for TitleModule {
 
     fn current_text(&self) -> &str {
         &self.cached_text
+    }
+
+    fn last_updated(&self) -> Option<Instant> {
+        self.last_updated
     }
 
     fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> {
@@ -710,6 +732,10 @@ impl StatusModule for IpModule {
 
     fn current_text(&self) -> &str {
         &self.cached_text
+    }
+
+    fn last_updated(&self) -> Option<Instant> {
+        self.last_updated
     }
 
     fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> {
@@ -818,6 +844,10 @@ impl StatusModule for RamModule {
 
     fn current_text(&self) -> &str {
         &self.cached_text
+    }
+
+    fn last_updated(&self) -> Option<Instant> {
+        self.last_updated
     }
 }
 
@@ -937,6 +967,10 @@ impl StatusModule for CpuModule {
 
     fn current_text(&self) -> &str {
         &self.cached_text
+    }
+
+    fn last_updated(&self) -> Option<Instant> {
+        self.last_updated
     }
 }
 
@@ -1059,6 +1093,10 @@ impl StatusModule for BatteryModule {
         &self.cached_text
     }
 
+    fn last_updated(&self) -> Option<Instant> {
+        self.last_updated
+    }
+
     fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> {
         Some(self)
     }
@@ -1131,6 +1169,10 @@ impl StatusModule for ClockModule {
 
     fn current_text(&self) -> &str {
         &self.cached_text
+    }
+
+    fn last_updated(&self) -> Option<Instant> {
+        self.last_updated
     }
 
     fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> {

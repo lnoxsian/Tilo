@@ -46,6 +46,8 @@ use x11rb::wrapper::ConnectionExt as _;
 pub static LAUNCHER_SIGNAL: AtomicBool = AtomicBool::new(false);
 /// Global flag for SIGHUP signal (reloads config).
 pub static RELOAD_SIGNAL: AtomicBool = AtomicBool::new(false);
+/// Global flag for SIGINT/SIGTERM signal (cleanly stops event loop).
+pub static TERMINATE_SIGNAL: AtomicBool = AtomicBool::new(false);
 
 extern "C" fn sigusr1_handler(_: libc::c_int) {
     LAUNCHER_SIGNAL.store(true, Ordering::SeqCst);
@@ -55,11 +57,17 @@ extern "C" fn sighup_handler(_: libc::c_int) {
     RELOAD_SIGNAL.store(true, Ordering::SeqCst);
 }
 
+extern "C" fn sigterm_handler(_: libc::c_int) {
+    TERMINATE_SIGNAL.store(true, Ordering::SeqCst);
+}
+
 /// Registers POSIX signal handlers for runtime control.
 pub fn setup_signal_handlers() {
     unsafe {
         libc::signal(libc::SIGUSR1, sigusr1_handler as *const () as usize);
         libc::signal(libc::SIGHUP, sighup_handler as *const () as usize);
+        libc::signal(libc::SIGINT, sigterm_handler as *const () as usize);
+        libc::signal(libc::SIGTERM, sigterm_handler as *const () as usize);
         libc::signal(libc::SIGCHLD, libc::SIG_IGN);
     }
 }
@@ -531,7 +539,7 @@ impl WindowManager {
                     && reply.status == x11rb::protocol::xproto::GrabStatus::SUCCESS {
                         break;
                     }
-            std::thread::sleep(std::time::Duration::from_millis(10));
+            std::thread::sleep(std::time::Duration::from_millis(1));
         }
 
         launcher.mode = mode;
@@ -593,10 +601,6 @@ impl WindowManager {
             Some(m) => m,
             None => return Ok(()),
         };
-
-        if let Some(ref mut launcher) = self.launcher {
-            launcher.refresh_if_needed_throttled(std::time::Duration::from_millis(500));
-        }
 
         if let Some(action) = crate::launcher::handle_launcher_keypress(event.detail, u16::from(event.state), mapping) {
             match action {
@@ -859,6 +863,10 @@ impl WindowManager {
         self.context.flush()?;
         let mut last_status_update = std::time::Instant::now();
         while self.running {
+            if TERMINATE_SIGNAL.swap(false, Ordering::SeqCst) {
+                self.running = false;
+                break;
+            }
             if LAUNCHER_SIGNAL.swap(false, Ordering::SeqCst) {
                 let _ = self.toggle_launcher();
             }
@@ -866,10 +874,8 @@ impl WindowManager {
                 let _ = self.reload_config();
             }
 
-            let mut got_event = false;
             while let Some(event) = self.context.connection.poll_for_event()? {
                 self.handle_event(event)?;
-                got_event = true;
             }
 
             if last_status_update.elapsed() >= std::time::Duration::from_millis(250) {
@@ -877,10 +883,24 @@ impl WindowManager {
                 last_status_update = std::time::Instant::now();
             }
 
-            if got_event {
-                self.context.flush()?;
-            } else {
-                std::thread::sleep(std::time::Duration::from_millis(20));
+            // Always flush pending X11 requests before waiting
+            self.context.flush()?;
+
+            // Wait for incoming X11 events on the connection socket, waking immediately
+            // upon input or timing out when the next statusbar update is due.
+            let time_until_status = std::time::Duration::from_millis(250)
+                .saturating_sub(last_status_update.elapsed());
+            let timeout_ms = (time_until_status.as_millis() as i32).clamp(1, 250);
+
+            use std::os::fd::AsRawFd;
+            let fd = self.context.connection.stream().as_raw_fd();
+            let mut pfd = libc::pollfd {
+                fd,
+                events: libc::POLLIN,
+                revents: 0,
+            };
+            unsafe {
+                libc::poll(&mut pfd, 1, timeout_ms);
             }
         }
         Ok(())

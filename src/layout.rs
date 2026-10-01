@@ -63,9 +63,15 @@ impl Default for LayoutConfig {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[derive(Default)]
 pub enum LayoutType {
-    /// Traditional master and stack tiling.
+    /// Traditional master and stack tiling (Master Left, Stack Right).
     #[default]
     MasterStack,
+    /// Master Right, Stack Left (Horizontal mirror).
+    MasterRight,
+    /// Master Top, Stack Bottom.
+    MasterTop,
+    /// Master Bottom, Stack Top.
+    MasterBottom,
     /// Evenly divide space vertically.
     Vertical,
     /// Evenly divide space horizontally.
@@ -82,11 +88,13 @@ pub enum LayoutType {
     Bsp,
 }
 
-
 impl std::fmt::Display for LayoutType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::MasterStack => write!(f, "master"),
+            Self::MasterStack => write!(f, "master-left"),
+            Self::MasterRight => write!(f, "master-right"),
+            Self::MasterTop => write!(f, "master-top"),
+            Self::MasterBottom => write!(f, "master-bottom"),
             Self::Vertical => write!(f, "vertical"),
             Self::Horizontal => write!(f, "horizontal"),
             Self::Monocle => write!(f, "monocle"),
@@ -102,7 +110,10 @@ impl std::str::FromStr for LayoutType {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
-            "master" | "masterstack" | "master_stack" | "default" => Ok(Self::MasterStack),
+            "master" | "master-left" | "master_left" | "masterleft" | "masterstack" | "master_stack" | "default" => Ok(Self::MasterStack),
+            "master-right" | "master_right" | "masterright" => Ok(Self::MasterRight),
+            "master-top" | "master_top" | "mastertop" => Ok(Self::MasterTop),
+            "master-bottom" | "master_bottom" | "masterbottom" => Ok(Self::MasterBottom),
             "vertical" | "vert" | "v" => Ok(Self::Vertical),
             "horizontal" | "horiz" | "h" => Ok(Self::Horizontal),
             "monocle" | "mono" | "fullscreen_layout" => Ok(Self::Monocle),
@@ -115,10 +126,40 @@ impl std::str::FromStr for LayoutType {
 }
 
 impl LayoutType {
+    /// Alias for MasterStack representing Master Left — Stack Right.
+    pub const MasterLeft: Self = Self::MasterStack;
+
+    /// Returns true if this layout is any orientation of master/stack.
+    pub fn is_master(&self) -> bool {
+        matches!(
+            self,
+            Self::MasterStack | Self::MasterRight | Self::MasterTop | Self::MasterBottom
+        )
+    }
+
+    /// Canonical user-facing name for this layout.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::MasterStack => "master-left",
+            Self::MasterRight => "master-right",
+            Self::MasterTop => "master-top",
+            Self::MasterBottom => "master-bottom",
+            Self::Vertical => "vertical",
+            Self::Horizontal => "horizontal",
+            Self::Monocle => "monocle",
+            Self::Tabbed => "tabbed",
+            Self::Stacked => "stacking",
+            Self::Bsp => "bsp",
+        }
+    }
+
     /// Returns the short statusbar symbol for this layout.
     pub fn symbol(&self) -> &'static str {
         match self {
             Self::MasterStack => "[]=",
+            Self::MasterRight => "=[]",
+            Self::MasterTop => "TT=",
+            Self::MasterBottom => "=TT",
             Self::Vertical => "|||",
             Self::Horizontal => "===",
             Self::Monocle => "[M]",
@@ -126,6 +167,18 @@ impl LayoutType {
             Self::Stacked => "[S]",
             Self::Bsp => "[B]",
         }
+    }
+}
+
+/// Rotates the master stack layout through its 4 orientations:
+/// MasterLeft -> MasterRight -> MasterTop -> MasterBottom -> MasterLeft.
+pub fn rotate_master_layout(current: LayoutType) -> LayoutType {
+    match current {
+        LayoutType::MasterStack => LayoutType::MasterRight,
+        LayoutType::MasterRight => LayoutType::MasterTop,
+        LayoutType::MasterTop => LayoutType::MasterBottom,
+        LayoutType::MasterBottom => LayoutType::MasterStack,
+        _ => LayoutType::MasterStack,
     }
 }
 
@@ -137,7 +190,7 @@ impl LayoutType {
 /// The next layout type.
 pub fn cycle_layout(current: LayoutType) -> LayoutType {
     match current {
-        LayoutType::MasterStack => LayoutType::Vertical,
+        LayoutType::MasterStack | LayoutType::MasterRight | LayoutType::MasterTop | LayoutType::MasterBottom => LayoutType::Vertical,
         LayoutType::Vertical => LayoutType::Horizontal,
         LayoutType::Horizontal => LayoutType::Monocle,
         LayoutType::Monocle => LayoutType::Bsp,
@@ -215,6 +268,201 @@ pub fn calculate_master_stack(
     }
 
     // Adjust dimensions to account for X11 borders inside config logic
+    for rect in &mut rects {
+        rect.width = rect.width.saturating_sub(2 * config.border_width);
+        rect.height = rect.height.saturating_sub(2 * config.border_width);
+    }
+
+    rects
+}
+
+/// Calculates the bounding rectangles for a master/stack layout with Master on Right, Stack on Left.
+pub fn calculate_master_right(
+    clients: &[Window],
+    screen_rect: &Rect,
+    config: &LayoutConfig,
+) -> Vec<Rect> {
+    let n = clients.len();
+    if n == 0 {
+        return Vec::new();
+    }
+
+    let mut rects = Vec::with_capacity(n);
+
+    let double_outer = 2 * config.outer_gap;
+    if screen_rect.width <= double_outer || screen_rect.height <= double_outer {
+        return vec![*screen_rect; n];
+    }
+
+    let usable_x = screen_rect.x + config.outer_gap as i32;
+    let usable_y = screen_rect.y + config.outer_gap as i32;
+    let usable_w = screen_rect.width - double_outer;
+    let usable_h = screen_rect.height - double_outer;
+
+    if n == 1 {
+        let mut r = Rect::new(usable_x, usable_y, usable_w, usable_h);
+        r.width = r.width.saturating_sub(2 * config.border_width);
+        r.height = r.height.saturating_sub(2 * config.border_width);
+        rects.push(r);
+        return rects;
+    }
+
+    let half_inner = config.inner_gap / 2;
+    let master_w = ((usable_w as f32 * config.master_ratio) as u32).saturating_sub(half_inner);
+    let stack_w = usable_w.saturating_sub(master_w + config.inner_gap);
+    let stack_x = usable_x;
+    let master_x = usable_x + stack_w as i32 + config.inner_gap as i32;
+
+    // Master is window 0 on the right
+    rects.push(Rect::new(master_x, usable_y, master_w, usable_h));
+
+    // Stack windows 1..n on the left, stacked vertically into rows
+    let stack_count = (n - 1) as u32;
+    let total_inner_gaps = config.inner_gap * (stack_count - 1);
+    let total_stack_height = usable_h.saturating_sub(total_inner_gaps);
+    let stack_h = total_stack_height / stack_count;
+    let remainder = total_stack_height % stack_count;
+
+    for i in 0..stack_count {
+        let current_y = usable_y + (i * (stack_h + config.inner_gap)) as i32;
+        let h = if i == stack_count - 1 {
+            stack_h + remainder
+        } else {
+            stack_h
+        };
+        rects.push(Rect::new(stack_x, current_y, stack_w, h));
+    }
+
+    for rect in &mut rects {
+        rect.width = rect.width.saturating_sub(2 * config.border_width);
+        rect.height = rect.height.saturating_sub(2 * config.border_width);
+    }
+
+    rects
+}
+
+/// Calculates the bounding rectangles for a master/stack layout with Master on Top, Stack on Bottom.
+pub fn calculate_master_top(
+    clients: &[Window],
+    screen_rect: &Rect,
+    config: &LayoutConfig,
+) -> Vec<Rect> {
+    let n = clients.len();
+    if n == 0 {
+        return Vec::new();
+    }
+
+    let mut rects = Vec::with_capacity(n);
+
+    let double_outer = 2 * config.outer_gap;
+    if screen_rect.width <= double_outer || screen_rect.height <= double_outer {
+        return vec![*screen_rect; n];
+    }
+
+    let usable_x = screen_rect.x + config.outer_gap as i32;
+    let usable_y = screen_rect.y + config.outer_gap as i32;
+    let usable_w = screen_rect.width - double_outer;
+    let usable_h = screen_rect.height - double_outer;
+
+    if n == 1 {
+        let mut r = Rect::new(usable_x, usable_y, usable_w, usable_h);
+        r.width = r.width.saturating_sub(2 * config.border_width);
+        r.height = r.height.saturating_sub(2 * config.border_width);
+        rects.push(r);
+        return rects;
+    }
+
+    let half_inner = config.inner_gap / 2;
+    let master_h = ((usable_h as f32 * config.master_ratio) as u32).saturating_sub(half_inner);
+    let stack_h = usable_h.saturating_sub(master_h + config.inner_gap);
+    let master_y = usable_y;
+    let stack_y = usable_y + master_h as i32 + config.inner_gap as i32;
+
+    // Master is window 0 on top
+    rects.push(Rect::new(usable_x, master_y, usable_w, master_h));
+
+    // Stack windows 1..n on bottom, divided horizontally into columns
+    let stack_count = (n - 1) as u32;
+    let total_inner_gaps = config.inner_gap * (stack_count - 1);
+    let total_stack_width = usable_w.saturating_sub(total_inner_gaps);
+    let stack_col_w = total_stack_width / stack_count;
+    let remainder = total_stack_width % stack_count;
+
+    for i in 0..stack_count {
+        let current_x = usable_x + (i * (stack_col_w + config.inner_gap)) as i32;
+        let w = if i == stack_count - 1 {
+            stack_col_w + remainder
+        } else {
+            stack_col_w
+        };
+        rects.push(Rect::new(current_x, stack_y, w, stack_h));
+    }
+
+    for rect in &mut rects {
+        rect.width = rect.width.saturating_sub(2 * config.border_width);
+        rect.height = rect.height.saturating_sub(2 * config.border_width);
+    }
+
+    rects
+}
+
+/// Calculates the bounding rectangles for a master/stack layout with Master on Bottom, Stack on Top.
+pub fn calculate_master_bottom(
+    clients: &[Window],
+    screen_rect: &Rect,
+    config: &LayoutConfig,
+) -> Vec<Rect> {
+    let n = clients.len();
+    if n == 0 {
+        return Vec::new();
+    }
+
+    let mut rects = Vec::with_capacity(n);
+
+    let double_outer = 2 * config.outer_gap;
+    if screen_rect.width <= double_outer || screen_rect.height <= double_outer {
+        return vec![*screen_rect; n];
+    }
+
+    let usable_x = screen_rect.x + config.outer_gap as i32;
+    let usable_y = screen_rect.y + config.outer_gap as i32;
+    let usable_w = screen_rect.width - double_outer;
+    let usable_h = screen_rect.height - double_outer;
+
+    if n == 1 {
+        let mut r = Rect::new(usable_x, usable_y, usable_w, usable_h);
+        r.width = r.width.saturating_sub(2 * config.border_width);
+        r.height = r.height.saturating_sub(2 * config.border_width);
+        rects.push(r);
+        return rects;
+    }
+
+    let half_inner = config.inner_gap / 2;
+    let master_h = ((usable_h as f32 * config.master_ratio) as u32).saturating_sub(half_inner);
+    let stack_h = usable_h.saturating_sub(master_h + config.inner_gap);
+    let stack_y = usable_y;
+    let master_y = usable_y + stack_h as i32 + config.inner_gap as i32;
+
+    // Master is window 0 on bottom
+    rects.push(Rect::new(usable_x, master_y, usable_w, master_h));
+
+    // Stack windows 1..n on top, divided horizontally into columns
+    let stack_count = (n - 1) as u32;
+    let total_inner_gaps = config.inner_gap * (stack_count - 1);
+    let total_stack_width = usable_w.saturating_sub(total_inner_gaps);
+    let stack_col_w = total_stack_width / stack_count;
+    let remainder = total_stack_width % stack_count;
+
+    for i in 0..stack_count {
+        let current_x = usable_x + (i * (stack_col_w + config.inner_gap)) as i32;
+        let w = if i == stack_count - 1 {
+            stack_col_w + remainder
+        } else {
+            stack_col_w
+        };
+        rects.push(Rect::new(current_x, stack_y, w, stack_h));
+    }
+
     for rect in &mut rects {
         rect.width = rect.width.saturating_sub(2 * config.border_width);
         rect.height = rect.height.saturating_sub(2 * config.border_width);
@@ -349,6 +597,9 @@ pub fn calculate_layout(
 ) -> Vec<Rect> {
     match layout {
         LayoutType::MasterStack => calculate_master_stack(clients, screen_rect, config),
+        LayoutType::MasterRight => calculate_master_right(clients, screen_rect, config),
+        LayoutType::MasterTop => calculate_master_top(clients, screen_rect, config),
+        LayoutType::MasterBottom => calculate_master_bottom(clients, screen_rect, config),
         LayoutType::Vertical => calculate_vertical(clients, screen_rect, config),
         LayoutType::Horizontal => calculate_horizontal(clients, screen_rect, config),
         LayoutType::Monocle | LayoutType::Tabbed | LayoutType::Stacked => {
@@ -923,12 +1174,20 @@ impl BspTree {
     }
 
     /// Resizes the ancestor split of `window` by `delta_ratio` ($\pm 0.05$).
-    /// Returns the current horizontal split ratio if the root is a horizontal split.
-    pub fn master_ratio(&self) -> Option<f32> {
-        match self.root.as_deref() {
-            Some(BspNode::Split { split_type: SplitType::Horizontal, ratio, .. }) => Some(*ratio),
+    /// Returns the active master pane ratio based on layout orientation.
+    pub fn master_ratio_for_layout(&self, layout: LayoutType) -> Option<f32> {
+        match (layout, self.root.as_deref()) {
+            (LayoutType::MasterStack, Some(BspNode::Split { split_type: SplitType::Horizontal, ratio, .. })) => Some(*ratio),
+            (LayoutType::MasterRight, Some(BspNode::Split { split_type: SplitType::Horizontal, ratio, .. })) => Some(1.0 - *ratio),
+            (LayoutType::MasterTop, Some(BspNode::Split { split_type: SplitType::Vertical, ratio, .. })) => Some(*ratio),
+            (LayoutType::MasterBottom, Some(BspNode::Split { split_type: SplitType::Vertical, ratio, .. })) => Some(1.0 - *ratio),
             _ => None,
         }
+    }
+
+    /// Returns the current horizontal split ratio if the root is a horizontal split.
+    pub fn master_ratio(&self) -> Option<f32> {
+        self.master_ratio_for_layout(LayoutType::MasterStack)
     }
 
     /// Resizes the ancestor split of `window` by `delta_ratio` ($\pm 0.05$), falling back to any matching split.
@@ -1008,6 +1267,62 @@ impl BspTree {
         }
     }
 
+    /// Builds a Master/Stack binary layout tree with Master on Right, Stack on Left.
+    pub fn build_master_right(clients: &[Window], master_ratio: f32) -> Option<Box<BspNode>> {
+        match clients.len() {
+            0 => None,
+            1 => Some(Box::new(BspNode::Leaf { window: clients[0] })),
+            _ => {
+                let master = clients[0];
+                let stack = &clients[1..];
+                let stack_ratio = (1.0 - master_ratio).clamp(0.05, 0.95);
+                Some(Box::new(BspNode::Split {
+                    split_type: SplitType::Horizontal,
+                    ratio: stack_ratio,
+                    first: Self::build_linear(stack, SplitType::Vertical),
+                    second: Box::new(BspNode::Leaf { window: master }),
+                }))
+            }
+        }
+    }
+
+    /// Builds a Master/Stack binary layout tree with Master on Top, Stack on Bottom.
+    pub fn build_master_top(clients: &[Window], master_ratio: f32) -> Option<Box<BspNode>> {
+        match clients.len() {
+            0 => None,
+            1 => Some(Box::new(BspNode::Leaf { window: clients[0] })),
+            _ => {
+                let master = clients[0];
+                let stack = &clients[1..];
+                Some(Box::new(BspNode::Split {
+                    split_type: SplitType::Vertical,
+                    ratio: master_ratio.clamp(0.05, 0.95),
+                    first: Box::new(BspNode::Leaf { window: master }),
+                    second: Self::build_linear(stack, SplitType::Horizontal),
+                }))
+            }
+        }
+    }
+
+    /// Builds a Master/Stack binary layout tree with Master on Bottom, Stack on Top.
+    pub fn build_master_bottom(clients: &[Window], master_ratio: f32) -> Option<Box<BspNode>> {
+        match clients.len() {
+            0 => None,
+            1 => Some(Box::new(BspNode::Leaf { window: clients[0] })),
+            _ => {
+                let master = clients[0];
+                let stack = &clients[1..];
+                let stack_ratio = (1.0 - master_ratio).clamp(0.05, 0.95);
+                Some(Box::new(BspNode::Split {
+                    split_type: SplitType::Vertical,
+                    ratio: stack_ratio,
+                    first: Self::build_linear(stack, SplitType::Horizontal),
+                    second: Box::new(BspNode::Leaf { window: master }),
+                }))
+            }
+        }
+    }
+
     /// Builds a Vertical (side-by-side columns) binary layout tree.
     pub fn build_vertical(clients: &[Window]) -> Option<Box<BspNode>> {
         if clients.is_empty() {
@@ -1045,6 +1360,9 @@ impl BspTree {
     pub fn rebuild_for_layout(&mut self, layout: LayoutType, clients: &[Window], master_ratio: f32) {
         self.root = match layout {
             LayoutType::MasterStack => Self::build_master_stack(clients, master_ratio),
+            LayoutType::MasterRight => Self::build_master_right(clients, master_ratio),
+            LayoutType::MasterTop => Self::build_master_top(clients, master_ratio),
+            LayoutType::MasterBottom => Self::build_master_bottom(clients, master_ratio),
             LayoutType::Vertical => Self::build_vertical(clients),
             LayoutType::Horizontal => Self::build_horizontal(clients),
             LayoutType::Bsp => {
@@ -1100,6 +1418,11 @@ impl BspTree {
                                 root.insert_at(last, w, SplitType::Vertical, 0.5);
                             }
                         }
+                    }
+                    LayoutType::MasterRight | LayoutType::MasterTop | LayoutType::MasterBottom => {
+                        let mut all = self.windows();
+                        all.push(w);
+                        self.rebuild_for_layout(layout, &all, master_ratio);
                     }
                     LayoutType::Vertical => {
                         let wins = self.windows();
