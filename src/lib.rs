@@ -28,6 +28,7 @@ pub mod workspace;
 pub mod x11;
 
 pub use error::WmError;
+pub use wm::manage_existing_windows;
 
-
-
+/// WM state type alias conforming to Plan.md specification.
+pub type WmState = wm::WindowManager;

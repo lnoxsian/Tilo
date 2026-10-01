@@ -38,7 +38,7 @@ use x11rb::connection::Connection;
 use x11rb::protocol::xproto::{
     Allow, AtomEnum, ButtonPressEvent, ButtonReleaseEvent, ChangeWindowAttributesAux, ClientMessageEvent,
     ConfigWindow, ConfigureRequestEvent, ConfigureWindowAux, ConnectionExt, EventMask, GrabMode, InputFocus,
-    KeyPressEvent, MotionNotifyEvent, PropertyNotifyEvent, StackMode, Window,
+    KeyPressEvent, MapState, MotionNotifyEvent, PropertyNotifyEvent, StackMode, Window,
 };
 use std::sync::atomic::{AtomicBool, Ordering};
 use x11rb::protocol::Event;
@@ -1181,6 +1181,7 @@ impl WindowManager {
             self.focus_client(window)?;
         } else {
             // Target is a background workspace: window remains unmapped until switched to
+            let _ = self.context.connection.unmap_window(window);
             client.mapped = false;
             self.workspace_manager.add_client(window, target_ws);
             self.client_state.add_client(window, client);
@@ -1194,6 +1195,11 @@ impl WindowManager {
             let _ = self.set_wm_state(window, WmState::Withdrawn);
         }
 
+        if let Some(ref mut bar) = self.statusbar {
+            let occupied = self.workspace_manager.occupied_workspaces();
+            bar.set_workspace(self.current_workspace, &occupied);
+        }
+
         let is_focused = self.focused_window() == Some(window);
         let _ = crate::mouse::update_client_button_grabs(
             &self.context.connection,
@@ -1205,6 +1211,83 @@ impl WindowManager {
         let _ = self.update_ewmh_client_list();
         self.context.flush()?;
         Ok(true)
+    }
+
+    /// Scans the X11 root window tree and manages pre-existing windows.
+    ///
+    /// Follows Phase 31 of Plan.md:
+    /// 1. Query root tree.
+    /// 2. Identify existing top-level windows.
+    /// 3. Ignore override-redirect and unmapped windows.
+    /// 4. Register valid clients via `manage_window`.
+    /// 5. Apply rules (workspace assignment, floating, fullscreen).
+    /// 6. Assign workspaces & configure geometries (unmap background workspace clients).
+    /// 7. Map/configure clients on active workspace, set `WM_STATE`.
+    /// 8. Focus the appropriate active window.
+    pub fn manage_existing_windows(&mut self) -> Result<(), WmError> {
+        let root = self.context.root_window;
+        let tree = self
+            .context
+            .connection
+            .query_tree(root)
+            .map_err(|e| WmError::ConnectionLost(e.to_string()))?
+            .reply()
+            .map_err(|e| WmError::X11ProtocolError(crate::x11::X11Error::Reply(e)))?;
+
+        for child in tree.children {
+            if child == root || child == self.supporting_window {
+                continue;
+            }
+            if self
+                .statusbar
+                .as_ref()
+                .map(|b| b.window_id == child)
+                .unwrap_or(false)
+            {
+                continue;
+            }
+            if self
+                .launcher
+                .as_ref()
+                .map(|l| l.window_id == child)
+                .unwrap_or(false)
+            {
+                continue;
+            }
+
+            let attrs = match self.context.connection.get_window_attributes(child) {
+                Ok(cookie) => match cookie.reply() {
+                    Ok(attrs) => attrs,
+                    Err(err) => {
+                        let xerr = crate::x11::X11Error::Reply(err);
+                        if is_connection_lost_error(&xerr) {
+                            return Err(WmError::ConnectionLost(xerr.to_string()));
+                        }
+                        continue;
+                    }
+                },
+                Err(err) => return Err(WmError::ConnectionLost(err.to_string())),
+            };
+
+            if attrs.override_redirect || attrs.map_state == MapState::UNMAPPED {
+                continue;
+            }
+
+            if let Err(err) = self.manage_window(child) {
+                if is_connection_lost_error(&err) {
+                    return Err(WmError::ConnectionLost(err.to_string()));
+                }
+                eprintln!(
+                    "[WARN  tilo::wm] Failed to manage existing window 0x{:x}: {:?}",
+                    child, err
+                );
+            }
+        }
+
+        let _ = self.retile();
+        let _ = self.render_statusbar();
+        let _ = self.context.flush();
+        Ok(())
     }
 
     /// Deregisters and unmanages a window, removing it from `client_state`.
@@ -3320,6 +3403,92 @@ impl WindowManager {
 /// * `Result<(), ReloadError>` - Success or failure reason.
 pub fn reload_config(state: &mut WindowManager) -> Result<(), ReloadError> {
     state.reload_config()
+}
+
+/// Scans the X11 root window tree and manages pre-existing windows.
+///
+/// Follows Phase 31 of Plan.md:
+/// 1. Queries root tree.
+/// 2. Identifies existing top-level windows.
+/// 3. Ignores override-redirect and unmapped windows.
+/// 4. Registers valid clients via `manage_window`.
+/// 5. Applies window rules (workspace assignment, floating, fullscreen).
+/// 6. Assigns workspaces & configure geometries (unmap background workspace clients).
+/// 7. Maps/configures clients on active workspace, set `WM_STATE`.
+/// 8. Focuses the topmost active window.
+///
+/// # Arguments
+/// * `conn` - The X11 connection.
+/// * `root` - The root window ID.
+/// * `state` - The mutable WM state to populate with existing clients.
+///
+/// # Returns
+/// Result indicating success.
+pub fn manage_existing_windows(
+    conn: &impl Connection,
+    root: u32,
+    state: &mut WindowManager,
+) -> Result<(), WmError> {
+    let tree = conn
+        .query_tree(root)
+        .map_err(|e| WmError::ConnectionLost(e.to_string()))?
+        .reply()
+        .map_err(|e| WmError::X11ProtocolError(crate::x11::X11Error::Reply(e)))?;
+
+    for child in tree.children {
+        if child == root || child == state.supporting_window {
+            continue;
+        }
+        if state
+            .statusbar
+            .as_ref()
+            .map(|b| b.window_id == child)
+            .unwrap_or(false)
+        {
+            continue;
+        }
+        if state
+            .launcher
+            .as_ref()
+            .map(|l| l.window_id == child)
+            .unwrap_or(false)
+        {
+            continue;
+        }
+
+        let attrs = match conn.get_window_attributes(child) {
+            Ok(cookie) => match cookie.reply() {
+                Ok(attrs) => attrs,
+                Err(err) => {
+                    let xerr = crate::x11::X11Error::Reply(err);
+                    if is_connection_lost_error(&xerr) {
+                        return Err(WmError::ConnectionLost(xerr.to_string()));
+                    }
+                    continue;
+                }
+            },
+            Err(err) => return Err(WmError::ConnectionLost(err.to_string())),
+        };
+
+        if attrs.override_redirect || attrs.map_state == MapState::UNMAPPED {
+            continue;
+        }
+
+        if let Err(err) = state.manage_window(child) {
+            if is_connection_lost_error(&err) {
+                return Err(WmError::ConnectionLost(err.to_string()));
+            }
+            eprintln!(
+                "[WARN  tilo::wm] Failed to manage existing window 0x{:x}: {:?}",
+                child, err
+            );
+        }
+    }
+
+    let _ = state.retile();
+    let _ = state.render_statusbar();
+    let _ = state.context.flush();
+    Ok(())
 }
 
 #[cfg(test)]
