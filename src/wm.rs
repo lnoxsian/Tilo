@@ -36,9 +36,9 @@ pub use crate::error::WmError;
 use crate::error::{is_client_disconnect_error, is_connection_lost_error};
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::{
-    Allow, AtomEnum, ButtonPressEvent, ButtonReleaseEvent, ChangeWindowAttributesAux, ClientMessageEvent,
+    Allow, AtomEnum, ButtonIndex, ButtonPressEvent, ButtonReleaseEvent, ChangeWindowAttributesAux, ClientMessageEvent,
     ConfigWindow, ConfigureRequestEvent, ConfigureWindowAux, ConnectionExt, EventMask, GrabMode, InputFocus,
-    KeyPressEvent, MapState, MotionNotifyEvent, PropertyNotifyEvent, StackMode, Window,
+    KeyPressEvent, MapState, ModMask, MotionNotifyEvent, PropertyNotifyEvent, StackMode, Window,
 };
 use std::sync::atomic::{AtomicBool, Ordering};
 use x11rb::protocol::Event;
@@ -696,7 +696,7 @@ impl WindowManager {
         let lower = action_name.trim().to_lowercase();
         match lower.as_str() {
             "logout" | "exit" | "quit" => {
-                self.stop();
+                let _ = self.perform_graceful_shutdown();
             }
             "reboot" | "restart" => {
                 let _ = std::process::Command::new("systemctl")
@@ -873,7 +873,7 @@ impl WindowManager {
         let mut last_status_update = std::time::Instant::now();
         while self.running {
             if TERMINATE_SIGNAL.swap(false, Ordering::SeqCst) {
-                self.running = false;
+                let _ = self.perform_graceful_shutdown();
                 break;
             }
             if LAUNCHER_SIGNAL.swap(false, Ordering::SeqCst) {
@@ -933,6 +933,7 @@ impl WindowManager {
                 libc::poll(&mut pfd, 1, timeout_ms);
             }
         }
+        let _ = self.perform_graceful_shutdown();
         Ok(())
     }
 
@@ -1287,6 +1288,93 @@ impl WindowManager {
         let _ = self.retile();
         let _ = self.render_statusbar();
         let _ = self.context.flush();
+        Ok(())
+    }
+
+    /// Executes the graceful shutdown sequence (Phase 32).
+    ///
+    /// Before exiting:
+    /// 1. Stops launcher.
+    /// 2. Removes statusbar.
+    /// 3. Restores client borders (`border_width = 0`).
+    /// 4. Ensures all application windows remain mapped so they are not lost.
+    /// 5. Removes WM properties (`WM_STATE`, `_NET_WM_STATE`).
+    /// 6. Releases `WM_Sn` selection ownership and destroys supporting window.
+    /// 7. Releases root window event masks and grabs.
+    /// 8. Sets input focus to `PointerRoot`.
+    /// 9. Flushes X11 connection.
+    /// 10. Terminates main event loop.
+    pub fn perform_graceful_shutdown(&mut self) -> Result<(), WmError> {
+        // 1. Stop launcher
+        if let Some(ref mut launcher) = self.launcher
+            && launcher.window_id != 0
+        {
+            let _ = self.context.connection.unmap_window(launcher.window_id);
+            let _ = self.context.connection.destroy_window(launcher.window_id);
+            launcher.window_id = 0;
+            launcher.visible = false;
+        }
+
+        // 2. Remove statusbar
+        if let Some(bar) = self.statusbar.take() {
+            let _ = bar.destroy(&self.context.connection);
+        }
+
+        // 3 & 4. Iterate over all managed clients: restore borders, map background windows, remove properties
+        let all_clients: Vec<Window> = self.client_state.all_clients().to_vec();
+        for win in all_clients {
+            let _ = set_window_border_width(&self.context.connection, win, 0);
+            let _ = self.context.connection.delete_property(win, self.atoms.wm_state);
+            let _ = self.context.connection.delete_property(win, self.ewmh_atoms.net_wm_state);
+            let aux = ChangeWindowAttributesAux::default().event_mask(EventMask::NO_EVENT);
+            let _ = self.context.connection.change_window_attributes(win, &aux);
+
+            if self.scratchpad.client == Some(win) && !self.scratchpad.is_visible {
+                let _ = self.context.connection.unmap_window(win);
+            } else {
+                let _ = self.context.connection.map_window(win);
+            }
+        }
+
+        if self.scratchpad.client.is_some() {
+            self.scratchpad.clear_client();
+        }
+
+        self.client_state = ClientState::new();
+        for ws in self.workspace_manager.workspaces.values_mut() {
+            ws.clients.clear();
+            ws.focused_client = None;
+        }
+
+        // 5. Release WM_Sn selection ownership
+        let sel_name = format!("WM_S{}", self.context.screen_num);
+        if let Ok(cookie) = self.context.connection.intern_atom(false, sel_name.as_bytes())
+            && let Ok(reply) = cookie.reply()
+        {
+            let _ = self.context.connection.set_selection_owner(x11rb::NONE, reply.atom, x11rb::CURRENT_TIME);
+        }
+
+        // Release EWMH properties and supporting window
+        let root = self.context.root_window;
+        let _ = self.context.connection.delete_property(root, self.ewmh_atoms.net_supporting_wm_check);
+        let _ = self.context.connection.delete_property(root, self.ewmh_atoms.net_supported);
+        let _ = self.context.connection.delete_property(root, self.ewmh_atoms.net_client_list);
+        let _ = self.context.connection.delete_property(root, self.ewmh_atoms.net_active_window);
+        let _ = self.context.connection.delete_property(root, self.ewmh_atoms.net_workarea);
+
+        if self.supporting_window != 0 {
+            let _ = self.context.connection.destroy_window(self.supporting_window);
+            self.supporting_window = 0;
+        }
+
+        let _ = self.context.connection.ungrab_key(0, root, ModMask::ANY);
+        let _ = self.context.connection.ungrab_button(ButtonIndex::ANY, root, ModMask::ANY);
+        let aux = ChangeWindowAttributesAux::default().event_mask(EventMask::NO_EVENT);
+        let _ = self.context.connection.change_window_attributes(root, &aux);
+
+        let _ = self.context.connection.set_input_focus(InputFocus::POINTER_ROOT, root, x11rb::CURRENT_TIME);
+        let _ = self.context.flush();
+        self.running = false;
         Ok(())
     }
 
@@ -2885,6 +2973,9 @@ impl WindowManager {
             Action::ExitMenu | Action::Exit => {
                 let _ = self.open_exit_launcher();
             }
+            Action::Quit => {
+                let _ = self.perform_graceful_shutdown();
+            }
             Action::ResizeTile(dir) => {
                 let current_ws = self.workspace_manager.current_id();
                 let focused = self.focused_window()
@@ -3488,6 +3579,102 @@ pub fn manage_existing_windows(
     let _ = state.retile();
     let _ = state.render_statusbar();
     let _ = state.context.flush();
+    Ok(())
+}
+
+/// Executes the graceful shutdown sequence.
+///
+/// Follows Phase 32 of Plan.md:
+/// 1. Stops launcher.
+/// 2. Removes statusbar.
+/// 3. Restores client borders (`border_width = 0`).
+/// 4. Restores client geometry and ensures background workspace windows are mapped.
+/// 5. Removes WM properties (`WM_STATE`, `_NET_WM_STATE`).
+/// 6. Releases `WM_Sn` selection ownership and destroys supporting window.
+/// 7. Releases root window event masks and grabs.
+/// 8. Sets input focus to `PointerRoot`.
+/// 9. Flushes X11 connection.
+/// 10. Terminates main event loop.
+///
+/// # Arguments
+/// * `conn` - The X11 connection.
+/// * `state` - The current WM state.
+pub fn perform_graceful_shutdown(
+    conn: &impl Connection,
+    state: &mut WindowManager,
+) -> Result<(), WmError> {
+    // 1. Stop launcher
+    if let Some(ref mut launcher) = state.launcher
+        && launcher.window_id != 0
+    {
+        let _ = conn.unmap_window(launcher.window_id);
+        let _ = conn.destroy_window(launcher.window_id);
+        launcher.window_id = 0;
+        launcher.visible = false;
+    }
+
+    // 2. Remove statusbar
+    if let Some(bar) = state.statusbar.take() {
+        let _ = bar.destroy(conn);
+    }
+
+    // 3 & 4. Iterate over all managed clients: restore borders, map background windows, remove properties
+    let all_clients: Vec<Window> = state.client_state.all_clients().to_vec();
+    for win in all_clients {
+        let _ = set_window_border_width(conn, win, 0);
+        let _ = conn.delete_property(win, state.atoms.wm_state);
+        let _ = conn.delete_property(win, state.ewmh_atoms.net_wm_state);
+        let aux = ChangeWindowAttributesAux::default().event_mask(EventMask::NO_EVENT);
+        let _ = conn.change_window_attributes(win, &aux);
+
+        if state.scratchpad.client == Some(win) && !state.scratchpad.is_visible {
+            let _ = conn.unmap_window(win);
+        } else {
+            let _ = conn.map_window(win);
+        }
+    }
+
+    if state.scratchpad.client.is_some() {
+        state.scratchpad.clear_client();
+    }
+
+    state.client_state = ClientState::new();
+    for ws in state.workspace_manager.workspaces.values_mut() {
+        ws.clients.clear();
+        ws.focused_client = None;
+    }
+
+    // 5. Release WM_Sn selection ownership
+    let sel_name = format!("WM_S{}", state.context.screen_num);
+    if let Ok(cookie) = conn.intern_atom(false, sel_name.as_bytes())
+        && let Ok(reply) = cookie.reply()
+    {
+        let _ = conn.set_selection_owner(x11rb::NONE, reply.atom, x11rb::CURRENT_TIME);
+    }
+
+    // Release EWMH properties and supporting window
+    let root = state.context.root_window;
+    let _ = conn.delete_property(root, state.ewmh_atoms.net_supporting_wm_check);
+    let _ = conn.delete_property(root, state.ewmh_atoms.net_supported);
+    let _ = conn.delete_property(root, state.ewmh_atoms.net_client_list);
+    let _ = conn.delete_property(root, state.ewmh_atoms.net_active_window);
+    let _ = conn.delete_property(root, state.ewmh_atoms.net_workarea);
+
+    if state.supporting_window != 0 {
+        let _ = conn.destroy_window(state.supporting_window);
+        state.supporting_window = 0;
+    }
+
+    let _ = conn.ungrab_key(0, root, ModMask::ANY);
+    let _ = conn.ungrab_button(ButtonIndex::ANY, root, ModMask::ANY);
+    let aux = ChangeWindowAttributesAux::default().event_mask(EventMask::NO_EVENT);
+    let _ = conn.change_window_attributes(root, &aux);
+    let _ = state.context.connection.change_window_attributes(root, &aux);
+    let _ = state.context.flush();
+
+    let _ = conn.set_input_focus(InputFocus::POINTER_ROOT, root, x11rb::CURRENT_TIME);
+    let _ = conn.flush();
+    state.running = false;
     Ok(())
 }
 

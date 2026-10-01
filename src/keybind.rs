@@ -114,8 +114,10 @@ pub enum Action {
     SetScratchpad,
     /// Open the integrated exit/power menu (Logout, Reboot, Poweroff).
     ExitMenu,
-    /// Exit the window manager gracefully.
+    /// Open the exit launcher menu (Phase 21).
     Exit,
+    /// Gracefully shutdown and exit the window manager immediately (Phase 32).
+    Quit,
     /// Resize the focused tile along a direction by a delta (e.g. 0.05).
     ResizeTile(Direction),
     /// Preselect the split orientation for the next tiled window.
@@ -244,8 +246,8 @@ pub fn default_keybindings() -> Vec<KeyBind> {
             XK_RETURN,
             Action::Spawn("alacritty".to_string()),
         ),
-        // Window Management
-        KeyBind::new(MOD_SUPER | MOD_SHIFT, XK_Q, Action::Close),
+        // Window Management & Exit
+        KeyBind::new(MOD_SUPER | MOD_SHIFT, XK_Q, Action::Quit),
         KeyBind::new(MOD_SUPER, XK_Q, Action::Close),
         // Spatial Focus (Vim keys)
         KeyBind::new(MOD_SUPER, XK_H, Action::Focus(Direction::Left)),

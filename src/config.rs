@@ -661,7 +661,8 @@ fn parse_action(tokens: &[&Token], line: usize, config: &Config) -> Result<Actio
         }
         "reload" => Ok(Action::Reload),
         "exit_menu" | "powermenu" | "power_menu" => Ok(Action::ExitMenu),
-        "exit" | "quit" => Ok(Action::Exit),
+        "exit" => Ok(Action::Exit),
+        "quit" | "shutdown" => Ok(Action::Quit),
         "resize" | "resize_tile" => {
             if tokens.len() < 2 {
                 return Err(ConfigError::ParseError {

@@ -51,6 +51,8 @@ fn main() {
     println!("[INFO  tilo::wm] Entering X11 event loop...");
     if let Err(err) = wm.run() {
         eprintln!("[ERROR tilo::wm] Event loop error: {}", err);
+        let _ = wm.perform_graceful_shutdown();
         std::process::exit(1);
     }
+    std::process::exit(0);
 }
