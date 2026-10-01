@@ -671,8 +671,8 @@ fn parse_action(tokens: &[&Token], line: usize, config: &Config) -> Result<Actio
         "layout_master_bottom" => Ok(Action::SetLayout(crate::layout::LayoutType::MasterBottom)),
         "layout_center_master" | "layout_centered_master" | "layout_centermaster" | "layout_centeredmaster" => Ok(Action::SetLayout(crate::layout::LayoutType::CenterMaster)),
         "layout_monocle" => Ok(Action::SetLayout(crate::layout::LayoutType::Monocle)),
-        "layout_vertical" => Ok(Action::SetLayout(crate::layout::LayoutType::Vertical)),
-        "layout_horizontal" => Ok(Action::SetLayout(crate::layout::LayoutType::Horizontal)),
+        "layout_vertical" | "layout_columns" => Ok(Action::SetLayout(crate::layout::LayoutType::Vertical)),
+        "layout_horizontal" | "layout_rows" => Ok(Action::SetLayout(crate::layout::LayoutType::Horizontal)),
         "layout_bsp" => Ok(Action::SetLayout(crate::layout::LayoutType::Bsp)),
         "layout_grid" => Ok(Action::SetLayout(crate::layout::LayoutType::Grid)),
         unknown => Err(ConfigError::InvalidValue {

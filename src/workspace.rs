@@ -110,10 +110,15 @@ impl Workspace {
         self.layout
     }
 
-    /// Rotates this workspace through master-stack orientations if it is a master layout.
-    pub fn rotate_master_layout(&mut self) -> LayoutType {
-        self.layout = crate::layout::rotate_master_layout(self.layout);
+    /// Rotates this workspace layout orientation (master orientations or columns/rows).
+    pub fn rotate_layout(&mut self) -> LayoutType {
+        self.layout = crate::layout::rotate_layout(self.layout);
         self.layout
+    }
+
+    /// Backwards-compatible alias for `rotate_layout`.
+    pub fn rotate_master_layout(&mut self) -> LayoutType {
+        self.rotate_layout()
     }
 
     /// Returns the number of client windows on this workspace.
@@ -191,9 +196,14 @@ impl WorkspaceManager {
         self.current_workspace_mut().cycle_layout()
     }
 
-    /// Rotates the layout for the current workspace through master-stack orientations.
+    /// Rotates the layout for the current workspace.
+    pub fn rotate_current_layout(&mut self) -> LayoutType {
+        self.current_workspace_mut().rotate_layout()
+    }
+
+    /// Backwards-compatible alias for `rotate_current_layout`.
     pub fn rotate_current_master_layout(&mut self) -> LayoutType {
-        self.current_workspace_mut().rotate_master_layout()
+        self.rotate_current_layout()
     }
 
     /// Returns a list of workspace IDs that currently contain one or more client windows.
@@ -389,5 +399,14 @@ mod tests {
         mgr.set_current_layout(LayoutType::MasterStack);
         assert_eq!(mgr.rotate_current_master_layout(), LayoutType::MasterRight);
         assert_eq!(mgr.rotate_current_master_layout(), LayoutType::MasterTop);
+
+        // Rotating between columns and rows
+        ws.set_layout(LayoutType::Vertical);
+        assert_eq!(ws.rotate_layout(), LayoutType::Horizontal);
+        assert_eq!(ws.rotate_layout(), LayoutType::Vertical);
+
+        mgr.set_current_layout(LayoutType::Vertical);
+        assert_eq!(mgr.rotate_current_layout(), LayoutType::Horizontal);
+        assert_eq!(mgr.rotate_current_layout(), LayoutType::Vertical);
     }
 }

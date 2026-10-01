@@ -321,6 +321,18 @@ fn test_layout_switching_and_cycling_live_in_xephyr() {
         wm.execute_action(Action::CycleLayout).unwrap();
         assert_eq!(wm.workspace_manager.get(current_ws).unwrap().layout, LayoutType::Vertical);
 
+        // Rotating columns -> rows via RotateMaster
+        wm.execute_action(Action::RotateMaster).unwrap();
+        assert_eq!(wm.workspace_manager.get(current_ws).unwrap().layout, LayoutType::Horizontal);
+
+        // Rotating rows -> columns via RotateMaster
+        wm.execute_action(Action::RotateMaster).unwrap();
+        assert_eq!(wm.workspace_manager.get(current_ws).unwrap().layout, LayoutType::Vertical);
+
+        // Cycling from columns goes to Monocle (columns and rows are a single layout stage)
+        wm.execute_action(Action::CycleLayout).unwrap();
+        assert_eq!(wm.workspace_manager.get(current_ws).unwrap().layout, LayoutType::Monocle);
+
         // 5. Test apply_layout standalone function from Phase 27
         let area = Rect::new(0, 0, 1000, 800);
         assert!(apply_layout(LayoutType::Monocle, &[win1, win2], &area, 0.5, &client_conn).is_ok());

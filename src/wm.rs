@@ -2550,8 +2550,8 @@ impl WindowManager {
                 let visible_tiled = self.client_state.visible_tiled_clients_on_workspace(current_ws);
                 let master_ratio = self.layout_config.master_ratio;
                 if let Some(ws) = self.workspace_manager.get_mut(current_ws)
-                    && ws.layout.is_master() {
-                        ws.rotate_master_layout();
+                    && ws.layout.can_rotate() {
+                        ws.rotate_layout();
                         ws.bsp_tree.rebuild_for_layout(ws.layout, &visible_tiled, master_ratio);
                         self.retile()?;
                         self.render_statusbar().ok();

@@ -122,8 +122,8 @@ impl std::str::FromStr for LayoutType {
             "master-bottom" | "master_bottom" | "masterbottom" => Ok(Self::MasterBottom),
             "center-master" | "center_master" | "centermaster" | "centered-master" | "centered_master" | "centeredmaster" => Ok(Self::CenterMaster),
             "grid" | "g" => Ok(Self::Grid),
-            "vertical" | "vert" | "v" => Ok(Self::Vertical),
-            "horizontal" | "horiz" | "h" => Ok(Self::Horizontal),
+            "columns" | "column" | "cols" | "col" | "vertical" | "vert" | "v" => Ok(Self::Vertical),
+            "rows" | "row" | "horizontal" | "horiz" | "h" => Ok(Self::Horizontal),
             "monocle" | "mono" | "fullscreen_layout" => Ok(Self::Monocle),
             "tabbed" | "tabs" => Ok(Self::Tabbed),
             "stacking" | "stacked" => Ok(Self::Stacked),
@@ -142,12 +142,30 @@ impl LayoutType {
     #[allow(non_upper_case_globals)]
     pub const CenteredMaster: Self = Self::CenterMaster;
 
+    /// Alias for Vertical representing Columns.
+    #[allow(non_upper_case_globals)]
+    pub const Columns: Self = Self::Vertical;
+
+    /// Alias for Horizontal representing Rows.
+    #[allow(non_upper_case_globals)]
+    pub const Rows: Self = Self::Horizontal;
+
     /// Returns true if this layout is any orientation of master/stack.
     pub fn is_master(&self) -> bool {
         matches!(
             self,
             Self::MasterStack | Self::MasterRight | Self::MasterTop | Self::MasterBottom | Self::CenterMaster
         )
+    }
+
+    /// Returns true if this layout is columns or rows.
+    pub fn is_linear(&self) -> bool {
+        matches!(self, Self::Vertical | Self::Horizontal)
+    }
+
+    /// Returns true if this layout can be rotated between orientations with Mod4 + r.
+    pub fn can_rotate(&self) -> bool {
+        self.is_master() || self.is_linear()
     }
 
     /// Canonical user-facing name for this layout.
@@ -187,17 +205,27 @@ impl LayoutType {
     }
 }
 
-/// Rotates the master stack layout through its 5 orientations:
-/// MasterLeft -> MasterRight -> MasterTop -> MasterBottom -> CenterMaster -> MasterLeft.
-pub fn rotate_master_layout(current: LayoutType) -> LayoutType {
+/// Rotates the layout orientation:
+/// - Master stack rotates through its 5 orientations:
+///   MasterLeft -> MasterRight -> MasterTop -> MasterBottom -> CenterMaster -> MasterLeft.
+/// - Linear (columns/rows) rotates between columns (Vertical) and rows (Horizontal):
+///   Vertical <-> Horizontal.
+pub fn rotate_layout(current: LayoutType) -> LayoutType {
     match current {
         LayoutType::MasterStack => LayoutType::MasterRight,
         LayoutType::MasterRight => LayoutType::MasterTop,
         LayoutType::MasterTop => LayoutType::MasterBottom,
         LayoutType::MasterBottom => LayoutType::CenterMaster,
         LayoutType::CenterMaster => LayoutType::MasterStack,
+        LayoutType::Vertical => LayoutType::Horizontal,
+        LayoutType::Horizontal => LayoutType::Vertical,
         other => other,
     }
+}
+
+/// Backwards-compatible alias for `rotate_layout`.
+pub fn rotate_master_layout(current: LayoutType) -> LayoutType {
+    rotate_layout(current)
 }
 
 /// Cycles to the next layout in the list.
@@ -209,8 +237,7 @@ pub fn rotate_master_layout(current: LayoutType) -> LayoutType {
 pub fn cycle_layout(current: LayoutType) -> LayoutType {
     match current {
         LayoutType::MasterStack | LayoutType::MasterRight | LayoutType::MasterTop | LayoutType::MasterBottom | LayoutType::CenterMaster => LayoutType::Vertical,
-        LayoutType::Vertical => LayoutType::Horizontal,
-        LayoutType::Horizontal => LayoutType::Monocle,
+        LayoutType::Vertical | LayoutType::Horizontal => LayoutType::Monocle,
         LayoutType::Monocle => LayoutType::Bsp,
         LayoutType::Bsp => LayoutType::Grid,
         LayoutType::Grid => LayoutType::MasterStack,
@@ -1955,7 +1982,7 @@ mod tests {
         assert_eq!(LayoutType::default(), LayoutType::MasterStack);
 
         assert_eq!(cycle_layout(LayoutType::MasterStack), LayoutType::Vertical);
-        assert_eq!(cycle_layout(LayoutType::Vertical), LayoutType::Horizontal);
+        assert_eq!(cycle_layout(LayoutType::Vertical), LayoutType::Monocle);
         assert_eq!(cycle_layout(LayoutType::Horizontal), LayoutType::Monocle);
         assert_eq!(cycle_layout(LayoutType::Monocle), LayoutType::Bsp);
         assert_eq!(cycle_layout(LayoutType::Bsp), LayoutType::Grid);
@@ -1975,7 +2002,9 @@ mod tests {
         assert_eq!("centered-master".parse::<LayoutType>().unwrap(), LayoutType::CenterMaster);
         assert_eq!("grid".parse::<LayoutType>().unwrap(), LayoutType::Grid);
         assert_eq!("g".parse::<LayoutType>().unwrap(), LayoutType::Grid);
+        assert_eq!("columns".parse::<LayoutType>().unwrap(), LayoutType::Vertical);
         assert_eq!("vertical".parse::<LayoutType>().unwrap(), LayoutType::Vertical);
+        assert_eq!("rows".parse::<LayoutType>().unwrap(), LayoutType::Horizontal);
         assert_eq!("horizontal".parse::<LayoutType>().unwrap(), LayoutType::Horizontal);
         assert_eq!("monocle".parse::<LayoutType>().unwrap(), LayoutType::Monocle);
         assert_eq!("bsp".parse::<LayoutType>().unwrap(), LayoutType::Bsp);
@@ -2004,13 +2033,15 @@ mod tests {
         assert_eq!(LayoutType::Monocle.symbol(), "[M]");
         assert_eq!(LayoutType::Bsp.symbol(), "[B]");
 
-        // Master rotation cycling
-        assert_eq!(rotate_master_layout(LayoutType::MasterStack), LayoutType::MasterRight);
-        assert_eq!(rotate_master_layout(LayoutType::MasterRight), LayoutType::MasterTop);
-        assert_eq!(rotate_master_layout(LayoutType::MasterTop), LayoutType::MasterBottom);
-        assert_eq!(rotate_master_layout(LayoutType::MasterBottom), LayoutType::CenterMaster);
-        assert_eq!(rotate_master_layout(LayoutType::CenterMaster), LayoutType::MasterStack);
-        assert_eq!(rotate_master_layout(LayoutType::Vertical), LayoutType::Vertical);
+        // Layout rotation cycling
+        assert_eq!(rotate_layout(LayoutType::MasterStack), LayoutType::MasterRight);
+        assert_eq!(rotate_layout(LayoutType::MasterRight), LayoutType::MasterTop);
+        assert_eq!(rotate_layout(LayoutType::MasterTop), LayoutType::MasterBottom);
+        assert_eq!(rotate_layout(LayoutType::MasterBottom), LayoutType::CenterMaster);
+        assert_eq!(rotate_layout(LayoutType::CenterMaster), LayoutType::MasterStack);
+        assert_eq!(rotate_layout(LayoutType::Vertical), LayoutType::Horizontal);
+        assert_eq!(rotate_layout(LayoutType::Horizontal), LayoutType::Vertical);
+        assert_eq!(rotate_layout(LayoutType::Monocle), LayoutType::Monocle);
     }
 
     #[test]
