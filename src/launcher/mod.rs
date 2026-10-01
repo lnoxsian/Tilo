@@ -87,6 +87,8 @@ pub struct Launcher {
     pub renderer: Option<Renderer>,
     /// Visual color scheme.
     pub color_scheme: ColorScheme,
+    /// Optional window border color override.
+    pub border_color: Option<u32>,
     /// Mapping of application display names (or desktop IDs) to executable command lines.
     pub app_commands: HashMap<String, String>,
     /// Monitored directories and their last-seen modification times.
@@ -118,6 +120,7 @@ impl Launcher {
             rect: Rect::new(0, 0, LAUNCHER_WIDTH as u32, LAUNCHER_HEIGHT as u32),
             renderer: None,
             color_scheme: ColorScheme::default(),
+            border_color: None,
             app_commands: HashMap::new(),
             dir_mtimes: HashMap::new(),
             monitored_dirs: Vec::new(),
@@ -369,7 +372,7 @@ impl Launcher {
         )?;
 
         // 2. Draw border around the launcher overlay
-        let border_color = self.color_scheme.active_bg;
+        let border_color = self.border_color.unwrap_or(self.color_scheme.border);
         // Top, bottom, left, right border outlines
         renderer.fill_rect(conn, renderer.pixmap, 0, 0, w, 2, border_color)?;
         renderer.fill_rect(conn, renderer.pixmap, 0, (h - 2) as i16, w, 2, border_color)?;
@@ -403,7 +406,7 @@ impl Launcher {
             &self.query
         };
         let query_color = if self.query.is_empty() {
-            0x666677
+            self.color_scheme.inactive_fg
         } else {
             self.color_scheme.fg
         };
@@ -440,7 +443,7 @@ impl Launcher {
         )?;
 
         // 4. Draw separator line below input field
-        renderer.fill_rect(conn, renderer.pixmap, 8, 36, w.saturating_sub(16), 1, 0x333344)?;
+        renderer.fill_rect(conn, renderer.pixmap, 8, 36, w.saturating_sub(16), 1, self.color_scheme.border)?;
 
         // 5. Draw filtered result items
         let mut cur_y = 42i16;

@@ -215,13 +215,18 @@ impl WindowManager {
             ewmh_atoms,
             supporting_window,
             monitor_manager,
-            config,
             statusbar: None,
-            launcher: Some(crate::launcher::Launcher::new()),
+            launcher: {
+                let mut l = crate::launcher::Launcher::new();
+                l.color_scheme = config.launcher_color_scheme();
+                l.border_color = Some(config.launcher_border_color());
+                Some(l)
+            },
             scratchpad: crate::scratchpad::Scratchpad::default(),
             mouse_action: crate::mouse::MouseAction::None,
             mouse_bindings,
             cursor_manager,
+            config,
         })
     }
 
@@ -274,6 +279,54 @@ impl WindowManager {
                 };
                 let _ = set_window_border_color(&self.context.connection, client.window, border_color);
                 client.border_color = Some(border_color);
+            }
+        }
+
+        // Apply updated theme to statusbar if active
+        if let Some(ref mut bar) = self.statusbar {
+            bar.color_scheme = self.config.bar_color_scheme();
+            let font_name = self.config.bar_font();
+            let screen = &self.context.connection.setup().roots[self.context.screen_num];
+            if let Ok(new_renderer) = crate::render::Renderer::new(
+                &self.context.connection,
+                bar.window_id,
+                bar.rect.width as u16,
+                bar.rect.height as u16,
+                screen.root_depth,
+                font_name,
+            ) {
+                if let Some(old_renderer) = bar.renderer.take() {
+                    let _ = old_renderer.destroy(&self.context.connection);
+                }
+                bar.attach_renderer(new_renderer);
+            }
+            let _ = bar.update_all();
+            let _ = self.render_statusbar();
+        }
+
+        // Apply updated theme to launcher if initialized
+        if let Some(ref mut launcher) = self.launcher {
+            launcher.color_scheme = self.config.launcher_color_scheme();
+            launcher.border_color = Some(self.config.launcher_border_color());
+            if launcher.window_id != 0 {
+                let font_name = self.config.launcher_font();
+                let screen = &self.context.connection.setup().roots[self.context.screen_num];
+                if let Ok(new_renderer) = crate::render::Renderer::new(
+                    &self.context.connection,
+                    launcher.window_id,
+                    crate::launcher::LAUNCHER_WIDTH,
+                    crate::launcher::LAUNCHER_HEIGHT,
+                    screen.root_depth,
+                    font_name,
+                ) {
+                    if let Some(old_renderer) = launcher.renderer.take() {
+                        let _ = old_renderer.destroy(&self.context.connection);
+                    }
+                    launcher.attach_renderer(new_renderer);
+                }
+                if launcher.visible {
+                    let _ = launcher.render(&self.context.connection);
+                }
             }
         }
 

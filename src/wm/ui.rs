@@ -1,7 +1,7 @@
 //! Window Manager UI integration (Statusbar and Launcher).
 
 use super::WindowManager;
-use crate::bar::{create_statusbar_window, Statusbar, StatusbarError};
+use crate::bar::{Statusbar, StatusbarError};
 use crate::layout::{LayoutType, Rect};
 use crate::x11::X11Error;
 use x11rb::connection::Connection;
@@ -13,18 +13,16 @@ impl WindowManager {
     pub fn enable_statusbar(&mut self, height: u32) -> Result<u32, StatusbarError> {
         let rect = Rect::new(0, 0, self.context.screen_width as u32, height);
         let screen = &self.context.connection.setup().roots[self.context.screen_num];
-        let win_id = create_statusbar_window(&self.context.connection, screen, rect)?;
+        let bar_colors = self.config.bar_color_scheme();
+        let win_id = crate::bar::create_statusbar_window_with_color(&self.context.connection, screen, rect, bar_colors.bg)?;
         let _ = self.cursor_manager.apply_window(&self.context.connection, win_id);
         let mut bar = Statusbar::default_with_window(win_id, rect);
+        bar.color_scheme = bar_colors;
         let occupied = self.workspace_manager.occupied_workspaces();
         bar.set_workspace(self.current_workspace, &occupied);
 
         // Initialize and attach double-buffered renderer
-        let font_name = if !self.config.font.is_empty() {
-            self.config.font.as_str()
-        } else {
-            "monospace"
-        };
+        let font_name = self.config.bar_font();
         if let Ok(renderer) = crate::render::Renderer::new(
             &self.context.connection,
             win_id,
@@ -123,15 +121,14 @@ impl WindowManager {
         let rect = Rect::new(x as i32, y as i32, width as u32, height as u32);
 
         let screen = &self.context.connection.setup().roots[self.context.screen_num];
-        let font_name = if !self.config.font.is_empty() {
-            self.config.font.as_str()
-        } else {
-            "monospace"
-        };
+        let font_name = self.config.launcher_font();
+        let launcher_colors = self.config.launcher_color_scheme();
 
         let launcher = self
             .launcher
             .get_or_insert_with(crate::launcher::Launcher::new);
+        launcher.color_scheme = launcher_colors;
+        launcher.border_color = Some(self.config.launcher_border_color());
         launcher.refresh_if_needed();
         launcher.rect = rect;
 

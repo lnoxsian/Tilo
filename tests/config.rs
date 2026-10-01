@@ -325,3 +325,191 @@ bind Mod4+t layout master
     assert!(parse(&t_err).is_err());
 }
 
+#[test]
+fn test_parse_global_theme_and_fallback_inheritance() {
+    let input = r#"
+bg #282a36
+fg #f8f8f2
+active_bg #bd93f9
+active_fg #282a36
+urgent_bg #ff5555
+urgent_fg #282a36
+inactive_fg #6272a4
+border_focused #bd93f9
+border_normal #44475a
+border_urgent #ff5555
+font JetBrainsMono Nerd Font 10
+"#;
+    let tokens = tokenize(input).unwrap();
+    let config = parse(&tokens).unwrap();
+
+    // Verify global theme
+    assert_eq!(config.theme.bg, 0x282a36);
+    assert_eq!(config.theme.fg, 0xf8f8f2);
+    assert_eq!(config.theme.active_bg, 0xbd93f9);
+    assert_eq!(config.theme.active_fg, 0x282a36);
+    assert_eq!(config.theme.urgent_bg, 0xff5555);
+    assert_eq!(config.theme.urgent_fg, 0x282a36);
+    assert_eq!(config.theme.inactive_fg, 0x6272a4);
+    assert_eq!(config.theme.border_focused, 0xbd93f9);
+    assert_eq!(config.theme.border_normal, 0x44475a);
+    assert_eq!(config.theme.border_urgent, 0xff5555);
+
+    // Verify window decoration border colors
+    assert_eq!(config.focused_color, 0xbd93f9);
+    assert_eq!(config.normal_color, 0x44475a);
+    assert_eq!(config.urgent_color, 0xff5555);
+
+    // Verify statusbar inherits global theme by default
+    let bar_colors = config.bar_color_scheme();
+    assert_eq!(bar_colors.bg, 0x282a36);
+    assert_eq!(bar_colors.fg, 0xf8f8f2);
+    assert_eq!(bar_colors.active_bg, 0xbd93f9);
+    assert_eq!(bar_colors.active_fg, 0x282a36);
+    assert_eq!(bar_colors.urgent_bg, 0xff5555);
+    assert_eq!(bar_colors.urgent_fg, 0x282a36);
+    assert_eq!(bar_colors.inactive_fg, 0x6272a4);
+    assert_eq!(config.bar_font(), "JetBrainsMono Nerd Font 10");
+
+    // Verify launcher inherits global theme by default
+    let launcher_colors = config.launcher_color_scheme();
+    assert_eq!(launcher_colors.bg, 0x282a36);
+    assert_eq!(launcher_colors.fg, 0xf8f8f2);
+    assert_eq!(launcher_colors.active_bg, 0xbd93f9);
+    assert_eq!(launcher_colors.active_fg, 0x282a36);
+    assert_eq!(launcher_colors.urgent_bg, 0xff5555);
+    assert_eq!(launcher_colors.urgent_fg, 0x282a36);
+    assert_eq!(config.launcher_border_color(), 0xbd93f9);
+    assert_eq!(config.launcher_font(), "JetBrainsMono Nerd Font 10");
+}
+
+#[test]
+fn test_parse_component_specific_color_and_font_overrides() {
+    let input = r#"
+# Global palette
+background #11111b
+foreground #cdd6f4
+active_bg #89b4fa
+active_fg #11111b
+font monospace 10
+
+# Statusbar specific overrides
+bar_bg #1e1e2e
+bar_fg #bac2de
+bar_active_bg #fab387
+bar_active_fg #181825
+bar_urgent_bg #f38ba8
+bar_urgent_fg #181825
+bar_inactive_fg #585b70
+bar_border #fab387
+bar_font Fira Code 11
+
+# Launcher specific overrides
+launcher_bg #181825
+launcher_fg #a6adc8
+launcher_selected_bg #cba6f7
+launcher_selected_fg #11111b
+launcher_urgent_bg #eba0ac
+launcher_urgent_fg #11111b
+launcher_border #cba6f7
+launcher_font JetBrains Mono 12
+
+# Window border overrides
+border_focused #f9e2af
+border_normal #313244
+border_urgent #f38ba8
+"#;
+    let tokens = tokenize(input).unwrap();
+    let config = parse(&tokens).unwrap();
+
+    // Verify window decoration overrides
+    assert_eq!(config.focused_color, 0xf9e2af);
+    assert_eq!(config.normal_color, 0x313244);
+    assert_eq!(config.urgent_color, 0xf38ba8);
+
+    // Verify statusbar overrides take precedence over global colors
+    let bar_colors = config.bar_color_scheme();
+    assert_eq!(bar_colors.bg, 0x1e1e2e);
+    assert_eq!(bar_colors.fg, 0xbac2de);
+    assert_eq!(bar_colors.active_bg, 0xfab387);
+    assert_eq!(bar_colors.active_fg, 0x181825);
+    assert_eq!(bar_colors.urgent_bg, 0xf38ba8);
+    assert_eq!(bar_colors.urgent_fg, 0x181825);
+    assert_eq!(bar_colors.inactive_fg, 0x585b70);
+    assert_eq!(bar_colors.border, 0xfab387);
+    assert_eq!(config.bar_font(), "Fira Code 11");
+
+    // Verify launcher overrides take precedence over global colors
+    let launcher_colors = config.launcher_color_scheme();
+    assert_eq!(launcher_colors.bg, 0x181825);
+    assert_eq!(launcher_colors.fg, 0xa6adc8);
+    assert_eq!(launcher_colors.active_bg, 0xcba6f7);
+    assert_eq!(launcher_colors.active_fg, 0x11111b);
+    assert_eq!(launcher_colors.urgent_bg, 0xeba0ac);
+    assert_eq!(launcher_colors.urgent_fg, 0x11111b);
+    assert_eq!(launcher_colors.border, 0xcba6f7);
+    assert_eq!(config.launcher_border_color(), 0xcba6f7);
+    assert_eq!(config.launcher_font(), "JetBrains Mono 12");
+}
+
+#[test]
+fn test_wm_apply_config_hot_reloads_theme_in_xephyr() {
+    if !Command::new("which")
+        .arg("Xephyr")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+    {
+        return;
+    }
+
+    let xephyr = XephyrServer::start(98);
+    if let Some(server) = xephyr {
+        let wm_ctx = X11Context::connect_to(Some(&server.display))
+            .expect("WM context connect failed");
+        assert!(wm_ctx.become_wm().is_ok());
+
+        let initial_config = Config {
+            focused_color: 0x00112233,
+            normal_color: 0x00445566,
+            ..Default::default()
+        };
+
+        let mut wm = WindowManager::new_with_config(wm_ctx, initial_config)
+            .expect("Failed to initialize WM");
+        let _ = wm.enable_statusbar(24);
+
+        assert_eq!(wm.border_config.focused_color, 0x00112233);
+        assert_eq!(wm.statusbar.as_ref().unwrap().color_scheme.bg, 0x1a1b26);
+
+        // Apply hot reload with custom theme
+        let new_config_tokens = tokenize(r#"
+bg #332211
+fg #eeddcc
+active_bg #ffaa00
+active_fg #112233
+border_focused #ffaa00
+border_normal #221100
+bar_bg #443322
+launcher_bg #554433
+"#).unwrap();
+        let new_config = parse(&new_config_tokens).unwrap();
+
+        assert!(wm.apply_config(new_config).is_ok());
+
+        // Check window borders updated
+        assert_eq!(wm.border_config.focused_color, 0xffaa00);
+        assert_eq!(wm.border_config.normal_color, 0x221100);
+
+        // Check statusbar theme updated
+        assert_eq!(wm.statusbar.as_ref().unwrap().color_scheme.bg, 0x443322);
+        assert_eq!(wm.statusbar.as_ref().unwrap().color_scheme.fg, 0xeeddcc);
+        assert_eq!(wm.statusbar.as_ref().unwrap().color_scheme.active_bg, 0xffaa00);
+
+        // Check launcher theme updated
+        assert_eq!(wm.launcher.as_ref().unwrap().color_scheme.bg, 0x554433);
+        assert_eq!(wm.launcher.as_ref().unwrap().color_scheme.active_bg, 0xffaa00);
+    }
+}
+
+

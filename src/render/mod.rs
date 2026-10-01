@@ -355,7 +355,7 @@ impl Renderer {
                     cur_x + pad,
                     baseline,
                     &ws_str,
-                    0x555566, // Dimmed text for empty workspaces
+                    color_scheme.inactive_fg, // Configurable dimmed text for empty workspaces
                 )?;
             }
 

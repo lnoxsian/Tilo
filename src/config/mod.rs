@@ -6,6 +6,9 @@
 //! - Lexical tokenizer ([`tokenize`]), recursive-descent parser ([`parse`]), and disk loader ([`load_config`]).
 //! - Safe configuration reload without restarting the window manager ([`ReloadError`]).
 
+pub mod theme;
+pub use theme::*;
+
 use crate::autostart::AutostartCmd;
 use crate::focus::Direction;
 use crate::keybind::{default_keybindings, parse_keybind, Action, KeyBind};
@@ -91,6 +94,35 @@ pub struct Config {
     pub autostart: Vec<AutostartCmd>,
     /// Configuration for tabbed layout in status bar.
     pub tab_config: crate::bar::tabs::TabbedConfig,
+    /// Unified global and per-component theme configuration.
+    pub theme: ThemeConfig,
+}
+
+impl Config {
+    /// Returns the resolved color scheme for the status bar.
+    pub fn bar_color_scheme(&self) -> crate::bar::ColorScheme {
+        self.theme.bar_color_scheme()
+    }
+
+    /// Returns the resolved color scheme for the application launcher.
+    pub fn launcher_color_scheme(&self) -> crate::bar::ColorScheme {
+        self.theme.launcher_color_scheme()
+    }
+
+    /// Returns the effective font for the status bar.
+    pub fn bar_font(&self) -> &str {
+        self.theme.bar_font.as_deref().unwrap_or(&self.font)
+    }
+
+    /// Returns the effective font for the application launcher.
+    pub fn launcher_font(&self) -> &str {
+        self.theme.launcher_font.as_deref().unwrap_or(&self.font)
+    }
+
+    /// Returns the effective window border color for the application launcher.
+    pub fn launcher_border_color(&self) -> u32 {
+        self.theme.launcher_border.unwrap_or(self.theme.active_bg)
+    }
 }
 
 impl Default for Config {
@@ -110,6 +142,7 @@ impl Default for Config {
             bindings: default_keybindings(),
             autostart: Vec::new(),
             tab_config: crate::bar::tabs::TabbedConfig::default(),
+            theme: ThemeConfig::default(),
         }
     }
 }
@@ -320,35 +353,306 @@ fn parse_line(
             let width = token_to_u32(line[1], line_number, "border_width")?;
             config.border_width = width;
         }
-        "focused_color" => {
+        // --- Global Theme Palette ---
+        "bg" | "background" | "color_bg" => {
             if line.len() < 2 {
                 return Err(ConfigError::ParseError {
                     line: line_number,
-                    message: "Directive 'focused_color' requires a color argument (e.g. #ffffff)".to_string(),
+                    message: format!("Directive '{}' requires a color argument (e.g. #1a1b26)", directive),
                 });
             }
-            let color = token_to_color(line[1], line_number, "focused_color")?;
-            config.focused_color = color;
+            let color = token_to_color(line[1], line_number, directive)?;
+            config.theme.bg = color;
         }
-        "normal_color" => {
+        "fg" | "foreground" | "color_fg" | "font_color" => {
             if line.len() < 2 {
                 return Err(ConfigError::ParseError {
                     line: line_number,
-                    message: "Directive 'normal_color' requires a color argument (e.g. #444444)".to_string(),
+                    message: format!("Directive '{}' requires a color argument (e.g. #c0caf5)", directive),
                 });
             }
-            let color = token_to_color(line[1], line_number, "normal_color")?;
+            let color = token_to_color(line[1], line_number, directive)?;
+            config.theme.fg = color;
+        }
+        "active_bg" | "accent_color" | "color_active_bg" => {
+            if line.len() < 2 {
+                return Err(ConfigError::ParseError {
+                    line: line_number,
+                    message: format!("Directive '{}' requires a color argument (e.g. #7aa2f7)", directive),
+                });
+            }
+            let color = token_to_color(line[1], line_number, directive)?;
+            config.theme.active_bg = color;
+        }
+        "active_fg" | "color_active_fg" => {
+            if line.len() < 2 {
+                return Err(ConfigError::ParseError {
+                    line: line_number,
+                    message: format!("Directive '{}' requires a color argument (e.g. #15161e)", directive),
+                });
+            }
+            let color = token_to_color(line[1], line_number, directive)?;
+            config.theme.active_fg = color;
+        }
+        "urgent_bg" | "color_urgent_bg" => {
+            if line.len() < 2 {
+                return Err(ConfigError::ParseError {
+                    line: line_number,
+                    message: format!("Directive '{}' requires a color argument (e.g. #f7768e)", directive),
+                });
+            }
+            let color = token_to_color(line[1], line_number, directive)?;
+            config.theme.urgent_bg = color;
+        }
+        "urgent_fg" | "color_urgent_fg" => {
+            if line.len() < 2 {
+                return Err(ConfigError::ParseError {
+                    line: line_number,
+                    message: format!("Directive '{}' requires a color argument (e.g. #15161e)", directive),
+                });
+            }
+            let color = token_to_color(line[1], line_number, directive)?;
+            config.theme.urgent_fg = color;
+        }
+        "inactive_fg" | "color_inactive_fg" => {
+            if line.len() < 2 {
+                return Err(ConfigError::ParseError {
+                    line: line_number,
+                    message: format!("Directive '{}' requires a color argument (e.g. #555566)", directive),
+                });
+            }
+            let color = token_to_color(line[1], line_number, directive)?;
+            config.theme.inactive_fg = color;
+        }
+        "border_color" | "color_border" => {
+            if line.len() < 2 {
+                return Err(ConfigError::ParseError {
+                    line: line_number,
+                    message: format!("Directive '{}' requires a color argument (e.g. #444444)", directive),
+                });
+            }
+            let color = token_to_color(line[1], line_number, directive)?;
             config.normal_color = color;
+            config.theme.border_normal = color;
         }
-        "urgent_color" => {
+
+        // --- Window Decoration Borders ---
+        "focused_color" | "border_focused" => {
             if line.len() < 2 {
                 return Err(ConfigError::ParseError {
                     line: line_number,
-                    message: "Directive 'urgent_color' requires a color argument (e.g. #ff0000)".to_string(),
+                    message: format!("Directive '{}' requires a color argument (e.g. #ffffff)", directive),
                 });
             }
-            let color = token_to_color(line[1], line_number, "urgent_color")?;
+            let color = token_to_color(line[1], line_number, directive)?;
+            config.focused_color = color;
+            config.theme.border_focused = color;
+        }
+        "normal_color" | "border_normal" | "unfocused_color" => {
+            if line.len() < 2 {
+                return Err(ConfigError::ParseError {
+                    line: line_number,
+                    message: format!("Directive '{}' requires a color argument (e.g. #444444)", directive),
+                });
+            }
+            let color = token_to_color(line[1], line_number, directive)?;
+            config.normal_color = color;
+            config.theme.border_normal = color;
+        }
+        "urgent_color" | "border_urgent" => {
+            if line.len() < 2 {
+                return Err(ConfigError::ParseError {
+                    line: line_number,
+                    message: format!("Directive '{}' requires a color argument (e.g. #ff0000)", directive),
+                });
+            }
+            let color = token_to_color(line[1], line_number, directive)?;
             config.urgent_color = color;
+            config.theme.border_urgent = color;
+        }
+
+        // --- Statusbar Specific Overrides ---
+        "bar_bg" | "statusbar_bg" => {
+            if line.len() < 2 {
+                return Err(ConfigError::ParseError {
+                    line: line_number,
+                    message: format!("Directive '{}' requires a color argument", directive),
+                });
+            }
+            let color = token_to_color(line[1], line_number, directive)?;
+            config.theme.bar_bg = Some(color);
+        }
+        "bar_fg" | "statusbar_fg" | "bar_font_color" | "statusbar_font_color" => {
+            if line.len() < 2 {
+                return Err(ConfigError::ParseError {
+                    line: line_number,
+                    message: format!("Directive '{}' requires a color argument", directive),
+                });
+            }
+            let color = token_to_color(line[1], line_number, directive)?;
+            config.theme.bar_fg = Some(color);
+        }
+        "bar_active_bg" | "statusbar_active_bg" => {
+            if line.len() < 2 {
+                return Err(ConfigError::ParseError {
+                    line: line_number,
+                    message: format!("Directive '{}' requires a color argument", directive),
+                });
+            }
+            let color = token_to_color(line[1], line_number, directive)?;
+            config.theme.bar_active_bg = Some(color);
+        }
+        "bar_active_fg" | "statusbar_active_fg" => {
+            if line.len() < 2 {
+                return Err(ConfigError::ParseError {
+                    line: line_number,
+                    message: format!("Directive '{}' requires a color argument", directive),
+                });
+            }
+            let color = token_to_color(line[1], line_number, directive)?;
+            config.theme.bar_active_fg = Some(color);
+        }
+        "bar_urgent_bg" | "statusbar_urgent_bg" => {
+            if line.len() < 2 {
+                return Err(ConfigError::ParseError {
+                    line: line_number,
+                    message: format!("Directive '{}' requires a color argument", directive),
+                });
+            }
+            let color = token_to_color(line[1], line_number, directive)?;
+            config.theme.bar_urgent_bg = Some(color);
+        }
+        "bar_urgent_fg" | "statusbar_urgent_fg" => {
+            if line.len() < 2 {
+                return Err(ConfigError::ParseError {
+                    line: line_number,
+                    message: format!("Directive '{}' requires a color argument", directive),
+                });
+            }
+            let color = token_to_color(line[1], line_number, directive)?;
+            config.theme.bar_urgent_fg = Some(color);
+        }
+        "bar_inactive_fg" | "statusbar_inactive_fg" => {
+            if line.len() < 2 {
+                return Err(ConfigError::ParseError {
+                    line: line_number,
+                    message: format!("Directive '{}' requires a color argument", directive),
+                });
+            }
+            let color = token_to_color(line[1], line_number, directive)?;
+            config.theme.bar_inactive_fg = Some(color);
+        }
+        "bar_border" | "statusbar_border" => {
+            if line.len() < 2 {
+                return Err(ConfigError::ParseError {
+                    line: line_number,
+                    message: format!("Directive '{}' requires a color argument", directive),
+                });
+            }
+            let color = token_to_color(line[1], line_number, directive)?;
+            config.theme.bar_border = Some(color);
+        }
+        "bar_font" | "statusbar_font" => {
+            if line.len() < 2 {
+                return Err(ConfigError::ParseError {
+                    line: line_number,
+                    message: format!("Directive '{}' requires a font specification", directive),
+                });
+            }
+            let words: Vec<String> = line[1..].iter().map(|t| token_to_string(t)).collect();
+            config.theme.bar_font = Some(words.join(" "));
+        }
+
+        // --- Launcher Specific Overrides ---
+        "launcher_bg" => {
+            if line.len() < 2 {
+                return Err(ConfigError::ParseError {
+                    line: line_number,
+                    message: format!("Directive '{}' requires a color argument", directive),
+                });
+            }
+            let color = token_to_color(line[1], line_number, directive)?;
+            config.theme.launcher_bg = Some(color);
+        }
+        "launcher_fg" | "launcher_font_color" => {
+            if line.len() < 2 {
+                return Err(ConfigError::ParseError {
+                    line: line_number,
+                    message: format!("Directive '{}' requires a color argument", directive),
+                });
+            }
+            let color = token_to_color(line[1], line_number, directive)?;
+            config.theme.launcher_fg = Some(color);
+        }
+        "launcher_selected_bg" | "launcher_active_bg" => {
+            if line.len() < 2 {
+                return Err(ConfigError::ParseError {
+                    line: line_number,
+                    message: format!("Directive '{}' requires a color argument", directive),
+                });
+            }
+            let color = token_to_color(line[1], line_number, directive)?;
+            config.theme.launcher_active_bg = Some(color);
+        }
+        "launcher_selected_fg" | "launcher_active_fg" => {
+            if line.len() < 2 {
+                return Err(ConfigError::ParseError {
+                    line: line_number,
+                    message: format!("Directive '{}' requires a color argument", directive),
+                });
+            }
+            let color = token_to_color(line[1], line_number, directive)?;
+            config.theme.launcher_active_fg = Some(color);
+        }
+        "launcher_urgent_bg" => {
+            if line.len() < 2 {
+                return Err(ConfigError::ParseError {
+                    line: line_number,
+                    message: format!("Directive '{}' requires a color argument", directive),
+                });
+            }
+            let color = token_to_color(line[1], line_number, directive)?;
+            config.theme.launcher_urgent_bg = Some(color);
+        }
+        "launcher_urgent_fg" => {
+            if line.len() < 2 {
+                return Err(ConfigError::ParseError {
+                    line: line_number,
+                    message: format!("Directive '{}' requires a color argument", directive),
+                });
+            }
+            let color = token_to_color(line[1], line_number, directive)?;
+            config.theme.launcher_urgent_fg = Some(color);
+        }
+        "launcher_inactive_fg" => {
+            if line.len() < 2 {
+                return Err(ConfigError::ParseError {
+                    line: line_number,
+                    message: format!("Directive '{}' requires a color argument", directive),
+                });
+            }
+            let color = token_to_color(line[1], line_number, directive)?;
+            config.theme.launcher_inactive_fg = Some(color);
+        }
+        "launcher_border" | "launcher_border_color" => {
+            if line.len() < 2 {
+                return Err(ConfigError::ParseError {
+                    line: line_number,
+                    message: format!("Directive '{}' requires a color argument", directive),
+                });
+            }
+            let color = token_to_color(line[1], line_number, directive)?;
+            config.theme.launcher_border = Some(color);
+        }
+        "launcher_font" => {
+            if line.len() < 2 {
+                return Err(ConfigError::ParseError {
+                    line: line_number,
+                    message: format!("Directive '{}' requires a font specification", directive),
+                });
+            }
+            let words: Vec<String> = line[1..].iter().map(|t| token_to_string(t)).collect();
+            config.theme.launcher_font = Some(words.join(" "));
         }
         "inner_gap" => {
             if line.len() < 2 {

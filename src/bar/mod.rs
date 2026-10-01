@@ -70,21 +70,25 @@ impl From<x11rb::errors::ReplyOrIdError> for StatusbarError {
 /// Type alias for statusbar errors matching Plan.md specifications.
 pub type TiloError = StatusbarError;
 
-/// Active foreground and background colors for the statusbar.
+/// Active foreground and background colors for the statusbar and launcher.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ColorScheme {
-    /// Statusbar background color (0xRRGGBB).
+    /// Statusbar/window background color (0xRRGGBB).
     pub bg: u32,
     /// Default text foreground color (0xRRGGBB).
     pub fg: u32,
-    /// Background color for the currently active workspace.
+    /// Background color for the currently active workspace / selected item.
     pub active_bg: u32,
-    /// Foreground text color for the currently active workspace.
+    /// Foreground text color for the currently active workspace / selected item.
     pub active_fg: u32,
     /// Urgent workspace background.
     pub urgent_bg: u32,
     /// Urgent workspace foreground.
     pub urgent_fg: u32,
+    /// Inactive / dimmed text color.
+    pub inactive_fg: u32,
+    /// Window border or separator line color.
+    pub border: u32,
 }
 
 impl Default for ColorScheme {
@@ -96,6 +100,8 @@ impl Default for ColorScheme {
             active_fg: 0x15161e,
             urgent_bg: 0xf7768e,
             urgent_fg: 0x15161e,
+            inactive_fg: 0x555566,
+            border: 0x333344,
         }
     }
 }
