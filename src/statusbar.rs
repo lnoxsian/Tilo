@@ -210,6 +210,28 @@ impl Statusbar {
         any_changed
     }
 
+    /// Returns the duration until the next scheduled periodic module update is due.
+    pub fn time_until_next_update(&self) -> std::time::Duration {
+        let now = Instant::now();
+        let mut min_remaining = std::time::Duration::from_millis(1000);
+        for module in &self.modules {
+            let interval_ms = module.update_interval();
+            if interval_ms >= 1000 {
+                let interval = std::time::Duration::from_millis(interval_ms);
+                if let Some(last) = module.last_updated() {
+                    let elapsed = now.duration_since(last);
+                    let remaining = interval.saturating_sub(elapsed);
+                    if remaining < min_remaining {
+                        min_remaining = remaining;
+                    }
+                } else {
+                    return std::time::Duration::ZERO;
+                }
+            }
+        }
+        min_remaining
+    }
+
     /// Returns the combined formatted status string across all modules.
     pub fn full_text(&self) -> String {
         self.modules
@@ -492,14 +514,8 @@ impl StatusModule for WorkspaceModule {
     }
 
     fn update(&mut self) -> Result<ModuleUpdate, StatusbarError> {
-        let prev = self.cached_text.clone();
-        self.rebuild_text();
         self.last_updated = Some(Instant::now());
-        if self.cached_text != prev {
-            Ok(ModuleUpdate::Changed(self.cached_text.clone()))
-        } else {
-            Ok(ModuleUpdate::Unchanged)
-        }
+        Ok(ModuleUpdate::Unchanged)
     }
 
     fn current_text(&self) -> &str {

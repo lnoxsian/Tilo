@@ -400,18 +400,17 @@ impl WindowManager {
         false
     }
 
-    /// Updates all statusbar modules and re-renders if metrics, text, or resolution changed.
+    /// Updates all statusbar modules and re-renders if metrics or text changed.
     pub fn update_statusbar(&mut self) -> bool {
-        let resized = self.check_screen_resize();
         let changed = if let Some(ref mut bar) = self.statusbar {
             bar.update_all()
         } else {
             false
         };
-        if changed || resized {
+        if changed {
             let _ = self.render_statusbar();
         }
-        changed || resized
+        changed
     }
 
     /// Redraws the statusbar UI using the attached renderer.
@@ -878,19 +877,27 @@ impl WindowManager {
                 self.handle_event(event)?;
             }
 
-            if last_status_update.elapsed() >= std::time::Duration::from_millis(250) {
-                self.update_statusbar();
-                last_status_update = std::time::Instant::now();
+            // Periodic statusbar update if statusbar is active
+            if let Some(ref bar) = self.statusbar {
+                let time_until_next = bar.time_until_next_update();
+                if time_until_next.is_zero() || last_status_update.elapsed() >= std::time::Duration::from_millis(1000) {
+                    self.update_statusbar();
+                    last_status_update = std::time::Instant::now();
+                }
             }
 
             // Always flush pending X11 requests before waiting
             self.context.flush()?;
 
             // Wait for incoming X11 events on the connection socket, waking immediately
-            // upon input or timing out when the next statusbar update is due.
-            let time_until_status = std::time::Duration::from_millis(250)
-                .saturating_sub(last_status_update.elapsed());
-            let timeout_ms = (time_until_status.as_millis() as i32).clamp(1, 250);
+            // upon input or timing out when the next periodic statusbar update is due.
+            // If statusbar is disabled, sleep indefinitely (-1) with zero CPU wakeups.
+            let timeout_ms = if let Some(ref bar) = self.statusbar {
+                let next = bar.time_until_next_update();
+                (next.as_millis() as i32).clamp(10, 500)
+            } else {
+                500
+            };
 
             use std::os::fd::AsRawFd;
             let fd = self.context.connection.stream().as_raw_fd();
