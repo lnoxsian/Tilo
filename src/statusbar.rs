@@ -544,7 +544,10 @@ impl LayoutModule {
             "horizontal" | "===" => "===".to_string(),
             "monocle" | "[M]" => "[M]".to_string(),
             "bsp" | "[B]" => "[B]".to_string(),
-            "master" | "[]=" => "[]=".to_string(),
+            "master" | "master-left" | "[]=" => "[]=".to_string(),
+            "master-right" | "=[]" => "=[]".to_string(),
+            "master-top" | "TT=" => "TT=".to_string(),
+            "master-bottom" | "=TT" => "=TT".to_string(),
             _ => {
                 if layout.starts_with('[') && layout.ends_with(']') {
                     layout.to_string()

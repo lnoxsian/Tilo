@@ -122,6 +122,8 @@ pub enum Action {
     PreselectSplit(crate::layout::SplitType),
     /// Cycle to the next window layout (Phase 27).
     CycleLayout,
+    /// Rotate the master-stack layout orientation.
+    RotateMaster,
     /// Set the layout of the current workspace (Phase 27).
     SetLayout(crate::layout::LayoutType),
 }
@@ -254,6 +256,7 @@ pub fn default_keybindings() -> Vec<KeyBind> {
         KeyBind::new(MOD_SUPER, XK_D, Action::Launcher),
         KeyBind::new(MOD_SUPER | MOD_SHIFT, XK_SPACE, Action::ToggleFloating),
         KeyBind::new(MOD_SUPER, XK_SPACE, Action::CycleLayout),
+        KeyBind::new(MOD_SUPER, XK_R, Action::RotateMaster),
         KeyBind::new(MOD_SUPER, XK_GRAVE, Action::ToggleScratchpad),
         KeyBind::new(MOD_SUPER | MOD_SHIFT, XK_GRAVE, Action::SetScratchpad),
         // Workspaces 1-9
@@ -337,5 +340,7 @@ mod tests {
         assert!(!binds.is_empty());
         assert!(binds.iter().any(|b| b.action == Action::Close));
         assert!(binds.iter().any(|b| b.action == Action::Exit));
+        assert!(binds.iter().any(|b| b.modifiers == MOD_SUPER && b.keysym == XK_R && b.action == Action::RotateMaster));
+        assert!(binds.iter().any(|b| b.modifiers == MOD_SUPER && b.keysym == XK_SPACE && b.action == Action::CycleLayout));
     }
 }

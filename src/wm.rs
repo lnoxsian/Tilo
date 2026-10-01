@@ -2511,8 +2511,8 @@ impl WindowManager {
                             Direction::Down => (crate::layout::SplitType::Vertical, 0.05),
                         };
                         if ws.bsp_tree.resize_window(win, delta, split_type) {
-                            if ws.layout == LayoutType::MasterStack
-                                && let Some(r) = ws.bsp_tree.master_ratio() {
+                            if ws.layout.is_master()
+                                && let Some(r) = ws.bsp_tree.master_ratio_for_layout(ws.layout) {
                                     self.layout_config.master_ratio = r;
                                 }
                             let _ = self.retile();
@@ -2537,6 +2537,18 @@ impl WindowManager {
                 }
                 self.retile()?;
                 self.render_statusbar().ok();
+            }
+            Action::RotateMaster => {
+                let current_ws = self.workspace_manager.current_id();
+                let visible_tiled = self.client_state.visible_tiled_clients_on_workspace(current_ws);
+                let master_ratio = self.layout_config.master_ratio;
+                if let Some(ws) = self.workspace_manager.get_mut(current_ws)
+                    && ws.layout.is_master() {
+                        ws.rotate_master_layout();
+                        ws.bsp_tree.rebuild_for_layout(ws.layout, &visible_tiled, master_ratio);
+                        self.retile()?;
+                        self.render_statusbar().ok();
+                    }
             }
             Action::SetLayout(layout) => {
                 let current_ws = self.workspace_manager.current_id();
@@ -2817,8 +2829,8 @@ impl WindowManager {
                 let current_ws = self.workspace_manager.current_id();
                 if let Some(ws) = self.workspace_manager.get_mut(current_ws)
                     && ws.bsp_tree.resize_by_pointer(window, delta_x, delta_y, initial_rect) {
-                        if ws.layout == LayoutType::MasterStack
-                            && let Some(r) = ws.bsp_tree.master_ratio() {
+                        if ws.layout.is_master()
+                            && let Some(r) = ws.bsp_tree.master_ratio_for_layout(ws.layout) {
                                 self.layout_config.master_ratio = r;
                             }
                         let _ = self.retile();

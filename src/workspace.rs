@@ -110,6 +110,12 @@ impl Workspace {
         self.layout
     }
 
+    /// Rotates this workspace through master-stack orientations if it is a master layout.
+    pub fn rotate_master_layout(&mut self) -> LayoutType {
+        self.layout = crate::layout::rotate_master_layout(self.layout);
+        self.layout
+    }
+
     /// Returns the number of client windows on this workspace.
     pub fn len(&self) -> usize {
         self.clients.len()
@@ -183,6 +189,11 @@ impl WorkspaceManager {
     /// Cycles the layout for the current workspace to the next algorithm.
     pub fn cycle_current_layout(&mut self) -> LayoutType {
         self.current_workspace_mut().cycle_layout()
+    }
+
+    /// Rotates the layout for the current workspace through master-stack orientations.
+    pub fn rotate_current_master_layout(&mut self) -> LayoutType {
+        self.current_workspace_mut().rotate_master_layout()
     }
 
     /// Returns a list of workspace IDs that currently contain one or more client windows.
@@ -362,5 +373,20 @@ mod tests {
         assert_eq!(wm.remove_client(100), Some(3));
         assert_eq!(wm.find_workspace_for(100), None);
         assert_eq!(wm.remove_client(100), None);
+    }
+
+    #[test]
+    fn test_workspace_rotate_master_layout() {
+        let mut ws = Workspace::with_layout(1, LayoutType::MasterStack);
+        assert_eq!(ws.layout, LayoutType::MasterStack);
+        assert_eq!(ws.rotate_master_layout(), LayoutType::MasterRight);
+        assert_eq!(ws.rotate_master_layout(), LayoutType::MasterTop);
+        assert_eq!(ws.rotate_master_layout(), LayoutType::MasterBottom);
+        assert_eq!(ws.rotate_master_layout(), LayoutType::MasterStack);
+
+        let mut mgr = WorkspaceManager::new();
+        mgr.set_current_layout(LayoutType::MasterStack);
+        assert_eq!(mgr.rotate_current_master_layout(), LayoutType::MasterRight);
+        assert_eq!(mgr.rotate_current_master_layout(), LayoutType::MasterTop);
     }
 }

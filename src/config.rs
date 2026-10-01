@@ -650,6 +650,7 @@ fn parse_action(tokens: &[&Token], line: usize, config: &Config) -> Result<Actio
         "split_vertical" => Ok(Action::PreselectSplit(crate::layout::SplitType::Vertical)),
         "split_horizontal" => Ok(Action::PreselectSplit(crate::layout::SplitType::Horizontal)),
         "cycle_layout" | "cyclelayout" => Ok(Action::CycleLayout),
+        "rotate_master" | "rotatemaster" | "rotate_layout" | "rotatelayout" => Ok(Action::RotateMaster),
         "layout" | "set_layout" => {
             if tokens.len() < 2 {
                 return Err(ConfigError::ParseError {
@@ -664,7 +665,10 @@ fn parse_action(tokens: &[&Token], line: usize, config: &Config) -> Result<Actio
             })?;
             Ok(Action::SetLayout(lt))
         }
-        "layout_master" => Ok(Action::SetLayout(crate::layout::LayoutType::MasterStack)),
+        "layout_master" | "layout_master_left" => Ok(Action::SetLayout(crate::layout::LayoutType::MasterStack)),
+        "layout_master_right" => Ok(Action::SetLayout(crate::layout::LayoutType::MasterRight)),
+        "layout_master_top" => Ok(Action::SetLayout(crate::layout::LayoutType::MasterTop)),
+        "layout_master_bottom" => Ok(Action::SetLayout(crate::layout::LayoutType::MasterBottom)),
         "layout_monocle" => Ok(Action::SetLayout(crate::layout::LayoutType::Monocle)),
         "layout_vertical" => Ok(Action::SetLayout(crate::layout::LayoutType::Vertical)),
         "layout_horizontal" => Ok(Action::SetLayout(crate::layout::LayoutType::Horizontal)),
@@ -884,5 +888,29 @@ urgent_color #ff0000
         assert_eq!(config.focused_color, 0x00ffffff);
         assert_eq!(config.normal_color, 0x00444444);
         assert_eq!(config.urgent_color, 0x00ff0000);
+    }
+
+    #[test]
+    fn test_parse_rotated_master_and_layout_bindings() {
+        let input = r#"
+layout master-top
+bind $mod+r rotate_master
+bind $mod+Shift+r rotatelayout
+bind $mod+1 layout_master_left
+bind $mod+2 layout_master_right
+bind $mod+3 layout_master_top
+bind $mod+4 layout_master_bottom
+"#;
+        let tokens = tokenize(input).unwrap();
+        let config = parse(&tokens).unwrap();
+
+        assert_eq!(config.layout, crate::layout::LayoutType::MasterTop);
+        assert_eq!(config.bindings.len(), 6);
+        assert_eq!(config.bindings[0].action, Action::RotateMaster);
+        assert_eq!(config.bindings[1].action, Action::RotateMaster);
+        assert_eq!(config.bindings[2].action, Action::SetLayout(crate::layout::LayoutType::MasterStack));
+        assert_eq!(config.bindings[3].action, Action::SetLayout(crate::layout::LayoutType::MasterRight));
+        assert_eq!(config.bindings[4].action, Action::SetLayout(crate::layout::LayoutType::MasterTop));
+        assert_eq!(config.bindings[5].action, Action::SetLayout(crate::layout::LayoutType::MasterBottom));
     }
 }
