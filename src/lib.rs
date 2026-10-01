@@ -21,10 +21,13 @@ pub mod mouse;
 pub mod render;
 pub mod rules;
 pub mod scratchpad;
+pub mod error;
 pub mod statusbar;
 pub mod wm;
 pub mod workspace;
 pub mod x11;
+
+pub use error::WmError;
 
 
 

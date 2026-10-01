@@ -32,6 +32,8 @@ use crate::rules::{apply_rules as apply_window_rules, RuleAction, WindowRule};
 use crate::statusbar::{create_statusbar_window, Statusbar, StatusbarError};
 use crate::workspace::{WorkspaceId, WorkspaceManager};
 use crate::x11::{X11Context, X11Error};
+pub use crate::error::WmError;
+use crate::error::{is_client_disconnect_error, is_connection_lost_error};
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::{
     Allow, AtomEnum, ButtonPressEvent, ButtonReleaseEvent, ChangeWindowAttributesAux, ClientMessageEvent,
@@ -469,11 +471,9 @@ impl WindowManager {
             "monospace"
         };
 
-        if self.launcher.is_none() {
-            self.launcher = Some(crate::launcher::Launcher::new());
-        }
-
-        let launcher = self.launcher.as_mut().unwrap();
+        let launcher = self
+            .launcher
+            .get_or_insert_with(crate::launcher::Launcher::new);
         launcher.refresh_if_needed();
         launcher.rect = rect;
 
@@ -739,13 +739,14 @@ impl WindowManager {
                 self.scratchpad.clear_client();
             }
 
-        if self.scratchpad.client.is_none() {
-            // Spawn default terminal emulator as scratchpad
-            let _ = crate::launcher::spawn_app(&self.config.terminal);
-            return Ok(());
-        }
-
-        let win = self.scratchpad.client.unwrap();
+        let win = match self.scratchpad.client {
+            Some(w) => w,
+            None => {
+                // Spawn default terminal emulator as scratchpad
+                let _ = crate::launcher::spawn_app(&self.config.terminal);
+                return Ok(());
+            }
+        };
         if self.scratchpad.is_visible {
             // Hide: unmap window
             let _ = self.context.connection.unmap_window(win);
@@ -855,10 +856,20 @@ impl WindowManager {
     }
 
     /// Starts the main event loop, blocking the thread and waiting for X11 events.
-    pub fn run(&mut self) -> Result<(), X11Error> {
+    ///
+    /// Implements Phase 29 Application State Recovery:
+    /// - Recovers from client errors without panicking.
+    /// - Recovers gracefully from non-fatal protocol errors.
+    /// - Only terminates if the connection to the X11 server is lost or a shutdown is requested.
+    pub fn run(&mut self) -> Result<(), WmError> {
         setup_signal_handlers();
         let _ = self.run_autostart();
-        self.context.flush()?;
+        if let Err(err) = self.context.flush() {
+            if is_connection_lost_error(&err) {
+                return Err(WmError::ConnectionLost(err.to_string()));
+            }
+            eprintln!("[WARN  tilo::wm] Initial flush error: {}", err);
+        }
         let mut last_status_update = std::time::Instant::now();
         while self.running {
             if TERMINATE_SIGNAL.swap(false, Ordering::SeqCst) {
@@ -872,8 +883,16 @@ impl WindowManager {
                 let _ = self.reload_config();
             }
 
-            while let Some(event) = self.context.connection.poll_for_event()? {
-                self.handle_event(event)?;
+            while let Some(event) = match self.context.connection.poll_for_event() {
+                Ok(ev) => ev,
+                Err(err) => return Err(WmError::ConnectionLost(err.to_string())),
+            } {
+                if let Err(err) = self.handle_event(event) {
+                    if is_connection_lost_error(&err) {
+                        return Err(WmError::ConnectionLost(err.to_string()));
+                    }
+                    eprintln!("[WARN  tilo::wm] Recovered from event dispatch error: {}", err);
+                }
             }
 
             // Periodic statusbar update if statusbar is active
@@ -886,7 +905,12 @@ impl WindowManager {
             }
 
             // Always flush pending X11 requests before waiting
-            self.context.flush()?;
+            if let Err(err) = self.context.flush() {
+                if is_connection_lost_error(&err) {
+                    return Err(WmError::ConnectionLost(err.to_string()));
+                }
+                eprintln!("[WARN  tilo::wm] Flush error before poll: {}", err);
+            }
 
             // Wait for incoming X11 events on the connection socket, waking immediately
             // upon input or timing out when the next periodic statusbar update is due.
@@ -916,15 +940,25 @@ impl WindowManager {
     ///
     /// # Returns
     /// The number of events processed.
-    pub fn process_pending_events(&mut self) -> Result<usize, X11Error> {
+    pub fn process_pending_events(&mut self) -> Result<usize, WmError> {
         let mut count = 0;
-        while let Some(event) = self.context.connection.poll_for_event()? {
-            self.handle_event(event)?;
+        while let Some(event) = match self.context.connection.poll_for_event() {
+            Ok(ev) => ev,
+            Err(err) => return Err(WmError::ConnectionLost(err.to_string())),
+        } {
+            if let Err(err) = self.handle_event(event) {
+                if is_connection_lost_error(&err) {
+                    return Err(WmError::ConnectionLost(err.to_string()));
+                }
+                eprintln!("[WARN  tilo::wm] Recovered from event dispatch error: {}", err);
+            }
             count += 1;
         }
-        if count > 0 {
-            self.context.flush()?;
-        }
+        if count > 0
+            && let Err(err) = self.context.flush()
+                && is_connection_lost_error(&err) {
+                    return Err(WmError::ConnectionLost(err.to_string()));
+                }
         Ok(count)
     }
 
@@ -1028,14 +1062,19 @@ impl WindowManager {
         }
 
         // Check window attributes (e.g. override_redirect)
-        let attrs = match self.context.connection.get_window_attributes(window)?.reply() {
-            Ok(attrs) => attrs,
+        let attrs = match self.context.connection.get_window_attributes(window) {
+            Ok(cookie) => match cookie.reply() {
+                Ok(attrs) => attrs,
+                Err(err) => {
+                    eprintln!(
+                        "[WARN  tilo::wm] Failed to get attributes for window 0x{:x}: {:?}",
+                        window, err
+                    );
+                    return Ok(false);
+                }
+            },
             Err(err) => {
-                eprintln!(
-                    "[WARN  tilo::wm] Failed to get attributes for window 0x{:x}: {:?}",
-                    window, err
-                );
-                return Ok(false);
+                return Err(X11Error::Connection(err));
             }
         };
 
@@ -1055,7 +1094,15 @@ impl WindowManager {
             .change_window_attributes(window, &aux);
 
         // Evaluate window rules before finalizing client state
-        let rule_action = self.evaluate_window_rules(window)?;
+        let rule_action = match self.evaluate_window_rules(window) {
+            Ok(action) => action,
+            Err(err) => {
+                if is_connection_lost_error(&err) {
+                    return Err(err);
+                }
+                RuleAction::default()
+            }
+        };
         let active_mon = self.monitor_manager.active_monitor();
         let target_ws = rule_action.target_workspace.unwrap_or(active_mon.workspace);
         self.workspace_manager.get_or_create(target_ws);
@@ -1162,8 +1209,11 @@ impl WindowManager {
 
     /// Deregisters and unmanages a window, removing it from `client_state`.
     ///
-    /// If the window was previously focused, input focus is transferred to the
-    /// previous window on the workspace/focus stack or reverted to the root window.
+    /// Implements Phase 29 Application State Recovery:
+    /// - Gracefully handles workspace changes during client destruction: if the destroyed client
+    ///   is on an inactive workspace, does not alter the active workspace's focus or layout.
+    /// - If the window was active on the current workspace, transfers focus to the previous window
+    ///   on the workspace/focus stack or reverts to the root window.
     pub fn unmanage_window(&mut self, window: Window) -> Option<Client> {
         let ws = self
             .workspace_manager
@@ -1180,18 +1230,62 @@ impl WindowManager {
         let _ = self.set_wm_state(window, WmState::Withdrawn);
         let _ = self.update_ewmh_client_list();
         if removed.is_some() {
-            let _ = self.retile();
-            // Restore focus to previous client on workspace, or global stack, or root
-            let next_candidate = next_ws_win
-                .or_else(|| self.workspace_manager.get(ws).and_then(|w| w.clients.first().copied()))
-                .filter(|&w| self.client_state.contains(w));
-            if let Some(next_window) = next_candidate {
-                let _ = self.focus_client(next_window);
-            } else {
+            // Update status bar occupied workspace indicators
+            if let Some(ref mut bar) = self.statusbar {
+                let occupied = self.workspace_manager.occupied_workspaces();
+                bar.set_workspace(self.current_workspace, &occupied);
+            }
+
+            // Only retile and shift focus if the destroyed window belonged to the current workspace
+            if ws == self.current_workspace {
+                let _ = self.retile();
+                let next_candidate = next_ws_win
+                    .or_else(|| self.workspace_manager.get(ws).and_then(|w| w.clients.first().copied()))
+                    .filter(|&w| self.client_state.contains(w));
+                if let Some(next_window) = next_candidate {
+                    let _ = self.focus_client(next_window);
+                } else {
+                    let _ = self.clear_focus();
+                }
+            } else if self.focused_window() == Some(window) {
                 let _ = self.clear_focus();
             }
         }
         removed
+    }
+
+    /// Recovers from an unexpected client disconnection (e.g. `BadWindow`).
+    ///
+    /// Removes the client from internal state, retiles the workspace, and transfers
+    /// focus to the next available window, continuing without crashing.
+    pub fn recover_disconnected_client(&mut self, window: Window) {
+        if self.client_state.contains(window) {
+            eprintln!(
+                "[WARN  tilo::wm] Client 0x{:x} disconnected unexpectedly; recovering state.",
+                window
+            );
+            self.unmanage_window(window);
+        }
+    }
+
+    /// Executes an operation on a client window with automatic state recovery if the client disconnected.
+    pub fn with_client_recovery<F>(&mut self, window: Window, op: F) -> Result<(), WmError>
+    where
+        F: FnOnce(&mut Self) -> Result<(), X11Error>,
+    {
+        match op(self) {
+            Ok(()) => Ok(()),
+            Err(err) => {
+                if is_client_disconnect_error(&err) {
+                    self.recover_disconnected_client(window);
+                    Ok(())
+                } else if is_connection_lost_error(&err) {
+                    Err(WmError::ConnectionLost(err.to_string()))
+                } else {
+                    Err(WmError::X11ProtocolError(err))
+                }
+            }
+        }
     }
 
     /// Computes the bounding rectangles for visible tiled windows on a workspace using its active layout.
@@ -1457,6 +1551,10 @@ impl WindowManager {
 
     /// Sets input focus to a specific client window, raises it, and updates border colors.
     pub fn focus_client(&mut self, window: Window) -> Result<(), X11Error> {
+        if !self.client_state.contains(window) {
+            return Ok(());
+        }
+
         // 1. Reset all other windows' borders to normal color and configure passive click-to-focus grabs
         let other_windows: Vec<Window> = self
             .client_state
@@ -2201,12 +2299,27 @@ impl WindowManager {
             }
 
         // 2. Query updated monitors from XRandR (using the updated screen dimensions as fallback)
-        let new_monitors = query_monitors(
+        let new_monitors = match query_monitors(
             &self.context.connection,
             self.context.root_window,
             self.context.screen_width as u32,
             self.context.screen_height as u32,
-        )?;
+        ) {
+            Ok(monitors) => monitors,
+            Err(err) => {
+                eprintln!(
+                    "[WARN  tilo::wm] Failed to query monitors from RandR: {:?}; using screen dimensions fallback",
+                    err
+                );
+                vec![crate::monitor::Monitor::new_primary(
+                    1,
+                    0,
+                    0,
+                    self.context.screen_width as u32,
+                    self.context.screen_height as u32,
+                )]
+            }
+        };
 
         let disconnected = self.monitor_manager.reconcile_monitors(new_monitors);
 
@@ -2526,6 +2639,16 @@ impl WindowManager {
 
     /// Handles the notification that a window was destroyed.
     pub fn handle_destroy_notify(&mut self, window: Window) -> Result<(), X11Error> {
+        // If launcher overlay window was destroyed, close and reset launcher state cleanly
+        if let Some(ref mut launcher) = self.launcher
+            && launcher.window_id == window {
+                launcher.window_id = 0;
+                launcher.visible = false;
+                let _ = self.context.connection.ungrab_keyboard(x11rb::CURRENT_TIME);
+                if let Some(focused) = self.focused_window() {
+                    let _ = self.focus_client(focused);
+                }
+            }
         self.unmanage_window(window);
         Ok(())
     }
@@ -2548,8 +2671,15 @@ impl WindowManager {
         }
         if self.scratchpad.client == Some(window) {
             self.scratchpad.is_visible = false;
+            if let Some(c) = self.client_state.get_client_mut(window) {
+                c.mapped = false;
+            }
+            return Ok(());
         }
-        let _ = self.unmap_client(window);
+
+        // When a normal managed window is unmapped on the active workspace by the client,
+        // it transitions to Withdrawn state and is unmanaged (ICCCM 4.1.4).
+        self.unmanage_window(window);
         Ok(())
     }
 

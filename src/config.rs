@@ -790,9 +790,18 @@ pub fn load_config_from_path(path: impl AsRef<Path>) -> Result<Config, ConfigErr
     parse(&tokens)
 }
 
-/// Loads configuration from disk, falling back to default configuration if not found.
+/// Loads configuration from disk, falling back to default configuration if not found or invalid.
 pub fn load_config_or_default() -> Config {
-    load_config().unwrap_or_default()
+    match load_config() {
+        Ok(cfg) => cfg,
+        Err(err) => {
+            eprintln!(
+                "[WARN  tilo::config] Failed to load configuration (falling back to defaults): {}",
+                err
+            );
+            Config::default()
+        }
+    }
 }
 
 #[cfg(test)]

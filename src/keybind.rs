@@ -195,9 +195,12 @@ pub fn parse_keysym(name: &str) -> Option<Keysym> {
         "Num_Lock" | "NumLock" => Some(XK_NUM_LOCK),
         "F5" | "f5" => Some(XK_F5),
         s if s.len() == 1 => {
-            let c = s.chars().next().unwrap();
-            if c.is_ascii() {
-                Some(c.to_ascii_lowercase() as Keysym)
+            if let Some(c) = s.chars().next() {
+                if c.is_ascii() {
+                    Some(c.to_ascii_lowercase() as Keysym)
+                } else {
+                    None
+                }
             } else {
                 None
             }
@@ -214,7 +217,10 @@ pub fn parse_keybind(spec: &str, action: Action) -> Result<KeyBind, String> {
     }
 
     let mut modifiers = 0u16;
-    let key_part = parts.last().unwrap();
+    let key_part = match parts.last() {
+        Some(k) => k,
+        None => return Err("Missing key in keybind specification".to_string()),
+    };
 
     for &mod_name in &parts[..parts.len() - 1] {
         match parse_modifier(mod_name) {

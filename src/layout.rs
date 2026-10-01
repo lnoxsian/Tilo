@@ -1679,7 +1679,7 @@ impl BspTree {
         let k = nodes.len();
         let ratio = (1.0 / k as f32).clamp(0.05, 0.95);
         let first = Box::new(nodes[0].clone());
-        let second = Self::combine_nodes(&nodes[1..], split_type).unwrap();
+        let second = Self::combine_nodes(&nodes[1..], split_type)?;
         Some(Box::new(BspNode::Split {
             split_type,
             ratio,
@@ -1761,11 +1761,9 @@ impl BspTree {
                             if let Some(ref mut root) = self.root {
                                 root.insert_at(m, w, SplitType::Horizontal, master_ratio.clamp(0.05, 0.95));
                             }
-                        } else {
-                            let last = wins.last().copied().unwrap();
-                            if let Some(ref mut root) = self.root {
+                        } else if let Some(last) = wins.last().copied()
+                            && let Some(ref mut root) = self.root {
                                 root.insert_at(last, w, SplitType::Vertical, 0.5);
-                            }
                         }
                     }
                     LayoutType::MasterRight | LayoutType::MasterTop | LayoutType::MasterBottom | LayoutType::CenterMaster | LayoutType::Grid => {
@@ -1775,16 +1773,16 @@ impl BspTree {
                     }
                     LayoutType::Vertical => {
                         let wins = self.windows();
-                        let last = wins.last().copied().unwrap();
-                        if let Some(ref mut root) = self.root {
-                            root.insert_at(last, w, SplitType::Horizontal, 0.5);
+                        if let Some(last) = wins.last().copied()
+                            && let Some(ref mut root) = self.root {
+                                root.insert_at(last, w, SplitType::Horizontal, 0.5);
                         }
                     }
                     LayoutType::Horizontal => {
                         let wins = self.windows();
-                        let last = wins.last().copied().unwrap();
-                        if let Some(ref mut root) = self.root {
-                            root.insert_at(last, w, SplitType::Vertical, 0.5);
+                        if let Some(last) = wins.last().copied()
+                            && let Some(ref mut root) = self.root {
+                                root.insert_at(last, w, SplitType::Vertical, 0.5);
                         }
                     }
                     _ => {

@@ -58,6 +58,17 @@ impl Monitor {
         }
     }
 
+    /// Creates a new primary `Monitor` with the given parameters and workspace matching its ID.
+    pub const fn new_primary(
+        id: MonitorId,
+        x: i32,
+        y: i32,
+        width: u32,
+        height: u32,
+    ) -> Self {
+        Self::new(id, x, y, width, height, id, true)
+    }
+
     /// Returns the bounding [`Rect`] geometry of the monitor.
     pub fn rect(&self) -> Rect {
         Rect::new(self.x, self.y, self.width, self.height)
