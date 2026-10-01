@@ -416,6 +416,11 @@ impl WindowManager {
             _ => ws_layout.symbol(),
         };
         let title = focused.map(|w| self.get_window_title(w)).unwrap_or_default();
+        let tabs = if ws_layout == LayoutType::Tabbed {
+            Some(self.get_workspace_tabs(current_ws))
+        } else {
+            None
+        };
         if let Some(ref mut bar) = self.statusbar {
             bar.set_title(&title);
             bar.render(
@@ -424,6 +429,8 @@ impl WindowManager {
                 &occupied,
                 layout_symbol,
                 &title,
+                tabs.as_deref(),
+                &self.config.tab_config,
             )?;
         }
         Ok(())
@@ -1223,6 +1230,106 @@ impl WindowManager {
         }
     }
 
+    /// Returns lightweight tab metadata for all managed tiled windows on the specified workspace.
+    pub fn get_workspace_tabs(&self, ws_id: WorkspaceId) -> Vec<crate::bar::tabs::TabInfo> {
+        let ws = match self.workspace_manager.get(ws_id) {
+            Some(ws) => ws,
+            None => return Vec::new(),
+        };
+
+        let focused = self.workspace_focus.focused_window_on(ws_id);
+        let mut tabs = Vec::new();
+        let mut idx = 1;
+
+        for &w in &ws.clients {
+            if let Some(c) = self.client_state.get_client(w) {
+                if c.is_floating() {
+                    continue;
+                }
+                let title = self.get_window_title(w);
+                let is_focused = Some(w) == focused;
+                tabs.push(crate::bar::tabs::TabInfo::new(w, title, idx, is_focused, c.urgent));
+                idx += 1;
+            }
+        }
+
+        tabs
+    }
+
+    /// Focuses the next tab in the active workspace tab list (with wrap-around).
+    pub fn focus_next_tab(&mut self) -> Result<(), X11Error> {
+        let current_ws = self.current_workspace;
+        let tabs = self.get_workspace_tabs(current_ws);
+        if tabs.len() < 2 {
+            return Ok(());
+        }
+        let current_idx = tabs.iter().position(|t| t.focused).unwrap_or(0);
+        let next_idx = (current_idx + 1) % tabs.len();
+        self.focus_client(tabs[next_idx].window)?;
+        Ok(())
+    }
+
+    /// Focuses the previous tab in the active workspace tab list (with wrap-around).
+    pub fn focus_prev_tab(&mut self) -> Result<(), X11Error> {
+        let current_ws = self.current_workspace;
+        let tabs = self.get_workspace_tabs(current_ws);
+        if tabs.len() < 2 {
+            return Ok(());
+        }
+        let current_idx = tabs.iter().position(|t| t.focused).unwrap_or(0);
+        let prev_idx = if current_idx == 0 {
+            tabs.len() - 1
+        } else {
+            current_idx - 1
+        };
+        self.focus_client(tabs[prev_idx].window)?;
+        Ok(())
+    }
+
+    /// Moves the active tab one position to the left in workspace tab ordering.
+    pub fn move_tab_left(&mut self) -> Result<(), X11Error> {
+        let current_ws = self.current_workspace;
+        let focused = match self.focused_window() {
+            Some(w) => w,
+            None => return Ok(()),
+        };
+        if let Some(ws) = self.workspace_manager.get_mut(current_ws)
+            && let Some(idx) = ws.clients.iter().position(|&w| w == focused)
+            && idx > 0
+        {
+            ws.clients.swap(idx, idx - 1);
+        }
+        let _ = self.render_statusbar();
+        Ok(())
+    }
+
+    /// Moves the active tab one position to the right in workspace tab ordering.
+    pub fn move_tab_right(&mut self) -> Result<(), X11Error> {
+        let current_ws = self.current_workspace;
+        let focused = match self.focused_window() {
+            Some(w) => w,
+            None => return Ok(()),
+        };
+        if let Some(ws) = self.workspace_manager.get_mut(current_ws)
+            && let Some(idx) = ws.clients.iter().position(|&w| w == focused)
+            && idx + 1 < ws.clients.len()
+        {
+            ws.clients.swap(idx, idx + 1);
+        }
+        let _ = self.render_statusbar();
+        Ok(())
+    }
+
+    /// Directly selects and focuses a tab by 1-based index (e.g. 1..9).
+    pub fn select_tab(&mut self, index: usize) -> Result<(), X11Error> {
+        let current_ws = self.current_workspace;
+        let tabs = self.get_workspace_tabs(current_ws);
+        if index >= 1 && index <= tabs.len() {
+            self.focus_client(tabs[index - 1].window)?;
+        }
+        Ok(())
+    }
+
     /// Recalculates and applies the tiling layout to all visible managed clients on each monitor's active workspace.
     pub fn retile(&mut self) -> Result<(), X11Error> {
         let monitors = self.monitor_manager.monitors.clone();
@@ -1247,29 +1354,86 @@ impl WindowManager {
                 monitor_rect
             };
 
-            let visible_tiled = self.client_state.visible_tiled_clients_on_workspace(mon_ws);
+            let ws_layout = self.workspace_manager.get(mon_ws).map(|ws| ws.layout).unwrap_or_default();
 
-            if !visible_tiled.is_empty() {
-                let ws_layout = self.workspace_manager.get(mon_ws).map(|ws| ws.layout).unwrap_or_default();
-                let pairs = self.get_workspace_window_geometries(mon_ws, &usable_rect);
+            if ws_layout == LayoutType::Tabbed {
+                let ws_clients = self.workspace_manager.get(mon_ws).map(|ws| ws.clients.clone()).unwrap_or_default();
+                let tiled_clients: Vec<Window> = ws_clients
+                    .into_iter()
+                    .filter(|&w| {
+                        self.client_state
+                            .get_client(w)
+                            .map(|c| !c.is_floating() && !c.is_fullscreen())
+                            .unwrap_or(false)
+                    })
+                    .collect();
 
-                let windows: Vec<Window> = pairs.iter().map(|(w, _)| *w).collect();
-                let geometries: Vec<Rect> = pairs.iter().map(|(_, r)| *r).collect();
-                apply_layout_with_border(
-                    &self.context.connection,
-                    &windows,
-                    &geometries,
-                    self.layout_config.border_width,
-                )?;
+                let active_tab = self
+                    .workspace_focus
+                    .focused_window_on(mon_ws)
+                    .filter(|w| tiled_clients.contains(w))
+                    .or_else(|| tiled_clients.first().copied());
 
-                // If Monocle layout, raise the focused window above other tiled windows
-                if ws_layout == LayoutType::Monocle
-                    && let Some(focused) = self.workspace_focus.focused_window_on(mon_ws) {
-                        let _ = self.context.connection.configure_window(
-                            focused,
-                            &ConfigureWindowAux::default().stack_mode(StackMode::ABOVE),
-                        );
+                for &w in &tiled_clients {
+                    if Some(w) == active_tab {
+                        if let Some(c) = self.client_state.get_client_mut(w) {
+                            c.mapped = true;
+                        }
+                        let _ = self.context.connection.map_window(w);
+                        let _ = self.set_wm_state(w, WmState::Normal);
+                        let mut geom = usable_rect;
+                        geom.width = geom.width.saturating_sub(2 * self.layout_config.border_width);
+                        geom.height = geom.height.saturating_sub(2 * self.layout_config.border_width);
+                        apply_layout_with_border(
+                            &self.context.connection,
+                            &[w],
+                            &[geom],
+                            self.layout_config.border_width,
+                        )?;
+                    } else if let Some(c) = self.client_state.get_client_mut(w)
+                        && c.mapped {
+                            c.mapped = false;
+                            let _ = self.context.connection.unmap_window(w);
+                            let _ = self.set_wm_state(w, WmState::Iconic);
+                        }
+                }
+            } else {
+                // Leaving or outside Tabbed layout: ensure all managed tiled windows on current workspace are mapped
+                if mon_ws == self.current_workspace {
+                    let ws_clients = self.workspace_manager.get(mon_ws).map(|ws| ws.clients.clone()).unwrap_or_default();
+                    for &w in &ws_clients {
+                        if let Some(c) = self.client_state.get_client_mut(w)
+                            && !c.mapped && !c.is_floating() && !c.is_fullscreen() {
+                                c.mapped = true;
+                                let _ = self.context.connection.map_window(w);
+                                let _ = self.set_wm_state(w, WmState::Normal);
+                            }
                     }
+                }
+
+                let visible_tiled = self.client_state.visible_tiled_clients_on_workspace(mon_ws);
+
+                if !visible_tiled.is_empty() {
+                    let pairs = self.get_workspace_window_geometries(mon_ws, &usable_rect);
+
+                    let windows: Vec<Window> = pairs.iter().map(|(w, _)| *w).collect();
+                    let geometries: Vec<Rect> = pairs.iter().map(|(_, r)| *r).collect();
+                    apply_layout_with_border(
+                        &self.context.connection,
+                        &windows,
+                        &geometries,
+                        self.layout_config.border_width,
+                    )?;
+
+                    // If Monocle layout, raise the focused window above other tiled windows
+                    if ws_layout == LayoutType::Monocle
+                        && let Some(focused) = self.workspace_focus.focused_window_on(mon_ws) {
+                            let _ = self.context.connection.configure_window(
+                                focused,
+                                &ConfigureWindowAux::default().stack_mode(StackMode::ABOVE),
+                            );
+                        }
+                }
             }
 
             // Keep all mapped floating windows on this monitor's workspace stacked above tiled windows
@@ -1330,7 +1494,21 @@ impl WindowManager {
             c.border_color = Some(self.border_config.focused_color);
         }
 
-        // 3. Set X11 input focus
+        // 3. Update internal focus tracking first so retile() knows the new active window
+        self.client_state.focus(window);
+        let ws = self
+            .client_state
+            .get_client(window)
+            .map(|c| c.workspace)
+            .unwrap_or(self.current_workspace);
+        self.workspace_focus.focus(ws, window);
+
+        // In Tabbed layout, retile immediately to map the new tab and unmap inactive tabs
+        if self.workspace_manager.get(ws).map(|w| w.layout) == Some(LayoutType::Tabbed) {
+            let _ = self.retile();
+        }
+
+        // 4. Set X11 input focus
         let hints = crate::icccm::get_wm_hints(&self.context.connection, window)
             .ok()
             .flatten()
@@ -1344,21 +1522,12 @@ impl WindowManager {
             );
         }
 
-        // 4. Raise window in stacking order
+        // 5. Raise window in stacking order
         let aux = ConfigureWindowAux::default().stack_mode(StackMode::ABOVE);
         let _ = self.context.connection.configure_window(window, &aux);
 
-        // 5. Send WM_TAKE_FOCUS if supported by client (ICCCM)
+        // 6. Send WM_TAKE_FOCUS if supported by client (ICCCM)
         let _ = self.send_take_focus_if_supported(window);
-
-        // 6. Update internal focus tracking
-        self.client_state.focus(window);
-        let ws = self
-            .client_state
-            .get_client(window)
-            .map(|c| c.workspace)
-            .unwrap_or(self.current_workspace);
-        self.workspace_focus.focus(ws, window);
 
         // 7. Update EWMH _NET_ACTIVE_WINDOW
         let _ = self.update_ewmh_active_window();
@@ -1462,8 +1631,15 @@ impl WindowManager {
         direction: Direction,
         wrap: bool,
     ) -> Result<Option<Window>, X11Error> {
-        let current = self.focused_window();
         let current_ws = self.current_workspace;
+        if self.workspace_manager.get(current_ws).map(|ws| ws.layout) == Some(LayoutType::Tabbed) {
+            match direction {
+                Direction::Right | Direction::Down => self.focus_next_tab()?,
+                Direction::Left | Direction::Up => self.focus_prev_tab()?,
+            }
+            return Ok(self.focused_window());
+        }
+        let current = self.focused_window();
         let visible_tiled = self.client_state.visible_tiled_clients_on_workspace(current_ws);
         if visible_tiled.is_empty() {
             return Ok(None);
@@ -2358,10 +2534,18 @@ impl WindowManager {
     pub fn handle_unmap_notify(&mut self, window: Window) -> Result<(), X11Error> {
         // If the window belongs to an inactive workspace, it was unmapped intentionally
         // by the window manager during a workspace switch. Keep it tracked on its workspace!
-        if let Some(ws) = self.workspace_manager.find_workspace_for(window)
-            && ws != self.current_workspace {
+        if let Some(ws) = self.workspace_manager.find_workspace_for(window) {
+            if ws != self.current_workspace {
                 return Ok(());
             }
+            // In Tabbed layout, inactive tabs are intentionally kept unmapped by the WM!
+            if let Some(wsobj) = self.workspace_manager.get(ws)
+                && wsobj.layout == LayoutType::Tabbed
+                && wsobj.contains(window)
+            {
+                return Ok(());
+            }
+        }
         if self.scratchpad.client == Some(window) {
             self.scratchpad.is_visible = false;
         }
@@ -2374,24 +2558,34 @@ impl WindowManager {
         self.stats.property_notifications += 1;
 
         if event.atom == AtomEnum::WM_HINTS.into() {
-            if let Ok(Some(hints)) = get_wm_hints(&self.context.connection, event.window)
-                && hints.is_urgent {
+            if let Ok(Some(hints)) = get_wm_hints(&self.context.connection, event.window) {
+                let is_urgent = hints.is_urgent;
+                if let Some(c) = self.client_state.get_client_mut(event.window) {
+                    c.urgent = is_urgent;
+                }
+                if is_urgent {
                     let _ = set_window_border_color(
                         &self.context.connection,
                         event.window,
                         self.border_config.urgent_color,
                     );
                 }
+                let _ = self.render_statusbar();
+            }
         } else if event.atom == AtomEnum::WM_NORMAL_HINTS.into() {
             let _ = get_wm_normal_hints(&self.context.connection, event.window);
-        } else if (event.atom == AtomEnum::WM_NAME.into() || event.atom == self.atoms.net_wm_name)
-            && Some(event.window) == self.focused_window()
-        {
-            let title = self.get_window_title(event.window);
-            if let Some(ref mut bar) = self.statusbar {
-                bar.set_title(&title);
+        } else if event.atom == AtomEnum::WM_NAME.into() || event.atom == self.atoms.net_wm_name {
+            if Some(event.window) == self.focused_window() {
+                let title = self.get_window_title(event.window);
+                if let Some(ref mut bar) = self.statusbar {
+                    bar.set_title(&title);
+                }
             }
-            let _ = self.render_statusbar();
+            if let Some(ws) = self.workspace_manager.find_workspace_for(event.window)
+                && ws == self.current_workspace
+            {
+                let _ = self.render_statusbar();
+            }
         }
 
         Ok(())
@@ -2560,17 +2754,39 @@ impl WindowManager {
                 self.retile()?;
                 self.render_statusbar().ok();
             }
+            Action::FocusNextTab => {
+                self.focus_next_tab()?;
+            }
+            Action::FocusPrevTab => {
+                self.focus_prev_tab()?;
+            }
+            Action::MoveTabLeft => {
+                self.move_tab_left()?;
+            }
+            Action::MoveTabRight => {
+                self.move_tab_right()?;
+            }
+            Action::SelectTab(index) => {
+                self.select_tab(index)?;
+            }
         }
         Ok(())
     }
 
     /// Swaps the currently focused window with its spatial neighbor in the given direction.
     pub fn swap_in_direction(&mut self, direction: Direction) -> Result<Option<Window>, X11Error> {
+        let current_ws = self.current_workspace;
+        if self.workspace_manager.get(current_ws).map(|ws| ws.layout) == Some(LayoutType::Tabbed) {
+            match direction {
+                Direction::Right | Direction::Down => self.move_tab_right()?,
+                Direction::Left | Direction::Up => self.move_tab_left()?,
+            }
+            return Ok(self.focused_window());
+        }
         let current = match self.focused_window() {
             Some(w) => w,
             None => return Ok(None),
         };
-        let current_ws = self.current_workspace;
         let visible_tiled = self.client_state.visible_tiled_clients_on_workspace(current_ws);
         if visible_tiled.len() < 2 {
             return Ok(None);
@@ -2641,6 +2857,52 @@ impl WindowManager {
     /// - Mod + Right Click: focus and drag window to resize.
     /// - Normal Left Click: focus clicked window and replay event to client.
     pub fn handle_button_press(&mut self, event: &ButtonPressEvent) -> Result<(), X11Error> {
+        // Statusbar mouse interaction (Tab clicks and wheel switching)
+        if let Some(ref bar) = self.statusbar
+            && event.event == bar.window_id
+        {
+            let click_x = event.event_x as i32;
+            let click_y = event.event_y as i32;
+
+            // Mouse wheel over tab region
+            if self.config.tab_config.wheel_switch && (event.detail == 4 || event.detail == 5)
+                && let Some(first) = bar.tab_rects.first()
+                && let Some(last) = bar.tab_rects.last()
+            {
+                let min_x = first.1.x;
+                let max_x = last.1.x + last.1.width as i32;
+                if click_x >= min_x && click_x <= max_x {
+                    if event.detail == 4 {
+                        self.focus_prev_tab()?;
+                    } else {
+                        self.focus_next_tab()?;
+                    }
+                    return Ok(());
+                }
+            }
+
+            // Direct tab pill clicks (Left click: focus, Middle click: close)
+            if self.config.tab_config.mouse {
+                for &(win, rect) in &bar.tab_rects {
+                    if click_x >= rect.x
+                        && click_x < rect.x + rect.width as i32
+                        && click_y >= rect.y
+                        && click_y < rect.y + rect.height as i32
+                    {
+                        if event.detail == 1 {
+                            self.focus_client(win)?;
+                            return Ok(());
+                        } else if event.detail == 2 {
+                            let _ = self.kill_client(win);
+                            return Ok(());
+                        }
+                    }
+                }
+            }
+
+            return Ok(());
+        }
+
         let window = if self.client_state.contains(event.child) {
             event.child
         } else if self.client_state.contains(event.event) {

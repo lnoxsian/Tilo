@@ -145,6 +145,8 @@ pub struct Statusbar {
     pub color_scheme: ColorScheme,
     /// Optional graphical text and shape renderer.
     pub renderer: Option<crate::render::Renderer>,
+    /// Hit-test geometries for clickable tabs in tabbed layout: (client_window, tab_rect).
+    pub tab_rects: Vec<(u32, Rect)>,
 }
 
 impl Statusbar {
@@ -161,6 +163,7 @@ impl Statusbar {
             modules,
             color_scheme,
             renderer: None,
+            tab_rects: Vec::new(),
         }
     }
 
@@ -267,25 +270,31 @@ impl Statusbar {
     }
 
     /// Renders the complete statusbar UI using the attached [`crate::render::Renderer`].
+    #[allow(clippy::too_many_arguments)]
     pub fn render(
-        &self,
+        &mut self,
         conn: &impl Connection,
         current_ws: u32,
         occupied_ws: &[u32],
         layout_symbol: &str,
         active_title: &str,
+        tabs: Option<&[crate::bar::tabs::TabInfo]>,
+        tab_config: &crate::bar::tabs::TabbedConfig,
     ) -> Result<(), StatusbarError> {
         if let Some(ref r) = self.renderer {
-            r.render_statusbar(
+            let rects = r.render_statusbar(
                 conn,
                 self.window_id,
                 current_ws,
                 occupied_ws,
                 layout_symbol,
                 active_title,
+                tabs,
+                tab_config,
                 &self.modules,
                 &self.color_scheme,
             )?;
+            self.tab_rects = rects;
         }
         Ok(())
     }

@@ -238,10 +238,10 @@ pub fn cycle_layout(current: LayoutType) -> LayoutType {
     match current {
         LayoutType::MasterStack | LayoutType::MasterRight | LayoutType::MasterTop | LayoutType::MasterBottom | LayoutType::CenterMaster => LayoutType::Vertical,
         LayoutType::Vertical | LayoutType::Horizontal => LayoutType::Monocle,
-        LayoutType::Monocle => LayoutType::Bsp,
+        LayoutType::Monocle => LayoutType::Tabbed,
+        LayoutType::Tabbed => LayoutType::Bsp,
         LayoutType::Bsp => LayoutType::Grid,
         LayoutType::Grid => LayoutType::MasterStack,
-        LayoutType::Tabbed => LayoutType::Stacked,
         LayoutType::Stacked => LayoutType::MasterStack,
     }
 }
@@ -738,6 +738,19 @@ pub fn calculate_monocle(
     vec![r; n]
 }
 
+/// Calculates the bounding rectangles for a tabbed layout.
+///
+/// In a tabbed layout, managed client windows each occupy the full content area,
+/// while the window manager keeps only the currently active tab visible and displays
+/// all tabs within the common WM status bar.
+pub fn calculate_tabbed(
+    clients: &[Window],
+    screen_rect: &Rect,
+    config: &LayoutConfig,
+) -> Vec<Rect> {
+    calculate_monocle(clients, screen_rect, config)
+}
+
 /// Calculates the bounding rectangles for a grid layout.
 ///
 /// Divides `n` windows into an even grid of rows and columns.
@@ -840,7 +853,8 @@ pub fn calculate_layout(
         LayoutType::Grid => calculate_grid(clients, screen_rect, config),
         LayoutType::Vertical => calculate_vertical(clients, screen_rect, config),
         LayoutType::Horizontal => calculate_horizontal(clients, screen_rect, config),
-        LayoutType::Monocle | LayoutType::Tabbed | LayoutType::Stacked => {
+        LayoutType::Tabbed => calculate_tabbed(clients, screen_rect, config),
+        LayoutType::Monocle | LayoutType::Stacked => {
             calculate_monocle(clients, screen_rect, config)
         }
         LayoutType::Bsp => {
@@ -1976,12 +1990,12 @@ mod tests {
         assert_eq!(cycle_layout(LayoutType::MasterStack), LayoutType::Vertical);
         assert_eq!(cycle_layout(LayoutType::Vertical), LayoutType::Monocle);
         assert_eq!(cycle_layout(LayoutType::Horizontal), LayoutType::Monocle);
-        assert_eq!(cycle_layout(LayoutType::Monocle), LayoutType::Bsp);
+        assert_eq!(cycle_layout(LayoutType::Monocle), LayoutType::Tabbed);
+        assert_eq!(cycle_layout(LayoutType::Tabbed), LayoutType::Bsp);
         assert_eq!(cycle_layout(LayoutType::Bsp), LayoutType::Grid);
         assert_eq!(cycle_layout(LayoutType::Grid), LayoutType::MasterStack);
 
         // Deferred fallback/loop
-        assert_eq!(cycle_layout(LayoutType::Tabbed), LayoutType::Stacked);
         assert_eq!(cycle_layout(LayoutType::Stacked), LayoutType::MasterStack);
 
         // Parsing

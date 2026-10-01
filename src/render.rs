@@ -8,6 +8,7 @@
 //! - Active window title indication.
 //! - Status metrics rendering (RAM, CPU, Clock, Layout).
 
+use crate::layout::Rect;
 use crate::statusbar::{ColorScheme, StatusModule, StatusbarError, TiloError};
 use crate::x11::X11Error;
 use x11rb::connection::Connection;
@@ -290,9 +291,11 @@ impl Renderer {
         occupied_workspaces: &[u32],
         layout_symbol: &str,
         active_window_title: &str,
+        tabs: Option<&[crate::bar::tabs::TabInfo]>,
+        tab_config: &crate::bar::tabs::TabbedConfig,
         modules: &[Box<dyn StatusModule>],
         color_scheme: &ColorScheme,
-    ) -> Result<(), StatusbarError> {
+    ) -> Result<Vec<(u32, Rect)>, StatusbarError> {
         // 1. Clear background of pixmap
         self.fill_rect(conn, self.pixmap, 0, 0, self.width, self.height, color_scheme.bg)?;
 
@@ -389,8 +392,54 @@ impl Renderer {
             0
         };
 
-        // 5. Render active window title
-        if !active_window_title.is_empty() {
+        let mut tab_rects = Vec::new();
+
+        // 5. Render tabs (in Tabbed mode) OR active window title (in other modes)
+        if let Some(tab_list) = tabs {
+            if !tab_list.is_empty() {
+                let reserved_right = (right_width + 24).max(60);
+                let available_width = (self.width as i16 - cur_x - reserved_right).max(0) as u16;
+                let (geoms, consumed_w) = crate::bar::tabs::calculate_tab_geometries(
+                    tab_list,
+                    cur_x,
+                    available_width,
+                    self.height,
+                    tab_config,
+                    self.char_width,
+                );
+                for geom in &geoms {
+                    let text_w = self.text_width(&geom.label) as i16;
+                    let text_x = geom.rect.x as i16 + ((geom.rect.width as i16 - text_w) / 2).max(2);
+                    if geom.focused {
+                        self.fill_rect(
+                            conn,
+                            self.pixmap,
+                            geom.rect.x as i16,
+                            geom.rect.y as i16,
+                            geom.rect.width as u16,
+                            geom.rect.height as u16,
+                            color_scheme.active_bg,
+                        )?;
+                        self.draw_text(conn, self.pixmap, text_x, baseline, &geom.label, color_scheme.active_fg)?;
+                    } else if geom.urgent {
+                        self.fill_rect(
+                            conn,
+                            self.pixmap,
+                            geom.rect.x as i16,
+                            geom.rect.y as i16,
+                            geom.rect.width as u16,
+                            geom.rect.height as u16,
+                            color_scheme.urgent_bg,
+                        )?;
+                        self.draw_text(conn, self.pixmap, text_x, baseline, &geom.label, color_scheme.urgent_fg)?;
+                    } else {
+                        self.draw_text(conn, self.pixmap, text_x, baseline, &geom.label, color_scheme.fg)?;
+                    }
+                    tab_rects.push((geom.window, geom.rect));
+                }
+                cur_x += consumed_w as i16;
+            }
+        } else if !active_window_title.is_empty() {
             let reserved_right = (right_width + 24).max(100);
             let max_chars = ((self.width as i16 - cur_x - reserved_right) / self.char_width as i16).max(10) as usize;
             let display_title = if active_window_title.chars().count() > max_chars {
@@ -408,10 +457,10 @@ impl Renderer {
             self.draw_text(conn, self.pixmap, right_x, baseline, rt, color_scheme.fg)?;
         }
 
-        // 6. Blit completed frame to visible window
+        // 7. Blit completed frame to visible window
         self.flush_to_window(conn, window)?;
 
-        Ok(())
+        Ok(tab_rects)
     }
 
     /// Frees graphics resources (pixmap, gc, font) allocated on the X server.

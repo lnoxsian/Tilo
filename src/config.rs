@@ -89,6 +89,8 @@ pub struct Config {
     pub bindings: Vec<KeyBind>,
     /// Optional startup/autostart commands.
     pub autostart: Vec<AutostartCmd>,
+    /// Configuration for tabbed layout in status bar.
+    pub tab_config: crate::bar::tabs::TabbedConfig,
 }
 
 impl Default for Config {
@@ -107,6 +109,7 @@ impl Default for Config {
             layout: crate::layout::LayoutType::Bsp,
             bindings: default_keybindings(),
             autostart: Vec::new(),
+            tab_config: crate::bar::tabs::TabbedConfig::default(),
         }
     }
 }
@@ -460,6 +463,46 @@ fn parse_line(
                 config.autostart.push(cmd);
             }
         }
+        "tab_show_index" | "show_tab_index" => {
+            if line.len() < 2 {
+                return Err(ConfigError::ParseError {
+                    line: line_number,
+                    message: "Directive 'tab_show_index' requires 'true' or 'false'".to_string(),
+                });
+            }
+            let val = token_to_string(line[1]).to_lowercase();
+            config.tab_config.show_index = val == "true" || val == "1" || val == "yes";
+        }
+        "tab_max_width" => {
+            if line.len() < 2 {
+                return Err(ConfigError::ParseError {
+                    line: line_number,
+                    message: "Directive 'tab_max_width' requires a numeric value in pixels".to_string(),
+                });
+            }
+            let width = token_to_u32(line[1], line_number, "tab_max_width")?;
+            config.tab_config.max_width = width;
+        }
+        "tab_mouse" => {
+            if line.len() < 2 {
+                return Err(ConfigError::ParseError {
+                    line: line_number,
+                    message: "Directive 'tab_mouse' requires 'true' or 'false'".to_string(),
+                });
+            }
+            let val = token_to_string(line[1]).to_lowercase();
+            config.tab_config.mouse = val == "true" || val == "1" || val == "yes";
+        }
+        "tab_wheel_switch" => {
+            if line.len() < 2 {
+                return Err(ConfigError::ParseError {
+                    line: line_number,
+                    message: "Directive 'tab_wheel_switch' requires 'true' or 'false'".to_string(),
+                });
+            }
+            let val = token_to_string(line[1]).to_lowercase();
+            config.tab_config.wheel_switch = val == "true" || val == "1" || val == "yes";
+        }
         unknown => {
             return Err(ConfigError::InvalidValue {
                 line: line_number,
@@ -671,10 +714,25 @@ fn parse_action(tokens: &[&Token], line: usize, config: &Config) -> Result<Actio
         "layout_master_bottom" => Ok(Action::SetLayout(crate::layout::LayoutType::MasterBottom)),
         "layout_center_master" | "layout_centered_master" | "layout_centermaster" | "layout_centeredmaster" => Ok(Action::SetLayout(crate::layout::LayoutType::CenterMaster)),
         "layout_monocle" => Ok(Action::SetLayout(crate::layout::LayoutType::Monocle)),
+        "layout_tabbed" => Ok(Action::SetLayout(crate::layout::LayoutType::Tabbed)),
         "layout_vertical" | "layout_columns" => Ok(Action::SetLayout(crate::layout::LayoutType::Vertical)),
         "layout_horizontal" | "layout_rows" => Ok(Action::SetLayout(crate::layout::LayoutType::Horizontal)),
         "layout_bsp" => Ok(Action::SetLayout(crate::layout::LayoutType::Bsp)),
         "layout_grid" => Ok(Action::SetLayout(crate::layout::LayoutType::Grid)),
+        "focus_next_tab" | "next_tab" => Ok(Action::FocusNextTab),
+        "focus_prev_tab" | "prev_tab" | "previous_tab" => Ok(Action::FocusPrevTab),
+        "move_tab_left" => Ok(Action::MoveTabLeft),
+        "move_tab_right" => Ok(Action::MoveTabRight),
+        "select_tab" => {
+            if tokens.len() < 2 {
+                return Err(ConfigError::ParseError {
+                    line,
+                    message: "Action 'select_tab' requires a 1-based index argument (e.g. 'select_tab 1')".to_string(),
+                });
+            }
+            let idx = token_to_u32(tokens[1], line, "select_tab")?;
+            Ok(Action::SelectTab(idx as usize))
+        }
         unknown => Err(ConfigError::InvalidValue {
             line,
             value: unknown.to_string(),
@@ -918,5 +976,36 @@ bind $mod+6 layout_grid
         assert_eq!(config.bindings[5].action, Action::SetLayout(crate::layout::LayoutType::MasterBottom));
         assert_eq!(config.bindings[6].action, Action::SetLayout(crate::layout::LayoutType::CenterMaster));
         assert_eq!(config.bindings[7].action, Action::SetLayout(crate::layout::LayoutType::Grid));
+    }
+
+    #[test]
+    fn test_parse_tabbed_config_and_bindings() {
+        let input = r#"
+layout tabbed
+tab_show_index true
+tab_max_width 200
+tab_mouse false
+tab_wheel_switch false
+bind $mod+Tab focus_next_tab
+bind $mod+Shift+Tab focus_prev_tab
+bind $mod+Shift+Left move_tab_left
+bind $mod+Shift+Right move_tab_right
+bind $mod+1 select_tab 1
+"#;
+        let tokens = tokenize(input).unwrap();
+        let config = parse(&tokens).unwrap();
+
+        assert_eq!(config.layout, crate::layout::LayoutType::Tabbed);
+        assert!(config.tab_config.show_index);
+        assert_eq!(config.tab_config.max_width, 200);
+        assert!(!config.tab_config.mouse);
+        assert!(!config.tab_config.wheel_switch);
+
+        assert_eq!(config.bindings.len(), 5);
+        assert_eq!(config.bindings[0].action, Action::FocusNextTab);
+        assert_eq!(config.bindings[1].action, Action::FocusPrevTab);
+        assert_eq!(config.bindings[2].action, Action::MoveTabLeft);
+        assert_eq!(config.bindings[3].action, Action::MoveTabRight);
+        assert_eq!(config.bindings[4].action, Action::SelectTab(1));
     }
 }

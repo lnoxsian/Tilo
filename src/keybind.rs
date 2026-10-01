@@ -126,6 +126,16 @@ pub enum Action {
     RotateMaster,
     /// Set the layout of the current workspace (Phase 27).
     SetLayout(crate::layout::LayoutType),
+    /// Focus the next tab in a tabbed layout.
+    FocusNextTab,
+    /// Focus the previous tab in a tabbed layout.
+    FocusPrevTab,
+    /// Move the active tab to the left (earlier in client order).
+    MoveTabLeft,
+    /// Move the active tab to the right (later in client order).
+    MoveTabRight,
+    /// Directly select a tab by its 1-based index.
+    SelectTab(usize),
 }
 
 /// Represents a single keybinding configuration.
@@ -257,6 +267,8 @@ pub fn default_keybindings() -> Vec<KeyBind> {
         KeyBind::new(MOD_SUPER | MOD_SHIFT, XK_SPACE, Action::ToggleFloating),
         KeyBind::new(MOD_SUPER, XK_SPACE, Action::CycleLayout),
         KeyBind::new(MOD_SUPER, XK_R, Action::RotateMaster),
+        KeyBind::new(MOD_SUPER, XK_TAB, Action::FocusNextTab),
+        KeyBind::new(MOD_SUPER | MOD_SHIFT, XK_TAB, Action::FocusPrevTab),
         KeyBind::new(MOD_SUPER, XK_GRAVE, Action::ToggleScratchpad),
         KeyBind::new(MOD_SUPER | MOD_SHIFT, XK_GRAVE, Action::SetScratchpad),
         // Workspaces 1-9

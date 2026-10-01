@@ -34,6 +34,8 @@ pub struct Client {
     pub floating_geometry: Option<FloatingGeometry>,
     /// Currently applied border color (RGB/hex).
     pub border_color: Option<u32>,
+    /// True if the window has an active urgency hint.
+    pub urgent: bool,
 }
 
 impl Client {
@@ -51,6 +53,7 @@ impl Client {
             layout_state: ClientLayoutState::Tiled,
             floating_geometry: None,
             border_color: None,
+            urgent: false,
         }
     }
 
