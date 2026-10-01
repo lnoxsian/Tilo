@@ -36,17 +36,9 @@ pub enum StatusbarError {
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 
-    /// Parsing failure for system metrics.
-    #[error("Parse error: {0}")]
-    Parse(String),
-
     /// Failed to load font.
     #[error("Failed to load font: {0}")]
     FontLoadError(String),
-
-    /// PATH scanning failure.
-    #[error("Path scan error: {0}")]
-    PathScanError(String),
 
     /// Process spawn error.
     #[error("Spawn error: {0}")]

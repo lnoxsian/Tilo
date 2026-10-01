@@ -4,7 +4,6 @@
 //! that bypass the tiling layout and float freely at arbitrary positions and sizes.
 
 use crate::layout::Rect;
-use x11rb::protocol::xproto::{ConfigureWindowAux, StackMode};
 
 /// Represents the saved geometry of a floating window.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -115,30 +114,6 @@ pub fn clamp_floating_geometry(
     }
 
     geom
-}
-
-/// Creates a `ConfigureWindowAux` configuration to apply floating window dimensions,
-/// optional border width, and top-of-stack stacking mode.
-pub fn floating_configure_aux(
-    geom: &FloatingGeometry,
-    border_width: Option<u32>,
-    raise: bool,
-) -> ConfigureWindowAux {
-    let mut aux = ConfigureWindowAux::new()
-        .x(geom.x)
-        .y(geom.y)
-        .width(geom.width)
-        .height(geom.height);
-
-    if let Some(bw) = border_width {
-        aux = aux.border_width(bw);
-    }
-
-    if raise {
-        aux = aux.stack_mode(StackMode::ABOVE);
-    }
-
-    aux
 }
 
 #[cfg(test)]

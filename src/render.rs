@@ -424,11 +424,6 @@ impl Renderer {
     }
 }
 
-impl Drop for Renderer {
-    fn drop(&mut self) {
-        // Drop cleans up local Rust memory; X server handles cleanup if connection drops
-    }
-}
 
 #[cfg(test)]
 mod tests {

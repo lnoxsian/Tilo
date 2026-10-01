@@ -253,7 +253,7 @@ impl WindowManager {
         let mod_mask = parse_modifier(&config.mod_key).unwrap_or(MOD_SUPER);
         self.mouse_bindings = crate::mouse::default_mouse_bindings(mod_mask);
         let focused = self.focused_window();
-        for &win in &self.client_state.all_clients() {
+        for &win in self.client_state.all_clients() {
             let _ = crate::mouse::update_client_button_grabs(
                 &self.context.connection,
                 win,
@@ -266,28 +266,20 @@ impl WindowManager {
         self.config = config;
 
         // Apply updated border width and colors to all existing client windows
-        let focused = self.focused_window();
-        for &win in &self.client_state.all_clients() {
-            let is_fullscreen = self
-                .client_state
-                .get_client(win)
-                .map(|c| c.fullscreen)
-                .unwrap_or(false);
-            if !is_fullscreen {
+        for client in self.client_state.clients.values_mut() {
+            if !client.fullscreen {
                 let _ = set_window_border_width(
                     &self.context.connection,
-                    win,
+                    client.window,
                     self.border_config.width,
                 );
-                let border_color = if focused == Some(win) {
+                let border_color = if focused == Some(client.window) {
                     self.border_config.focused_color
                 } else {
                     self.border_config.normal_color
                 };
-                let _ = set_window_border_color(&self.context.connection, win, border_color);
-                if let Some(c) = self.client_state.get_client_mut(win) {
-                    c.border_color = Some(border_color);
-                }
+                let _ = set_window_border_color(&self.context.connection, client.window, border_color);
+                client.border_color = Some(border_color);
             }
         }
 
@@ -834,7 +826,7 @@ impl WindowManager {
         update_net_client_list(
             &self.context.connection,
             self.context.root_window,
-            &clients,
+            clients,
             &self.ewmh_atoms,
         )
     }

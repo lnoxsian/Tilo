@@ -897,14 +897,6 @@ pub fn apply_layout(
     Ok(())
 }
 
-/// Applies the computed layout geometries to the actual X11 windows using default border width.
-pub fn apply_layout_rects<C: Connection>(
-    conn: &C,
-    clients: &[Window],
-    rects: &[Rect],
-) -> Result<(), X11Error> {
-    apply_layout_with_border(conn, clients, rects, 2)
-}
 
 /// Applies the computed layout geometries and border widths to the actual X11 windows.
 ///

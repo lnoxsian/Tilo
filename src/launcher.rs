@@ -527,14 +527,6 @@ impl Default for Launcher {
 // PATH Scanning and Caching
 // ---------------------------------------------------------------------------
 
-/// Scans the system `$PATH` for executable files and caches them.
-///
-/// # Returns
-/// A sorted vector of unique executable names.
-pub fn scan_path() -> Result<Vec<String>, TiloError> {
-    let path_var = std::env::var("PATH").unwrap_or_else(|_| "/usr/local/bin:/usr/bin:/bin".to_string());
-    scan_path_from(&path_var)
-}
 
 /// Scans a single binary directory for executable files.
 pub fn scan_single_bin_dir(dir: &std::path::Path) -> (Vec<String>, HashMap<String, String>) {

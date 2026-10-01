@@ -144,36 +144,9 @@ impl ClientState {
         self.clients.remove(&window)
     }
 
-    /// Returns the window IDs of all mapped, non-floating, non-fullscreen clients
-    /// in the order they were managed (master first, then stack windows).
-    pub fn visible_tiled_clients(&self) -> Vec<Window> {
-        self.client_order
-            .iter()
-            .copied()
-            .filter(|&w| {
-                self.clients
-                    .get(&w)
-                    .is_some_and(|c| c.mapped && !c.is_floating() && !c.is_fullscreen())
-            })
-            .collect()
-    }
-
-    /// Returns the window IDs of all clients belonging to the specified workspace.
-    pub fn clients_on_workspace(&self, workspace: u32) -> Vec<Window> {
-        self.client_order
-            .iter()
-            .copied()
-            .filter(|&w| {
-                self.clients
-                    .get(&w)
-                    .is_some_and(|c| c.workspace == workspace)
-            })
-            .collect()
-    }
-
     /// Returns the window IDs of all managed clients across all workspaces.
-    pub fn all_clients(&self) -> Vec<Window> {
-        self.client_order.clone()
+    pub fn all_clients(&self) -> &[Window] {
+        &self.client_order
     }
 
     /// Returns the window IDs of all mapped, non-floating, non-fullscreen clients on a given workspace.
@@ -242,13 +215,6 @@ impl ClientState {
         self.focus_stack.push(window);
     }
 
-    /// Removes focus from a specific window.
-    pub fn remove_focus(&mut self, window: Window) {
-        if let Some(client) = self.clients.get_mut(&window) {
-            client.focused = false;
-        }
-        self.focus_stack.retain(|&w| w != window);
-    }
 
     /// Clears focus from all managed clients.
     pub fn unfocus_all(&mut self) {

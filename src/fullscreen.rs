@@ -98,10 +98,6 @@ impl FullscreenState {
     }
 }
 
-/// Returns true if the given state is fullscreen.
-pub fn is_fullscreen(state: &FullscreenState) -> bool {
-    state.is_fullscreen()
-}
 
 /// Constructs a `ConfigureWindowAux` to apply fullscreen geometry to a window.
 pub fn fullscreen_configure_aux(monitor: &Monitor) -> ConfigureWindowAux {
@@ -134,67 +130,6 @@ pub fn update_net_wm_state_fullscreen(
     crate::ewmh::update_net_wm_state_fullscreen(conn, client_id, is_fullscreen, atoms)
 }
 
-/// Toggles the fullscreen state of a window, saving/restoring geometry and updating EWMH state.
-pub fn toggle_fullscreen_state(
-    conn: &impl x11rb::connection::Connection,
-    window: Window,
-    state: &mut FullscreenState,
-    monitor: &Monitor,
-    atoms: &crate::ewmh::EwmhAtoms,
-) -> Result<(), crate::x11::X11Error> {
-    match state {
-        FullscreenState::None => {
-            let reply = x11rb::protocol::xproto::ConnectionExt::get_geometry(conn, window)?.reply()?;
-            let prev_geom = Geometry::new(
-                reply.x as i32,
-                reply.y as i32,
-                reply.width as u32,
-                reply.height as u32,
-            );
-            let prev_border = reply.border_width as u32;
-
-            let aux = fullscreen_configure_aux(monitor);
-            x11rb::protocol::xproto::ConnectionExt::configure_window(conn, window, &aux)?;
-            update_net_wm_state_fullscreen(conn, window, true, atoms)?;
-
-            *state = FullscreenState::Fullscreen {
-                previous_geometry: prev_geom,
-                previous_border_width: prev_border,
-            };
-        }
-        FullscreenState::Fullscreen {
-            previous_geometry,
-            previous_border_width,
-        } => {
-            let aux = restore_configure_aux(*previous_geometry, *previous_border_width);
-            x11rb::protocol::xproto::ConnectionExt::configure_window(conn, window, &aux)?;
-            update_net_wm_state_fullscreen(conn, window, false, atoms)?;
-
-            *state = FullscreenState::None;
-        }
-    }
-    Ok(())
-}
-
-/// Sets the fullscreen state of a window explicitly to true or false.
-pub fn set_fullscreen_state(
-    conn: &impl x11rb::connection::Connection,
-    window: Window,
-    state: &mut FullscreenState,
-    monitor: &Monitor,
-    atoms: &crate::ewmh::EwmhAtoms,
-    fullscreen: bool,
-) -> Result<(), crate::x11::X11Error> {
-    match (&state, fullscreen) {
-        (FullscreenState::None, true) => {
-            toggle_fullscreen_state(conn, window, state, monitor, atoms)
-        }
-        (FullscreenState::Fullscreen { .. }, false) => {
-            toggle_fullscreen_state(conn, window, state, monitor, atoms)
-        }
-        _ => Ok(()),
-    }
-}
 
 #[cfg(test)]
 mod tests {
