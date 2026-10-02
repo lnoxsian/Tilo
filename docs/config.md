@@ -1,209 +1,446 @@
-# Tilo Window Manager Configuration
+# Configuration
 
-`tilo` is configured through a simple, line-oriented, whitespace-delimited configuration file located at:
+---
 
-```text
-~/.config/tilo/config
+## Config File Location
+
+| Condition | Path |
+|---|---|
+| `$XDG_CONFIG_HOME` is set | `$XDG_CONFIG_HOME/tilo/config` |
+| `$XDG_CONFIG_HOME` is unset | `~/.config/tilo/config` |
+
+If the file is absent on startup, tilo creates the parent directory and writes a built-in template, then parses it. The template contains example values and comments explaining every directive.
+
+---
+
+## Parser
+
+The parser is line-oriented and whitespace-delimited:
+
+- `#` starts a comment and is ignored until end of line, **except** when a `#RGB`, `#RRGGBB`, or `#RRGGBBAA` hex color token follows a directive on the same line.
+- Quoted strings (`"like this"`) preserve internal spaces and allow multi-word font names.
+- Numbers are parsed as `u32` integers or `f32` floats.
+- Boolean values accept `true`/`false`, `1`/`0`, and `yes`/`no`.
+- `$mod` in keybind definitions expands to the configured `mod_key`.
+
+Parse errors report a line number and message. Invalid configurations during hot-reload keep the previous configuration intact.
+
+---
+
+## Defaults
+
+| Setting | Default |
+|---|---|
+| Modifier | `Mod4` (Super / Win key) |
+| Font | `monospace` |
+| Terminal | `foot` |
+| Layout | `bsp` |
+| Border width | `2` px |
+| Inner gap | `8` px |
+| Outer gap | `8` px |
+| Master ratio | `0.60` |
+| Workspace click | enabled |
+| Workspace wheel | enabled |
+| Tab index display | disabled |
+| Tab max width | `160` px |
+| Tab click | enabled |
+| Tab wheel | enabled |
+
+---
+
+## General Directives
+
+### Modifier Key
+
 ```
-(or `$XDG_CONFIG_HOME/tilo/config` if `XDG_CONFIG_HOME` is set).
-
----
-
-## Automatic Initial Configuration Generation
-
-When `tilo` is launched and no configuration file is found at `~/.config/tilo/config` (or `$XDG_CONFIG_HOME/tilo/config`):
-- `tilo` automatically creates the destination directory structure (e.g. `~/.config/tilo/`).
-- `tilo` writes a complete, fully-commented default configuration file populated with default modifier keys, theme palette colors, layout options, status bar behaviors, and the full standard keybinding map.
-- `tilo` loads and applies this freshly generated configuration immediately upon startup.
-
----
-
-## Hot Configuration Reload
-
-`tilo` supports live, hot reloading of its configuration without restarting the window manager or closing running client windows.
-
-### Methods to Reload Configuration:
-
-1. **Default Keybinding:**
-   Press **`Mod4 + Shift + r`** (or `Super + Shift + r`).
-   This triggers an immediate reload of the configuration file from disk.
-
-2. **Custom Config Keybinding:**
-   If defining custom `bind` directives in `~/.config/tilo/config`, you can map any key combination to the `reload` action:
-   ```text
-   bind Mod4+Shift+r reload
-   # or using the $mod variable:
-   bind $mod+Shift+r reload
-   ```
-
-3. **Unix SIGHUP Signal:**
-   Send a `SIGHUP` signal to the running `tilo` process:
-   ```bash
-   pkill -HUP tilo
-   # or
-   kill -HUP <tilo-pid>
-   ```
-
-4. **In Xephyr Test Harness (`./scripts/run-xephyr.sh`):**
-   Type `reload` in the interactive harness prompt:
-   ```text
-   tilo-xephyr [1366x768 :1 bsp]> reload
-   ```
-
-### Safe Atomic Reloading:
-When reloading:
-- Borders, gaps, layouts, master ratios, fonts, themes, status bar elements, and keybindings update dynamically on existing windows and monitors.
-- If the updated configuration has a syntax error or invalid value, the reload fails safely and logs a warning to stderr, keeping the previous valid configuration active and intact.
-
----
-
-## Configuration Directives
-
-### General Directives
-
-| Directive | Description | Default | Example |
-| :--- | :--- | :--- | :--- |
-| `mod_key` (or `mod`) | Primary modifier key for window manager bindings | `Mod4` | `mod_key Mod4` |
-| `terminal` | Default terminal emulator command | `alacritty` | `terminal alacritty` |
-| `font` | Default font for UI elements (status bar, launcher) | `pango:monospace 10` | `font pango:monospace 10` |
-| `layout` | Initial default layout (`bsp`, `master`, `grid`, `tabbed`, `monocle`) | `bsp` | `layout bsp` |
-| `border_width` | Window border width in pixels | `2` | `border_width 2` |
-| `inner_gap` | Gap between adjacent windows in pixels | `8` | `inner_gap 8` |
-| `outer_gap` | Gap between windows and screen edges | `8` | `outer_gap 8` |
-| `master_ratio` | Master window proportion (0.0 to 1.0) | `0.60` | `master_ratio 0.55` |
-
----
-
-## Font Configuration & Dual-Engine Architecture
-
-`tilo` features a high-performance **dual-engine** font and text rendering pipeline:
-
-1. **Anti-Aliased Pango/Cairo Engine:**
-   - Full support for modern TrueType / OpenType fonts, anti-aliased subpixel rendering, and Unicode / Nerd Font icons.
-   - Configured using i3-compatible syntax (`pango:...` or standard font family names).
-   - Bounded metrics caching and lazy surface management (the launcher's surface is freed on close to minimize resident memory).
-
-2. **Zero-Allocation Core X11 Font Engine:**
-   - Direct server-side bitmap rasterization using X11 core font protocols (`poly_text8`, `image_text8`, and `poly_fill_rectangle`).
-   - Completely eliminates client-side image surfaces and font cache mapping, maintaining a resident memory footprint of **< 2.5 MB**.
-   - Activated automatically by specifying core font names (`fixed`, `6x13`, `9x15`) or using the `core:` prefix (e.g., `font core:fixed`).
-
-### Supported Font Syntaxes:
-
-| Syntax Type | Engine | Memory Profile | Example |
-| :--- | :--- | :--- | :--- |
-| Explicit Pango | Pango/Cairo | Full anti-aliasing | `font pango:monospace 10` |
-| Font Family & Size | Pango/Cairo | Full anti-aliasing | `font JetBrainsMono Nerd Font 10` |
-| Core X11 Font | Core Engine | Ultra-low RAM (< 2.5 MB) | `font fixed` or `font 6x13` |
-| Explicit Core Prefix | Core Engine | Ultra-low RAM (< 2.5 MB) | `font core:fixed` |
-
-### Building for Ultra-Minimal Memory Footprint:
-For embedded devices or minimalist setups desiring the absolute lowest memory footprint without linking C GUI libraries (`libcairo`, `libpango`, `libharfbuzz`, `libfontconfig`):
-```bash
-cargo build --release --no-default-features
-```
-In this mode, `tilo` links only standard system libraries (`libc` and X11/xcb), consuming only **~2.5 MB VmRSS** and **~212 kB private heap/stack memory**.
-
----
-
-## Unified Theme & Colors
-
-`tilo` features a centralized theme palette that applies consistently across window borders, status bar items, and the application launcher.
-
-### Global Theme Palette:
-```text
-bg #1a1b26           # Window manager / bar / launcher background
-fg #c0caf5           # Primary text foreground
-active_bg #7aa2f7    # Active workspace, selected launcher item, layout badge
-active_fg #15161e    # Text on active backgrounds
-urgent_bg #f7768e    # Urgent workspace or window indicator
-urgent_fg #15161e    # Text on urgent backgrounds
-inactive_fg #555566  # Dimmed text (empty workspaces, inactive items)
+mod_key Mod4
 ```
 
-### Window Border Colors:
-```text
+Sets the primary modifier. Also accepted as `mod` or `modifier`.
+
+Available modifiers: `Shift`, `Control` / `Ctrl`, `Alt` / `Mod1`, `Mod2`, `Mod3`, `Mod4` / `Super` / `Win`, `Mod5`, `Lock`.
+
+### Font
+
+```
+font "monospace 10"
+font "JetBrainsMono Nerd Font 11"
+font 6x13
+```
+
+The font applies to both the status bar and launcher unless overridden by `bar_font` or `launcher_font`. See [themes.md](themes.md) for font format details.
+
+### Terminal
+
+```
+terminal foot
+terminal alacritty
+terminal "xterm -fa monospace -fs 12"
+```
+
+Command used by `bind $mod+Return spawn $terminal` in the default bindings.
+
+### Default Layout
+
+```
+layout bsp
+layout master
+layout grid
+layout tabbed
+layout monocle
+```
+
+See [layouts.md](layouts.md) for all layout names. This sets the starting layout for every workspace.
+
+### Border Width
+
+```
+border_width 2
+```
+
+Width of the X11 border around managed windows, in pixels.
+
+### Gaps
+
+```
+inner_gap 8    # space between neighboring tiled windows
+outer_gap 8    # space between windows and monitor edges
+```
+
+Both values are in pixels. Set to `0` to disable gaps.
+
+### Master Ratio
+
+```
+master_ratio 0.60
+```
+
+Proportion of the usable area given to the master pane in master-oriented layouts. Must be between `0.0` and `1.0`. Default is `0.60`.
+
+---
+
+## Theme and Color Directives
+
+See [themes.md](themes.md) for the full color system reference. Quick reference:
+
+```
+# Global palette
+bg #1a1b26
+fg #c0caf5
+active_bg #7aa2f7
+active_fg #15161e
+urgent_bg #f7768e
+urgent_fg #15161e
+inactive_fg #555566
+
+# Window borders
 border_focused #ffffff
 border_normal #444444
 border_urgent #ff0000
-```
 
-### Component-Specific Overrides (Optional):
-You can override colors specifically for the status bar or the launcher without affecting other UI elements:
-```text
-# Status bar overrides:
-bar_bg #1a1b26
+# Status bar overrides (prefix: bar_)
+bar_bg #16161e
 bar_fg #c0caf5
-bar_active_bg #7aa2f7
-bar_active_fg #15161e
-bar_border #7aa2f7
+bar_font "monospace 10"
 
-# Launcher overrides:
+# Launcher overrides (prefix: launcher_)
 launcher_bg #1a1b26
 launcher_fg #c0caf5
-launcher_selected_bg #7aa2f7
-launcher_selected_fg #15161e
-launcher_border #7aa2f7
+launcher_font "monospace 11"
 ```
 
-### Keybinding Syntax (`bind`)
+---
 
-Format:
-```text
-bind <KeyCombo> <Action> [Args...]
+## Keybindings
+
+### Syntax
+
+```
+bind <Modifier+...+Key> <Action> [Arguments...]
 ```
 
-Variables:
-- `$mod` is automatically replaced with the configured `mod_key`.
+`$mod` expands to the configured `mod_key`. The key name is case-insensitive and follows X11 keysym names (e.g. `Return`, `space`, `h`, `F1`, `Tab`, `grave`, `bracketleft`).
 
-#### Example Keybindings:
-```text
-# Window Management & Control
-bind $mod+Shift+r           reload
-bind $mod+q                 close
-bind $mod+Shift+q           exit
-bind $mod+Return            spawn alacritty
-bind $mod+d                 launcher
+If **any** `bind` directive is present, it completely replaces the built-in default binding list. Start from the generated template to retain standard bindings.
 
-# Layout & Tiling
-bind $mod+space             cycle_layout
-bind $mod+Shift+space       toggle_floating
-bind $mod+f                 toggle_fullscreen
-bind $mod+r                 rotate_master
+### Available Actions
 
-# Spatial Navigation (Vim keys)
-bind $mod+h                 focus left
-bind $mod+j                 focus down
-bind $mod+k                 focus up
-bind $mod+l                 focus right
+| Action | Arguments | Description |
+|---|---|---|
+| `spawn` | `<command>` | Launch via `sh -c "<command>"` |
+| `close` | — | Close focused window (ICCCM WM_DELETE_WINDOW) |
+| `focus` | `left`/`right`/`up`/`down` | Focus window in direction |
+| `move` | `left`/`right`/`up`/`down` | Move focused window in direction |
+| `workspace` | `1`–`9` | Switch to workspace |
+| `move_to_workspace` | `1`–`9` | Send focused window to workspace |
+| `toggle_floating` | — | Toggle floating state |
+| `toggle_fullscreen` | — | Toggle fullscreen state |
+| `launcher` | — | Open application launcher |
+| `toggle_scratchpad` | — | Show/hide the scratchpad window |
+| `set_scratchpad` | — | Designate focused window as scratchpad |
+| `focus_monitor` | `left`/`right` | Focus adjacent monitor |
+| `move_to_monitor` | `left`/`right` | Send window to adjacent monitor |
+| `resize` | `left`/`right`/`up`/`down` | Resize floating window |
+| `split` | `vertical`/`horizontal` | Preselect BSP split direction |
+| `cycle_layout` | — | Cycle to next layout |
+| `rotate_master` | — | Rotate master orientation |
+| `layout` | `<layout_name>` | Switch to specific layout |
+| `focus_tab` | `next`/`prev` | Focus next/previous tab |
+| `close_tab` | — | Close focused tab |
+| `reload` | — | Hot-reload configuration |
+| `exit` | — | Quit tilo |
+| `exit_menu` | — | Open exit/power menu in launcher |
+| `quit` | — | Alias for `exit` |
 
-# Spatial Navigation (Arrow keys)
-bind $mod+Left              focus left
-bind $mod+Down              focus down
-bind $mod+Up                focus up
-bind $mod+Right             focus right
+### Default Bindings
 
-# Window Moving
-bind $mod+Shift+h           move left
-bind $mod+Shift+j           move down
-bind $mod+Shift+k           move up
-bind $mod+Shift+l           move right
+```
+bind $mod+Return       spawn foot
+bind $mod+d            launcher
+bind $mod+Shift+q      exit_menu
+bind $mod+q            close
+bind $mod+Shift+r      reload
 
-# Workspaces (1-9)
-bind $mod+1                 workspace 1
-bind $mod+Shift+1           move_to_workspace 1
-bind $mod+2                 workspace 2
-bind $mod+Shift+2           move_to_workspace 2
+# Focus
+bind $mod+h            focus left
+bind $mod+j            focus down
+bind $mod+k            focus up
+bind $mod+l            focus right
+bind $mod+Left         focus left
+bind $mod+Down         focus down
+bind $mod+Up           focus up
+bind $mod+Right        focus right
+
+# Move
+bind $mod+Shift+h      move left
+bind $mod+Shift+j      move down
+bind $mod+Shift+k      move up
+bind $mod+Shift+l      move right
+
+# Workspaces
+bind $mod+1            workspace 1
+bind $mod+2            workspace 2
+bind $mod+3            workspace 3
+bind $mod+4            workspace 4
+bind $mod+5            workspace 5
+bind $mod+6            workspace 6
+bind $mod+7            workspace 7
+bind $mod+8            workspace 8
+bind $mod+9            workspace 9
+
+bind $mod+Shift+1      move_to_workspace 1
+bind $mod+Shift+2      move_to_workspace 2
+bind $mod+Shift+3      move_to_workspace 3
+bind $mod+Shift+4      move_to_workspace 4
+bind $mod+Shift+5      move_to_workspace 5
+bind $mod+Shift+6      move_to_workspace 6
+bind $mod+Shift+7      move_to_workspace 7
+bind $mod+Shift+8      move_to_workspace 8
+bind $mod+Shift+9      move_to_workspace 9
+
+# Layouts
+bind $mod+Space        cycle_layout
+bind $mod+r            rotate_master
+bind $mod+Shift+Space  toggle_floating
+bind $mod+f            toggle_fullscreen
+
+# BSP
+bind $mod+v            split vertical
+bind $mod+b            split horizontal
+bind $mod+Ctrl+Left    resize left
+bind $mod+Ctrl+Right   resize right
+bind $mod+Ctrl+Up      resize up
+bind $mod+Ctrl+Down    resize down
 
 # Scratchpad
-bind $mod+grave             toggle_scratchpad
-bind $mod+Shift+grave       set_scratchpad
+bind $mod+grave        toggle_scratchpad
+bind $mod+Shift+grave  set_scratchpad
+
+# Tabs
+bind $mod+Tab          focus_tab next
+bind $mod+Shift+Tab    focus_tab prev
+
+# Monitors
+bind $mod+comma        focus_monitor left
+bind $mod+period       focus_monitor right
+bind $mod+Shift+comma  move_to_monitor left
+bind $mod+Shift+period move_to_monitor right
 ```
 
-### Autostart Directives
+---
 
-Commands that execute when `tilo` initializes:
-```text
-autostart picom --daemon
-autostart feh --bg-scale ~/wallpaper.jpg
+## Status Bar and Tab Directives
+
+```
+workspace_mouse true           # click workspace tags to switch
+workspace_wheel_switch true    # scroll over workspace tags to cycle
+
+tab_show_index false           # prepend 1-based index to tab labels
+tab_max_width 160              # maximum tab pill width in pixels
+tab_mouse true                 # click tab pills to focus; middle-click to close
+tab_wheel_switch true          # scroll over tabs to cycle
+```
+
+---
+
+## Autostart Directives
+
+```
+autostart nm-applet
+autostart dunst
+autostart feh --bg-fill "/path/to/wallpaper.jpg"
+autostart "picom --backend glx"
+```
+
+Commands are parsed into a program and argument vector. They are launched detached after initialization and never awaited. Failures are logged as warnings and do not stop remaining autostart commands.
+
+> [!IMPORTANT]
+> Autostart uses a direct program/argument vector — shell syntax is **not** available. Use `spawn sh -c "..."` in a keybinding instead if shell features are needed.
+
+---
+
+## Hot Reload
+
+Reload the configuration without restarting:
+
+```
+bind $mod+Shift+r  reload
+```
+
+Or from a terminal:
+```bash
+kill -HUP "$(pidof tilo)"
+```
+
+On reload, tilo:
+
+1. Parses the configuration file from disk.
+2. If parsing fails, keeps the previous configuration (no partial application).
+3. If parsing succeeds, applies:
+   - Border colors and widths
+   - Gap sizes and master ratio
+   - Active layout (current and all workspaces)
+   - Key grabs (releases old grabs, installs new ones)
+   - Bar and launcher theme and font
+   - Retiles all workspaces
+
+Running clients are **not** closed or moved during reload.
+
+---
+
+## Window Rules
+
+The rule engine matches windows before their first map and can assign workspace, floating, or fullscreen state.
+
+Match criteria:
+- `WM_CLASS` instance name (exact)
+- `WM_CLASS` class name (exact)
+- Window title (`WM_NAME` / `_NET_WM_NAME`, exact)
+
+Rules are evaluated in order; later rules override earlier ones for the same field.
+
+> [!NOTE]
+> The rule directive is not yet exposed in the user config file. Rule behavior is currently set internally for testing. A documented `rule` directive is planned for a future release.
+
+---
+
+## Example Configuration
+
+```
+# ~/.config/tilo/config
+
+mod_key Mod4
+font "JetBrainsMono 10"
+terminal alacritty
+layout bsp
+border_width 2
+inner_gap 6
+outer_gap 6
+master_ratio 0.55
+
+# Nord theme
+bg #2e3440
+fg #d8dee9
+active_bg #88c0d0
+active_fg #2e3440
+urgent_bg #bf616a
+urgent_fg #2e3440
+inactive_fg #4c566a
+border_focused #88c0d0
+border_normal #3b4252
+border_urgent #bf616a
+
+# Statusbar
+workspace_mouse true
+workspace_wheel_switch true
+tab_show_index true
+tab_max_width 180
+tab_mouse true
+
+# Autostart
+autostart nm-applet
+autostart feh --bg-fill ~/wallpaper.png
+
+# Keybindings
+bind $mod+Return  spawn alacritty
+bind $mod+d       launcher
+bind $mod+q       close
+bind $mod+h       focus left
+bind $mod+j       focus down
+bind $mod+k       focus up
+bind $mod+l       focus right
+bind $mod+Shift+h move left
+bind $mod+Shift+j move down
+bind $mod+Shift+k move up
+bind $mod+Shift+l move right
+bind $mod+1       workspace 1
+bind $mod+2       workspace 2
+bind $mod+3       workspace 3
+bind $mod+4       workspace 4
+bind $mod+5       workspace 5
+bind $mod+6       workspace 6
+bind $mod+7       workspace 7
+bind $mod+8       workspace 8
+bind $mod+9       workspace 9
+bind $mod+Shift+1 move_to_workspace 1
+bind $mod+Shift+2 move_to_workspace 2
+bind $mod+Shift+3 move_to_workspace 3
+bind $mod+Shift+4 move_to_workspace 4
+bind $mod+Shift+5 move_to_workspace 5
+bind $mod+Shift+6 move_to_workspace 6
+bind $mod+Shift+7 move_to_workspace 7
+bind $mod+Shift+8 move_to_workspace 8
+bind $mod+Shift+9 move_to_workspace 9
+bind $mod+Space   cycle_layout
+bind $mod+r       rotate_master
+bind $mod+Shift+Space toggle_floating
+bind $mod+f       toggle_fullscreen
+bind $mod+v       split vertical
+bind $mod+b       split horizontal
+bind $mod+Ctrl+Left  resize left
+bind $mod+Ctrl+Right resize right
+bind $mod+Ctrl+Up    resize up
+bind $mod+Ctrl+Down  resize down
+bind $mod+grave   toggle_scratchpad
+bind $mod+Shift+grave set_scratchpad
+bind $mod+Tab     focus_tab next
+bind $mod+Shift+Tab focus_tab prev
+bind $mod+comma   focus_monitor left
+bind $mod+period  focus_monitor right
+bind $mod+Shift+comma  move_to_monitor left
+bind $mod+Shift+period move_to_monitor right
+bind $mod+Shift+r reload
+bind $mod+Shift+q exit_menu
+```
+
+---
+
+## Safety
+
+> [!CAUTION]
+> Always test configuration changes in Xephyr before reloading a production display. An invalid `bind` can leave you without a way to close windows or exit the WM.
+
+Use the Xephyr harness with your config:
+```bash
+./scripts/run-xephyr.sh --config ~/.config/tilo/config
 ```

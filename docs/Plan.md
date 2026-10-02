@@ -1,3 +1,72 @@
+ # Tilo Project Plan and Delivery Guide
+
+This is the implementation-backed plan for Tilo, a single-process Linux/X11 window manager. The project includes tiling, floating and fullscreen clients, workspaces, XRandR monitors, keyboard and mouse input, an integrated bar and launcher, hot reload, scratchpad behavior, and ICCCM/EWMH support.
+
+## Boundary
+
+Tilo is a single binary. It does not provide Wayland, a compositor, wallpaper management, notifications, a terminal emulator, a file manager, or a plugin/scripting runtime. Those remain external programs.
+
+## Build Prerequisites
+
+Install Rust stable with edition 2024 support, Cargo, GNU Make, an X11 development environment, and `pkg-config`. The default `pango` feature also needs Cairo/Pango development libraries. Xephyr and ordinary X11 test clients are required for isolated integration testing.
+
+Dependencies are intentionally small: `x11rb`, `libc`, `thiserror`, and optional `cairo-rs`/`pangocairo`. The default release profile uses `opt-level = "z"`, LTO, one codegen unit, aborting panics, and symbol stripping.
+
+## Build and Test
+
+```bash
+cargo check
+cargo build
+cargo test
+cargo build --release
+
+make
+make release
+make test
+make test-xephyr
+make test-xephyr-release
+make test-layouts
+make clean
+make install
+```
+
+For the core-font renderer without Pango/Cairo:
+
+```bash
+cargo build --release --no-default-features
+```
+
+Version helpers validate or update `VERSION` and `Cargo.toml`: `make version`, `make version-check`, `make bump-patch`, `make bump-minor`, `make bump-major`, and `make set-version V=x.y.z`.
+
+## Test Layers
+
+1. `cargo check` verifies compilation and feature wiring.
+2. `cargo test` covers pure logic and conditional X11 tests.
+3. `make test-xephyr` runs the real WM in a nested display.
+4. `make test-layouts` runs automated Xephyr layout integration tests.
+5. `scripts/run-xephyr.sh` demos launcher, themes, mouse, tabs, workspaces, scratchpad, floating, fullscreen, and reload.
+
+Never take over a normal desktop display for tests; it already has a WM in most sessions.
+
+## Xephyr Harness
+
+The harness supports `1366x768`, `1920x1080`, `1280x720`, `854x480`, and arbitrary `WIDTHxHEIGHT`, plus `--demo`, `--layout`, `--theme`, `--config`, `--release`, `--non-interactive`, and `--automated-tests`.
+
+```bash
+./scripts/run-xephyr.sh --res 1280x720 --demo all
+./scripts/run-xephyr.sh --layout bsp --non-interactive
+./scripts/run-xephyr.sh --theme nord --demo theme
+```
+
+## Extension Checklist
+
+Protocol behavior belongs in `src/x11/` and an event/action handler; client state in `src/client/`; geometry in `src/layout/`; workspace/output behavior in `src/workspace/` or `src/monitor/`; key syntax in `src/input/keybind.rs` and config action mapping; visible UI in `src/bar/`, `src/launcher/`, or `src/render/`; user settings in `Config`, its parser, and the generated template.
+
+For every state mutation, update related X11 properties, focus/border state, bar hit rectangles, and retile behavior. Add a regression test at the narrowest layer that proves the change.
+
+## Risk Areas
+
+X11 behavior depends on server extensions and client compliance. `/proc` metrics are Linux-specific. Direct autostart and shell-backed `spawn` have different quoting semantics. Reload must preserve the old config on every parse or grab failure. Monitor hotplug can invalidate geometry while clients move. Rendering depends on available fonts and feature flags. These concerns require Xephyr coverage, not weaker unit tests.
 # Minimal Rust X11 Tiling Window Manager
 
 ## Project Overview
