@@ -27,22 +27,26 @@ impl WorkspaceModule {
 
     pub fn set_workspace(&mut self, current: u32, occupied: &[u32]) {
         self.current_workspace = current;
-        self.occupied_workspaces = occupied.to_vec();
+        self.occupied_workspaces.clear();
+        self.occupied_workspaces.extend_from_slice(occupied);
         self.rebuild_text();
     }
 
     fn rebuild_text(&mut self) {
-        let mut parts = Vec::new();
+        self.cached_text.clear();
+        use std::fmt::Write;
         for ws in 1..=9 {
+            if ws > 1 {
+                self.cached_text.push(' ');
+            }
             if ws == self.current_workspace {
-                parts.push(format!("[{}]", ws));
+                let _ = write!(&mut self.cached_text, "[{}]", ws);
             } else if self.occupied_workspaces.contains(&ws) {
-                parts.push(format!("{}:*", ws));
+                let _ = write!(&mut self.cached_text, "{}:*", ws);
             } else {
-                parts.push(format!("{}", ws));
+                let _ = write!(&mut self.cached_text, "{}", ws);
             }
         }
-        self.cached_text = parts.join(" ");
     }
 }
 
@@ -179,12 +183,17 @@ impl TitleModule {
     }
 
     pub fn set_title(&mut self, title: &str) {
-        self.title = title.to_string();
-        if self.title.chars().count() > self.max_length {
-            let truncated: String = self.title.chars().take(self.max_length - 3).collect();
-            self.cached_text = format!("{}...", truncated);
+        if self.title == title {
+            return;
+        }
+        self.title.clear();
+        self.title.push_str(title);
+        self.cached_text.clear();
+        if let Some((idx, _)) = title.char_indices().nth(self.max_length.saturating_sub(3)) {
+            self.cached_text.push_str(&title[..idx]);
+            self.cached_text.push_str("...");
         } else {
-            self.cached_text = self.title.clone();
+            self.cached_text.push_str(title);
         }
     }
 }

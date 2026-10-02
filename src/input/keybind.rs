@@ -164,16 +164,27 @@ impl KeyBind {
 
 /// Parses a string representation of a modifier key into its bitmask.
 pub fn parse_modifier(name: &str) -> Option<u16> {
-    match name.to_lowercase().as_str() {
-        "shift" => Some(MOD_SHIFT),
-        "lock" | "capslock" => Some(MOD_LOCK),
-        "control" | "ctrl" => Some(MOD_CONTROL),
-        "mod1" | "alt" => Some(MOD_ALT),
-        "mod2" => Some(MOD_MOD2),
-        "mod3" => Some(MOD_MOD3),
-        "mod4" | "super" | "win" => Some(MOD_SUPER),
-        "mod5" => Some(MOD_MOD5),
-        _ => None,
+    if name.eq_ignore_ascii_case("shift") {
+        Some(MOD_SHIFT)
+    } else if name.eq_ignore_ascii_case("lock") || name.eq_ignore_ascii_case("capslock") {
+        Some(MOD_LOCK)
+    } else if name.eq_ignore_ascii_case("control") || name.eq_ignore_ascii_case("ctrl") {
+        Some(MOD_CONTROL)
+    } else if name.eq_ignore_ascii_case("mod1") || name.eq_ignore_ascii_case("alt") {
+        Some(MOD_ALT)
+    } else if name.eq_ignore_ascii_case("mod2") {
+        Some(MOD_MOD2)
+    } else if name.eq_ignore_ascii_case("mod3") {
+        Some(MOD_MOD3)
+    } else if name.eq_ignore_ascii_case("mod4")
+        || name.eq_ignore_ascii_case("super")
+        || name.eq_ignore_ascii_case("win")
+    {
+        Some(MOD_SUPER)
+    } else if name.eq_ignore_ascii_case("mod5") {
+        Some(MOD_MOD5)
+    } else {
+        None
     }
 }
 
@@ -213,21 +224,26 @@ pub fn parse_keysym(name: &str) -> Option<Keysym> {
 
 /// Parses a keybinding specification (e.g., `"Mod4+Return"`, `"Mod4+Shift+q"`) with an Action.
 pub fn parse_keybind(spec: &str, action: Action) -> Result<KeyBind, String> {
-    let parts: Vec<&str> = spec.split('+').map(|s| s.trim()).collect();
-    if parts.is_empty() {
+    let trimmed = spec.trim();
+    if trimmed.is_empty() {
         return Err("Empty keybind specification".to_string());
     }
 
-    let mut modifiers = 0u16;
-    let key_part = match parts.last() {
-        Some(k) => k,
-        None => return Err("Missing key in keybind specification".to_string()),
+    let (mods_part, key_part) = match trimmed.rsplit_once('+') {
+        Some((m, k)) => (Some(m), k.trim()),
+        None => (None, trimmed),
     };
 
-    for &mod_name in &parts[..parts.len() - 1] {
-        match parse_modifier(mod_name) {
-            Some(mask) => modifiers |= mask,
-            None => return Err(format!("Unknown modifier: {}", mod_name)),
+    let mut modifiers = 0u16;
+    if let Some(mods) = mods_part {
+        for mod_name in mods.split('+').map(|s| s.trim()) {
+            if mod_name.is_empty() {
+                continue;
+            }
+            match parse_modifier(mod_name) {
+                Some(mask) => modifiers |= mask,
+                None => return Err(format!("Unknown modifier: {}", mod_name)),
+            }
         }
     }
 

@@ -427,8 +427,8 @@ impl Launcher {
         )?;
 
         // Draw vertical cursor bar at cursor_position
-        let text_before_cursor: String = self.query.chars().take(self.cursor_position).collect();
-        let cursor_offset = renderer.text_width(&text_before_cursor);
+        let byte_offset = self.query.char_indices().nth(self.cursor_position).map(|(i, _)| i).unwrap_or(self.query.len());
+        let cursor_offset = renderer.text_width(&self.query[..byte_offset]);
         let cursor_x = 16 + prefix_width as i16 + cursor_offset as i16;
         let cursor_y = 10i16;
         let cursor_height = 16u16;
@@ -631,27 +631,26 @@ pub fn handle_launcher_keypress(
 pub fn update_launcher_state(launcher: &mut Launcher, action: LauncherAction) {
     match action {
         LauncherAction::InsertChar(c) => {
-            let mut chars: Vec<char> = launcher.query.chars().collect();
-            let pos = launcher.cursor_position.min(chars.len());
-            chars.insert(pos, c);
-            launcher.cursor_position = pos + 1;
-            launcher.query = chars.into_iter().collect();
+            let byte_offset = launcher.query.char_indices().nth(launcher.cursor_position).map(|(i, _)| i).unwrap_or(launcher.query.len());
+            launcher.query.insert(byte_offset, c);
+            launcher.cursor_position += 1;
             launcher.selected_index = 0;
         }
         LauncherAction::DeleteChar => {
-            let mut chars: Vec<char> = launcher.query.chars().collect();
-            let pos = launcher.cursor_position.min(chars.len());
-            if pos > 0 {
-                chars.remove(pos - 1);
-                launcher.cursor_position = pos - 1;
-                launcher.query = chars.into_iter().collect();
-                launcher.selected_index = 0;
+            if launcher.cursor_position > 0 {
+                let char_idx = launcher.cursor_position - 1;
+                if let Some((byte_offset, _)) = launcher.query.char_indices().nth(char_idx) {
+                    launcher.query.remove(byte_offset);
+                    launcher.cursor_position = char_idx;
+                    launcher.selected_index = 0;
+                }
             }
         }
         LauncherAction::DeleteWord => {
-            let mut chars: Vec<char> = launcher.query.chars().collect();
-            let pos = launcher.cursor_position.min(chars.len());
-            if pos > 0 {
+            if launcher.cursor_position > 0 {
+                let total_chars = launcher.query.chars().count();
+                let pos = launcher.cursor_position.min(total_chars);
+                let chars: Vec<char> = launcher.query.chars().collect();
                 let mut i = pos;
                 // Skip trailing whitespace before cursor
                 while i > 0 && chars[i - 1].is_whitespace() {
@@ -661,18 +660,19 @@ pub fn update_launcher_state(launcher: &mut Launcher, action: LauncherAction) {
                 while i > 0 && !chars[i - 1].is_whitespace() {
                     i -= 1;
                 }
-                chars.drain(i..pos);
+                let start_byte = launcher.query.char_indices().nth(i).map(|(b, _)| b).unwrap_or(0);
+                let end_byte = launcher.query.char_indices().nth(pos).map(|(b, _)| b).unwrap_or(launcher.query.len());
+                launcher.query.drain(start_byte..end_byte);
                 launcher.cursor_position = i;
-                launcher.query = chars.into_iter().collect();
                 launcher.selected_index = 0;
             }
         }
         LauncherAction::DeleteLine => {
-            let mut chars: Vec<char> = launcher.query.chars().collect();
-            let pos = launcher.cursor_position.min(chars.len());
-            chars.drain(0..pos);
+            let total_chars = launcher.query.chars().count();
+            let pos = launcher.cursor_position.min(total_chars);
+            let end_byte = launcher.query.char_indices().nth(pos).map(|(b, _)| b).unwrap_or(launcher.query.len());
+            launcher.query.drain(0..end_byte);
             launcher.cursor_position = 0;
-            launcher.query = chars.into_iter().collect();
             launcher.selected_index = 0;
         }
         LauncherAction::MoveToStart => {

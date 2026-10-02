@@ -44,15 +44,15 @@ pub static RELOAD_SIGNAL: AtomicBool = AtomicBool::new(false);
 pub static TERMINATE_SIGNAL: AtomicBool = AtomicBool::new(false);
 
 extern "C" fn sigusr1_handler(_: libc::c_int) {
-    LAUNCHER_SIGNAL.store(true, Ordering::SeqCst);
+    LAUNCHER_SIGNAL.store(true, Ordering::Relaxed);
 }
 
 extern "C" fn sighup_handler(_: libc::c_int) {
-    RELOAD_SIGNAL.store(true, Ordering::SeqCst);
+    RELOAD_SIGNAL.store(true, Ordering::Relaxed);
 }
 
 extern "C" fn sigterm_handler(_: libc::c_int) {
-    TERMINATE_SIGNAL.store(true, Ordering::SeqCst);
+    TERMINATE_SIGNAL.store(true, Ordering::Relaxed);
 }
 
 /// Registers POSIX signal handlers for runtime control.
@@ -399,22 +399,27 @@ impl WindowManager {
             eprintln!("[WARN  tilo::wm] Initial flush error: {}", err);
         }
         let mut last_status_update = std::time::Instant::now();
+        use std::os::fd::AsRawFd;
+        let conn_fd = self.context.connection.stream().as_raw_fd();
+
         while self.running {
-            if TERMINATE_SIGNAL.swap(false, Ordering::SeqCst) {
+            if TERMINATE_SIGNAL.swap(false, Ordering::Relaxed) {
                 let _ = self.perform_graceful_shutdown();
                 break;
             }
-            if LAUNCHER_SIGNAL.swap(false, Ordering::SeqCst) {
+            if LAUNCHER_SIGNAL.swap(false, Ordering::Relaxed) {
                 let _ = self.toggle_launcher();
             }
-            if RELOAD_SIGNAL.swap(false, Ordering::SeqCst) {
+            if RELOAD_SIGNAL.swap(false, Ordering::Relaxed) {
                 let _ = self.reload_config();
             }
 
+            let mut had_activity = false;
             while let Some(event) = match self.context.connection.poll_for_event() {
                 Ok(ev) => ev,
                 Err(err) => return Err(WmError::ConnectionLost(err.to_string())),
             } {
+                had_activity = true;
                 if let Err(err) = self.handle_event(event) {
                     if is_connection_lost_error(&err) {
                         return Err(WmError::ConnectionLost(err.to_string()));
@@ -424,37 +429,32 @@ impl WindowManager {
             }
 
             // Periodic statusbar update if statusbar is active
-            if let Some(ref bar) = self.statusbar {
+            let timeout_ms = if let Some(ref mut bar) = self.statusbar {
                 let time_until_next = bar.time_until_next_update();
                 if time_until_next.is_zero() || last_status_update.elapsed() >= std::time::Duration::from_millis(1000) {
-                    self.update_statusbar();
+                    if self.update_statusbar() {
+                        had_activity = true;
+                    }
                     last_status_update = std::time::Instant::now();
                 }
-            }
-
-            // Always flush pending X11 requests before waiting
-            if let Err(err) = self.context.flush() {
-                if is_connection_lost_error(&err) {
-                    return Err(WmError::ConnectionLost(err.to_string()));
-                }
-                eprintln!("[WARN  tilo::wm] Flush error before poll: {}", err);
-            }
-
-            // Wait for incoming X11 events on the connection socket, waking immediately
-            // upon input or timing out when the next periodic statusbar update is due.
-            // If statusbar is disabled, wake up periodically (every 250ms) to check
-            // termination signals promptly with negligible CPU impact.
-            let timeout_ms = if let Some(ref bar) = self.statusbar {
-                let next = bar.time_until_next_update();
-                (next.as_millis() as i32).clamp(10, 500)
+                (time_until_next.as_millis() as i32).clamp(10, 500)
             } else {
                 250
             };
 
-            use std::os::fd::AsRawFd;
-            let fd = self.context.connection.stream().as_raw_fd();
+            // Only flush pending X11 requests when activity occurred
+            if had_activity
+                && let Err(err) = self.context.flush() {
+                    if is_connection_lost_error(&err) {
+                        return Err(WmError::ConnectionLost(err.to_string()));
+                    }
+                    eprintln!("[WARN  tilo::wm] Flush error before poll: {}", err);
+            }
+
+            // Wait for incoming X11 events on the connection socket, waking immediately
+            // upon input or timing out when the next periodic statusbar update is due.
             let mut pfd = libc::pollfd {
-                fd,
+                fd: conn_fd,
                 events: libc::POLLIN,
                 revents: 0,
             };

@@ -46,6 +46,8 @@ pub struct Client {
     pub border_color: Option<u32>,
     /// True if the window has an active urgency hint.
     pub urgent: bool,
+    /// Cached window title to avoid repeated X11 property queries.
+    pub title: Option<String>,
 }
 
 impl Client {
@@ -64,6 +66,7 @@ impl Client {
             floating_geometry: None,
             border_color: None,
             urgent: false,
+            title: None,
         }
     }
 
@@ -221,18 +224,24 @@ impl ClientState {
     /// Updates focus to the given window, marking it as focused in `Client`
     /// and moving it to the top of the focus stack.
     pub fn focus(&mut self, window: Window) {
-        for (w, client) in self.clients.iter_mut() {
-            client.focused = *w == window;
+        for client in self.clients.values_mut() {
+            if client.window == window {
+                client.focused = true;
+            } else if client.focused {
+                client.focused = false;
+            }
         }
-        self.focus_stack.retain(|&w| w != window);
+        if let Some(pos) = self.focus_stack.iter().position(|&w| w == window) {
+            self.focus_stack.remove(pos);
+        }
         self.focus_stack.push(window);
     }
 
-
     /// Clears focus from all managed clients.
     pub fn unfocus_all(&mut self) {
-        for client in self.clients.values_mut() {
-            client.focused = false;
+        if let Some(&prev) = self.focus_stack.last()
+            && let Some(client) = self.clients.get_mut(&prev) {
+                client.focused = false;
         }
         self.focus_stack.clear();
     }

@@ -180,8 +180,7 @@ impl X11Context {
             | EventMask::STRUCTURE_NOTIFY
             | EventMask::PROPERTY_CHANGE
             | EventMask::KEY_PRESS
-            | EventMask::BUTTON_PRESS
-            | EventMask::POINTER_MOTION;
+            | EventMask::BUTTON_PRESS;
 
         let values = ChangeWindowAttributesAux::default().event_mask(event_mask);
 

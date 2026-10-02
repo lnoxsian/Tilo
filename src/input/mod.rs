@@ -113,17 +113,14 @@ pub fn detect_num_lock_mask<C: Connection>(
     MOD_MOD2 // Fallback to standard Mod2
 }
 
-/// Grabs all registered keybindings globally on the root window.
-///
-/// Binds 4 variations of each combination to handle active NumLock and CapsLock.
-pub fn grab_keys<C: Connection>(
+/// Grabs all registered keybindings globally on the root window using an existing keyboard mapping.
+pub fn grab_keys_with_mapping<C: Connection>(
     conn: &C,
     root: Window,
     bindings: &[KeyBind],
+    mapping: &KeyboardMapping,
+    num_lock: u16,
 ) -> Result<(), X11Error> {
-    let setup = conn.setup();
-    let mapping = KeyboardMapping::query(conn, setup.min_keycode, setup.max_keycode)?;
-    let num_lock = detect_num_lock_mask(conn, &mapping);
     let caps_lock = MOD_LOCK;
 
     for bind in bindings {
@@ -156,6 +153,20 @@ pub fn grab_keys<C: Connection>(
 
     conn.flush()?;
     Ok(())
+}
+
+/// Grabs all registered keybindings globally on the root window.
+///
+/// Binds 4 variations of each combination to handle active NumLock and CapsLock.
+pub fn grab_keys<C: Connection>(
+    conn: &C,
+    root: Window,
+    bindings: &[KeyBind],
+) -> Result<(), X11Error> {
+    let setup = conn.setup();
+    let mapping = KeyboardMapping::query(conn, setup.min_keycode, setup.max_keycode)?;
+    let num_lock = detect_num_lock_mask(conn, &mapping);
+    grab_keys_with_mapping(conn, root, bindings, &mapping, num_lock)
 }
 
 /// Ungrabs all keys from the root window.
@@ -230,7 +241,7 @@ impl InputManager {
         let mapping = KeyboardMapping::query(conn, setup.min_keycode, setup.max_keycode)?;
         self.num_lock_mask = detect_num_lock_mask(conn, &mapping);
 
-        grab_keys(conn, root, &self.bindings)?;
+        grab_keys_with_mapping(conn, root, &self.bindings, &mapping, self.num_lock_mask)?;
         self.mapping = Some(mapping);
         Ok(())
     }
@@ -245,9 +256,11 @@ impl InputManager {
         let setup = conn.setup();
         let mapping = KeyboardMapping::query(conn, setup.min_keycode, setup.max_keycode)?;
         self.num_lock_mask = detect_num_lock_mask(conn, &mapping);
-        self.mapping = Some(mapping);
         self.bindings = new_bindings;
-        re_register_keybindings(conn, &self.bindings, root)
+        let _ = ungrab_keys(conn, root);
+        grab_keys_with_mapping(conn, root, &self.bindings, &mapping, self.num_lock_mask)?;
+        self.mapping = Some(mapping);
+        Ok(())
     }
 
     /// Processes an incoming `KeyPressEvent` and returns the matching action, if any.

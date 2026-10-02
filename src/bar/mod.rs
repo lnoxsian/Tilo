@@ -314,8 +314,7 @@ impl Statusbar {
             let sig = hasher.finish();
 
             if self.last_render_sig == Some(sig) {
-                // Contents are identical: skip re-rendering and socket put_image, fast copy existing pixmap
-                r.copy_pixmap_to_window(conn, self.window_id)?;
+                // Contents are identical: window already displays the current pixmap
                 return Ok(());
             }
 

@@ -431,11 +431,12 @@ impl Renderer {
                 let (w, _) = layout.pixel_size();
                 let width = w as u16;
 
-                if text.len() <= 64 {
+                if text.len() <= 24 && !text.contains(':') {
                     let mut cache = self.text_width_cache.borrow_mut();
-                    if cache.len() < 512 {
-                        cache.insert(text.to_string(), width);
+                    if cache.len() >= 256 {
+                        cache.clear();
                     }
+                    cache.insert(text.to_string(), width);
                 }
 
                 return width;
@@ -562,7 +563,6 @@ impl Renderer {
                     depth,
                     &data,
                 )?;
-                _conn.flush()?;
             }
         Ok(())
     }
@@ -599,6 +599,42 @@ impl Renderer {
         Ok(())
     }
 
+    #[cfg(feature = "pango")]
+    fn fill_rect_cairo(
+        cr: &cairo::Context,
+        x: i16,
+        y: i16,
+        width: u16,
+        height: u16,
+        color: u32,
+    ) {
+        let (r, g, b) = color_to_rgb(color);
+        cr.set_source_rgb(r, g, b);
+        cr.rectangle(x as f64, y as f64, width as f64, height as f64);
+        let _ = cr.fill();
+    }
+
+    #[cfg(feature = "pango")]
+    fn draw_text_cairo(
+        cr: &cairo::Context,
+        layout: &pango::Layout,
+        x: i16,
+        y: i16,
+        text: &str,
+        color: u32,
+    ) {
+        if text.is_empty() {
+            return;
+        }
+        let (r, g, b) = color_to_rgb(color);
+        cr.set_source_rgb(r, g, b);
+        layout.set_text(text);
+        let baseline_px = (layout.baseline() / pango::SCALE) as i16;
+        let top_y = y - baseline_px;
+        cr.move_to(x as f64, top_y as f64);
+        pangocairo::functions::show_layout(cr, layout);
+    }
+
     /// Renders the entire statusbar: background, workspace indicators, layout indicator,
     /// active window title, and right-aligned system modules into the double-buffer pixmap,
     /// then blits the result to the statusbar window.
@@ -616,8 +652,41 @@ impl Renderer {
         modules: &[Box<dyn StatusModule>],
         color_scheme: &ColorScheme,
     ) -> Result<crate::bar::StatusbarHitRects, StatusbarError> {
+        #[cfg(feature = "pango")]
+        let (surface_guard, cr_opt, layout_guard) = if !self.is_core {
+            if let Some(ref surface_cell) = self.surface
+                && let Some(ref layout_cell) = self.layout {
+                    let surface = surface_cell.borrow();
+                    let cr = cairo::Context::new(&*surface).ok();
+                    let layout = layout_cell.borrow();
+                    (Some(surface), cr, Some(layout))
+            } else {
+                (None, None, None)
+            }
+        } else {
+            (None, None, None)
+        };
+
+        let do_fill_rect = |x: i16, y: i16, w: u16, h: u16, col: u32| -> Result<(), StatusbarError> {
+            #[cfg(feature = "pango")]
+            if let Some(ref cr) = cr_opt {
+                Self::fill_rect_cairo(cr, x, y, w, h, col);
+                return Ok(());
+            }
+            self.fill_rect(conn, self.pixmap, x, y, w, h, col)
+        };
+
+        let do_draw_text = |x: i16, y: i16, text: &str, col: u32| -> Result<(), StatusbarError> {
+            #[cfg(feature = "pango")]
+            if let (Some(cr), Some(layout)) = (&cr_opt, &layout_guard) {
+                Self::draw_text_cairo(cr, layout, x, y, text, col);
+                return Ok(());
+            }
+            self.draw_text(conn, self.pixmap, x, y, text, col).map_err(|e| StatusbarError::RenderError(e.to_string()))
+        };
+
         // 1. Clear background of pixmap
-        self.fill_rect(conn, self.pixmap, 0, 0, self.width, self.height, color_scheme.bg)?;
+        do_fill_rect(0, 0, self.width, self.height, color_scheme.bg)?;
 
         let baseline = self.vertical_center_baseline();
         let mut cur_x = 8i16;
@@ -642,9 +711,7 @@ impl Renderer {
 
             if is_active {
                 // Active workspace pill background
-                self.fill_rect(
-                    conn,
-                    self.pixmap,
+                do_fill_rect(
                     cur_x,
                     pill_y,
                     pill_w,
@@ -652,9 +719,7 @@ impl Renderer {
                     color_scheme.active_bg,
                 )?;
                 // Active workspace text
-                self.draw_text(
-                    conn,
-                    self.pixmap,
+                do_draw_text(
                     cur_x + pad,
                     baseline,
                     ws_str,
@@ -662,9 +727,7 @@ impl Renderer {
                 )?;
             } else if is_occupied {
                 // Occupied workspace indicator
-                self.draw_text(
-                    conn,
-                    self.pixmap,
+                do_draw_text(
                     cur_x + pad,
                     baseline,
                     ws_str,
@@ -672,12 +735,10 @@ impl Renderer {
                 )?;
                 // Small indicator dot/asterisk
                 let dot_x = cur_x + pad + ws_text_w as i16;
-                self.draw_text(conn, self.pixmap, dot_x, baseline - 2, "*", color_scheme.active_bg)?;
+                do_draw_text(dot_x, baseline - 2, "*", color_scheme.active_bg)?;
             } else {
                 // Inactive empty workspace
-                self.draw_text(
-                    conn,
-                    self.pixmap,
+                do_draw_text(
                     cur_x + pad,
                     baseline,
                     ws_str,
@@ -695,7 +756,7 @@ impl Renderer {
         } else {
             format!("[{}]", layout_symbol)
         };
-        self.draw_text(conn, self.pixmap, cur_x, baseline, &layout_text, color_scheme.active_bg)?;
+        do_draw_text(cur_x, baseline, &layout_text, color_scheme.active_bg)?;
         cur_x += self.text_width(&layout_text) as i16 + 12;
 
         // 4. Collect right-aligned status modules
@@ -741,29 +802,25 @@ impl Renderer {
                     let text_w = self.text_width(&geom.label) as i16;
                     let text_x = geom.rect.x as i16 + ((geom.rect.width as i16 - text_w) / 2).max(2);
                     if geom.focused {
-                        self.fill_rect(
-                            conn,
-                            self.pixmap,
+                        do_fill_rect(
                             geom.rect.x as i16,
                             geom.rect.y as i16,
                             geom.rect.width as u16,
                             geom.rect.height as u16,
                             color_scheme.active_bg,
                         )?;
-                        self.draw_text(conn, self.pixmap, text_x, baseline, &geom.label, color_scheme.active_fg)?;
+                        do_draw_text(text_x, baseline, &geom.label, color_scheme.active_fg)?;
                     } else if geom.urgent {
-                        self.fill_rect(
-                            conn,
-                            self.pixmap,
+                        do_fill_rect(
                             geom.rect.x as i16,
                             geom.rect.y as i16,
                             geom.rect.width as u16,
                             geom.rect.height as u16,
                             color_scheme.urgent_bg,
                         )?;
-                        self.draw_text(conn, self.pixmap, text_x, baseline, &geom.label, color_scheme.urgent_fg)?;
+                        do_draw_text(text_x, baseline, &geom.label, color_scheme.urgent_fg)?;
                     } else {
-                        self.draw_text(conn, self.pixmap, text_x, baseline, &geom.label, color_scheme.fg)?;
+                        do_draw_text(text_x, baseline, &geom.label, color_scheme.fg)?;
                     }
                     tab_rects.push((geom.window, geom.rect));
                 }
@@ -778,16 +835,23 @@ impl Renderer {
             } else {
                 active_window_title.to_string()
             };
-            self.draw_text(conn, self.pixmap, cur_x, baseline, &display_title, color_scheme.fg)?;
+            do_draw_text(cur_x, baseline, &display_title, color_scheme.fg)?;
         }
 
         // 6. Render right-aligned status modules
         if let Some(ref rt) = right_text {
             let right_x = (self.width as i16 - right_width - 12).max(cur_x + 20);
-            self.draw_text(conn, self.pixmap, right_x, baseline, rt, color_scheme.fg)?;
+            do_draw_text(right_x, baseline, rt, color_scheme.fg)?;
         }
 
         // 7. Blit completed frame to visible window
+        #[cfg(feature = "pango")]
+        {
+            drop(layout_guard);
+            drop(cr_opt);
+            drop(surface_guard);
+        }
+
         #[cfg(feature = "pango")]
         if !self.is_core {
             self.flush_cairo_to_pixmap(conn)?;

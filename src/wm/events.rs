@@ -233,11 +233,13 @@ impl WindowManager {
         } else if event.atom == AtomEnum::WM_NORMAL_HINTS.into() {
             let _ = get_wm_normal_hints(&self.context.connection, event.window);
         } else if event.atom == AtomEnum::WM_NAME.into() || event.atom == self.atoms.net_wm_name {
-            if Some(event.window) == self.focused_window() {
-                let title = self.get_window_title(event.window);
-                if let Some(ref mut bar) = self.statusbar {
+            let title = self.get_window_title(event.window);
+            if let Some(client) = self.client_state.get_client_mut(event.window) {
+                client.title = Some(title.clone());
+            }
+            if Some(event.window) == self.focused_window()
+                && let Some(ref mut bar) = self.statusbar {
                     bar.set_title(&title);
-                }
             }
             if let Some(ws) = self.workspace_manager.find_workspace_for(event.window)
                 && ws == self.current_workspace

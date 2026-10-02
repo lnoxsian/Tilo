@@ -73,7 +73,9 @@ impl WindowManager {
             Some(w) if self.client_state.get_client(w).map(|c| c.floating).unwrap_or(false) => "><>",
             _ => ws_layout.symbol(),
         };
-        let title = focused.map(|w| self.get_window_title(w)).unwrap_or_default();
+        let title = focused
+            .and_then(|w| self.client_state.get_client(w).and_then(|c| c.title.clone()))
+            .unwrap_or_else(|| focused.map(|w| self.get_window_title(w)).unwrap_or_default());
         let tabs = if ws_layout == LayoutType::Tabbed {
             Some(self.get_workspace_tabs(current_ws))
         } else {
