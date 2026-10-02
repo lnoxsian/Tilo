@@ -107,6 +107,15 @@ impl Default for ColorScheme {
 }
 
 /// Core struct representing the built-in statusbar.
+/// Clickable hit targets on the status bar.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct StatusbarHitRects {
+    /// Hit-test geometries for clickable tabs in tabbed layout: (client_window, tab_rect).
+    pub tab_rects: Vec<(u32, Rect)>,
+    /// Hit-test geometries for clickable workspace tags: (workspace_id, rect).
+    pub workspace_rects: Vec<(u32, Rect)>,
+}
+
 #[derive(Debug)]
 pub struct Statusbar {
     /// The X11 window ID for the statusbar window.
@@ -121,6 +130,8 @@ pub struct Statusbar {
     pub renderer: Option<crate::render::Renderer>,
     /// Hit-test geometries for clickable tabs in tabbed layout: (client_window, tab_rect).
     pub tab_rects: Vec<(u32, Rect)>,
+    /// Hit-test geometries for clickable workspace tags: (workspace_id, rect).
+    pub workspace_rects: Vec<(u32, Rect)>,
 }
 
 impl Statusbar {
@@ -131,6 +142,14 @@ impl Statusbar {
         modules: Vec<Box<dyn StatusModule>>,
         color_scheme: ColorScheme,
     ) -> Self {
+        let mut workspace_rects = Vec::new();
+        let mut cur_x = 8i32;
+        for ws in 1..=9 {
+            let pill_w = 20u32;
+            workspace_rects.push((ws, Rect::new(cur_x, 3, pill_w, rect.height.saturating_sub(6))));
+            cur_x += pill_w as i32 + 4;
+        }
+
         Self {
             window_id,
             rect,
@@ -138,6 +157,7 @@ impl Statusbar {
             color_scheme,
             renderer: None,
             tab_rects: Vec::new(),
+            workspace_rects,
         }
     }
 
@@ -256,7 +276,7 @@ impl Statusbar {
         tab_config: &crate::bar::tabs::TabbedConfig,
     ) -> Result<(), StatusbarError> {
         if let Some(ref r) = self.renderer {
-            let rects = r.render_statusbar(
+            let hit_rects = r.render_statusbar(
                 conn,
                 self.window_id,
                 current_ws,
@@ -268,7 +288,17 @@ impl Statusbar {
                 &self.modules,
                 &self.color_scheme,
             )?;
-            self.tab_rects = rects;
+            self.tab_rects = hit_rects.tab_rects;
+            self.workspace_rects = hit_rects.workspace_rects;
+        } else {
+            let mut wss = Vec::new();
+            let mut cur_x = 8i32;
+            for ws in 1..=9 {
+                let pill_w = 20u32;
+                wss.push((ws, Rect::new(cur_x, 3, pill_w, self.rect.height.saturating_sub(6))));
+                cur_x += pill_w as i32 + 4;
+            }
+            self.workspace_rects = wss;
         }
         Ok(())
     }

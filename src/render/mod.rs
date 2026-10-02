@@ -295,12 +295,13 @@ impl Renderer {
         tab_config: &crate::bar::tabs::TabbedConfig,
         modules: &[Box<dyn StatusModule>],
         color_scheme: &ColorScheme,
-    ) -> Result<Vec<(u32, Rect)>, StatusbarError> {
+    ) -> Result<crate::bar::StatusbarHitRects, StatusbarError> {
         // 1. Clear background of pixmap
         self.fill_rect(conn, self.pixmap, 0, 0, self.width, self.height, color_scheme.bg)?;
 
         let baseline = self.vertical_center_baseline();
         let mut cur_x = 8i16;
+        let mut workspace_rects = Vec::new();
 
         // 2. Render workspaces 1 through 9 with active workspace highlighting
         for ws in 1..=9 {
@@ -313,6 +314,9 @@ impl Renderer {
             let pill_w = ws_text_w + (pad as u16 * 2);
             let pill_h = self.height.saturating_sub(6);
             let pill_y = 3i16;
+
+            let ws_rect = Rect::new(cur_x as i32, pill_y as i32, pill_w as u32, pill_h as u32);
+            workspace_rects.push((ws, ws_rect));
 
             if is_active {
                 // Active workspace pill background
@@ -460,7 +464,10 @@ impl Renderer {
         // 7. Blit completed frame to visible window
         self.flush_to_window(conn, window)?;
 
-        Ok(tab_rects)
+        Ok(crate::bar::StatusbarHitRects {
+            tab_rects,
+            workspace_rects,
+        })
     }
 
     /// Frees graphics resources (pixmap, gc, font) allocated on the X server.

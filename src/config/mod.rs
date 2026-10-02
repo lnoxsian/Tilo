@@ -96,6 +96,10 @@ pub struct Config {
     pub tab_config: crate::bar::tabs::TabbedConfig,
     /// Unified global and per-component theme configuration.
     pub theme: ThemeConfig,
+    /// Enable mouse click interaction for switching workspaces on the status bar (default: true).
+    pub workspace_mouse: bool,
+    /// Enable mouse wheel scrolling to cycle workspaces on the status bar (default: true).
+    pub workspace_wheel_switch: bool,
 }
 
 impl Config {
@@ -143,6 +147,8 @@ impl Default for Config {
             autostart: Vec::new(),
             tab_config: crate::bar::tabs::TabbedConfig::default(),
             theme: ThemeConfig::default(),
+            workspace_mouse: true,
+            workspace_wheel_switch: true,
         }
     }
 }
@@ -806,6 +812,26 @@ fn parse_line(
             }
             let val = token_to_string(line[1]).to_lowercase();
             config.tab_config.wheel_switch = val == "true" || val == "1" || val == "yes";
+        }
+        "workspace_mouse" | "bar_workspace_mouse" | "bar_mouse" => {
+            if line.len() < 2 {
+                return Err(ConfigError::ParseError {
+                    line: line_number,
+                    message: "Directive 'workspace_mouse' requires 'true' or 'false'".to_string(),
+                });
+            }
+            let val = token_to_string(line[1]).to_lowercase();
+            config.workspace_mouse = val == "true" || val == "1" || val == "yes";
+        }
+        "workspace_wheel_switch" | "bar_workspace_wheel" | "bar_wheel_switch" => {
+            if line.len() < 2 {
+                return Err(ConfigError::ParseError {
+                    line: line_number,
+                    message: "Directive 'workspace_wheel_switch' requires 'true' or 'false'".to_string(),
+                });
+            }
+            let val = token_to_string(line[1]).to_lowercase();
+            config.workspace_wheel_switch = val == "true" || val == "1" || val == "yes";
         }
         unknown => {
             return Err(ConfigError::InvalidValue {

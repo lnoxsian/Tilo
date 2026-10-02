@@ -512,4 +512,30 @@ launcher_bg #554433
     }
 }
 
+#[test]
+fn test_parse_workspace_mouse_and_wheel_directives() {
+    let default_config = Config::default();
+    assert!(default_config.workspace_mouse);
+    assert!(default_config.workspace_wheel_switch);
+
+    let input = r#"
+workspace_mouse false
+workspace_wheel_switch false
+"#;
+    let tokens = tokenize(input).unwrap();
+    let config = parse(&tokens).unwrap();
+    assert!(!config.workspace_mouse);
+    assert!(!config.workspace_wheel_switch);
+
+    let input_alias = r#"
+bar_workspace_mouse true
+bar_workspace_wheel yes
+"#;
+    let tokens = tokenize(input_alias).unwrap();
+    let config = parse(&tokens).unwrap();
+    assert!(config.workspace_mouse);
+    assert!(config.workspace_wheel_switch);
+}
+
+
 

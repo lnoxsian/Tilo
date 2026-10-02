@@ -5,7 +5,7 @@ use crate::ewmh::NetWmStateAction;
 use crate::floating::calculate_default_floating_geometry;
 use crate::focus::{set_window_border_color, Direction};
 use crate::icccm::{get_wm_hints, get_wm_normal_hints, WmState};
-use crate::keybind::{Action, MOD_LOCK};
+use crate::keybind::{Action, MOD_LOCK, MOD_SHIFT};
 use crate::layout::{LayoutType, Rect};
 use crate::x11::X11Error;
 use x11rb::protocol::xproto::{
@@ -441,14 +441,70 @@ impl WindowManager {
     /// - Mod + Right Click: focus and drag window to resize.
     /// - Normal Left Click: focus clicked window and replay event to client.
     pub fn handle_button_press(&mut self, event: &ButtonPressEvent) -> Result<(), X11Error> {
-        // Statusbar mouse interaction (Tab clicks and wheel switching)
+        // Statusbar mouse interaction (Workspace clicks, Tab clicks, and wheel switching)
         if let Some(ref bar) = self.statusbar
             && event.event == bar.window_id
         {
             let click_x = event.event_x as i32;
             let click_y = event.event_y as i32;
 
-            // Mouse wheel over tab region
+            // 1. Mouse wheel over workspace region (Scroll up -> prev workspace, Scroll down -> next workspace)
+            if self.config.workspace_wheel_switch && (event.detail == 4 || event.detail == 5)
+                && let Some(first) = bar.workspace_rects.first()
+                && let Some(last) = bar.workspace_rects.last()
+            {
+                let min_x = first.1.x;
+                let max_x = last.1.x + last.1.width as i32;
+                if click_x >= min_x && click_x <= max_x {
+                    let current = self.current_workspace;
+                    let target_ws = if event.detail == 4 {
+                        if current > 1 { current - 1 } else { 9 }
+                    } else {
+                        if current < 9 { current + 1 } else { 1 }
+                    };
+                    self.switch_workspace(target_ws)?;
+                    return Ok(());
+                }
+            }
+
+            // 2. Direct workspace number clicks (1..=9)
+            if self.config.workspace_mouse {
+                for (idx, &(ws, rect)) in bar.workspace_rects.iter().enumerate() {
+                    let is_hit = if idx + 1 < bar.workspace_rects.len() {
+                        let next_x = bar.workspace_rects[idx + 1].1.x;
+                        click_x >= rect.x && click_x < next_x
+                    } else {
+                        click_x >= rect.x && click_x < rect.x + rect.width as i32 + 4
+                    };
+
+                    if is_hit && click_y >= 0 && click_y < bar.rect.height as i32 {
+                        if event.detail == 1 {
+                            let clean_modifiers = u16::from(event.state) & 0x00FF & !(self.input_manager.num_lock_mask | MOD_LOCK);
+                            if clean_modifiers & MOD_SHIFT != 0 {
+                                let win = self.focused_window()
+                                    .or_else(|| self.workspace_focus.focused_window_on(self.current_workspace))
+                                    .or_else(|| self.workspace_manager.get(self.current_workspace).and_then(|w| w.clients.first().copied()));
+                                if let Some(win) = win {
+                                    self.move_to_workspace(win, ws)?;
+                                }
+                            } else {
+                                self.switch_workspace(ws)?;
+                            }
+                            return Ok(());
+                        } else if event.detail == 3 {
+                            let win = self.focused_window()
+                                .or_else(|| self.workspace_focus.focused_window_on(self.current_workspace))
+                                .or_else(|| self.workspace_manager.get(self.current_workspace).and_then(|w| w.clients.first().copied()));
+                            if let Some(win) = win {
+                                self.move_to_workspace(win, ws)?;
+                            }
+                            return Ok(());
+                        }
+                    }
+                }
+            }
+
+            // 3. Mouse wheel over tab region
             if self.config.tab_config.wheel_switch && (event.detail == 4 || event.detail == 5)
                 && let Some(first) = bar.tab_rects.first()
                 && let Some(last) = bar.tab_rects.last()
@@ -465,7 +521,7 @@ impl WindowManager {
                 }
             }
 
-            // Direct tab pill clicks (Left click: focus, Middle click: close)
+            // 4. Direct tab pill clicks (Left click: focus, Middle click: close)
             if self.config.tab_config.mouse {
                 for &(win, rect) in &bar.tab_rects {
                     if click_x >= rect.x

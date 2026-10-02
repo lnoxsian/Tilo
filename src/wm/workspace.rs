@@ -599,6 +599,7 @@ impl WindowManager {
                 } else {
                     self.clear_focus()?;
                 }
+                let _ = self.render_statusbar();
                 self.context.flush()?;
                 return Ok(());
             }
@@ -673,6 +674,8 @@ impl WindowManager {
         } else {
             self.clear_focus()?;
         }
+
+        let _ = self.render_statusbar();
 
         self.context.flush()?;
         Ok(())

@@ -421,4 +421,119 @@ fn test_statusbar_dynamic_screen_resize() {
     wm.disable_statusbar().expect("disable_statusbar should succeed");
 }
 
+#[test]
+fn test_statusbar_mouse_workspace_interaction_in_xephyr() {
+    let server = match XephyrServer::start(168) {
+        Some(s) => s,
+        None => {
+            eprintln!("Xephyr not available on :168, skipping integration test");
+            return;
+        }
+    };
+
+    let ctx = X11Context::connect_to(Some(&server.display)).expect("Failed to connect to Xephyr");
+    let mut wm = WindowManager::new(ctx).expect("Failed to create WindowManager");
+    let bar_win = wm.enable_statusbar(26).expect("Failed to enable statusbar");
+
+    // Initially on workspace 1
+    assert_eq!(wm.current_workspace, 1);
+
+    // Verify workspace rects are populated (1..=9)
+    let rects = wm.statusbar.as_ref().unwrap().workspace_rects.clone();
+    assert_eq!(rects.len(), 9);
+    for (i, &(ws, _)) in rects.iter().enumerate() {
+        assert_eq!(ws, (i + 1) as u32);
+    }
+
+    let root = wm.context.root_window;
+
+    // Helper closure to simulate button press
+    let simulate_click = |wm: &mut WindowManager, x: i16, y: i16, detail: u8, state: u16| {
+        let ev = x11rb::protocol::xproto::ButtonPressEvent {
+            response_type: x11rb::protocol::xproto::BUTTON_PRESS_EVENT,
+            detail,
+            sequence: 0,
+            time: 0,
+            root,
+            event: bar_win,
+            child: 0,
+            root_x: x,
+            root_y: y,
+            event_x: x,
+            event_y: y,
+            state: state.into(),
+            same_screen: true,
+        };
+        wm.handle_button_press(&ev)
+    };
+
+    // 1. Click on Workspace 3
+    let ws3 = rects[2].1;
+    let click_x = ws3.x as i16 + (ws3.width as i16 / 2);
+    let click_y = ws3.y as i16 + (ws3.height as i16 / 2);
+    simulate_click(&mut wm, click_x, click_y, 1, 0).expect("Click ws 3 failed");
+    assert_eq!(wm.current_workspace, 3, "Left click on workspace 3 must switch to workspace 3");
+
+    // 2. Click on Workspace 7
+    let ws7 = rects[6].1;
+    let click_x = ws7.x as i16 + (ws7.width as i16 / 2);
+    let click_y = ws7.y as i16 + (ws7.height as i16 / 2);
+    simulate_click(&mut wm, click_x, click_y, 1, 0).expect("Click ws 7 failed");
+    assert_eq!(wm.current_workspace, 7, "Left click on workspace 7 must switch to workspace 7");
+
+    // 3. Click on Workspace 7 again (already active, no-op)
+    simulate_click(&mut wm, click_x, click_y, 1, 0).expect("Click active ws 7 failed");
+    assert_eq!(wm.current_workspace, 7);
+
+    // 4. Click on Workspace 1
+    let ws1 = rects[0].1;
+    let click_x = ws1.x as i16 + (ws1.width as i16 / 2);
+    let click_y = ws1.y as i16 + (ws1.height as i16 / 2);
+    simulate_click(&mut wm, click_x, click_y, 1, 0).expect("Click ws 1 failed");
+    assert_eq!(wm.current_workspace, 1);
+
+    // 5. Test mouse wheel scrolling on workspace region
+    // Wheel down (detail = 5): workspace 1 -> 2
+    simulate_click(&mut wm, click_x, click_y, 5, 0).expect("Wheel down failed");
+    assert_eq!(wm.current_workspace, 2, "Wheel down must switch to next workspace");
+
+    // Wheel up (detail = 4): workspace 2 -> 1
+    simulate_click(&mut wm, click_x, click_y, 4, 0).expect("Wheel up failed");
+    assert_eq!(wm.current_workspace, 1, "Wheel up must switch to previous workspace");
+
+    // Wheel up wrap-around: workspace 1 -> 9
+    simulate_click(&mut wm, click_x, click_y, 4, 0).expect("Wheel up wrap failed");
+    assert_eq!(wm.current_workspace, 9, "Wheel up on ws 1 must wrap to ws 9");
+
+    // Wheel down wrap-around: workspace 9 -> 1
+    simulate_click(&mut wm, click_x, click_y, 5, 0).expect("Wheel down wrap failed");
+    assert_eq!(wm.current_workspace, 1, "Wheel down on ws 9 must wrap to ws 1");
+
+    // 6. Test Right-Click and Shift+Left-Click to move client window to workspace
+    let client_conn = X11Context::connect_to(Some(&server.display)).unwrap();
+    let win = create_client_window(&client_conn.connection, root, 10, 10, 100, 100);
+    wm.manage_window(win).expect("manage_window failed");
+    assert_eq!(wm.current_workspace, 1);
+    assert_eq!(wm.focused_window(), Some(win));
+
+    // Right click (detail = 3) on Workspace 4 moves focused window to ws 4
+    let ws4 = rects[3].1;
+    let click_x = ws4.x as i16 + (ws4.width as i16 / 2);
+    let click_y = ws4.y as i16 + (ws4.height as i16 / 2);
+    simulate_click(&mut wm, click_x, click_y, 3, 0).expect("Right click move failed");
+    assert_eq!(wm.current_workspace, 1); // WM remains on ws 1
+    assert!(wm.workspace_manager.get(4).unwrap().clients.contains(&win));
+    assert!(!wm.workspace_manager.get(1).unwrap().clients.contains(&win));
+
+    // 7. Test disabling workspace_mouse in config
+    wm.config.workspace_mouse = false;
+    let ws5 = rects[4].1;
+    let click_x = ws5.x as i16 + (ws5.width as i16 / 2);
+    let click_y = ws5.y as i16 + (ws5.height as i16 / 2);
+    simulate_click(&mut wm, click_x, click_y, 1, 0).expect("Click ws 5 failed");
+    assert_eq!(wm.current_workspace, 1, "Clicking workspace when workspace_mouse is false must be ignored");
+
+    wm.disable_statusbar().expect("disable_statusbar failed");
+}
+
 
