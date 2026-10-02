@@ -44,6 +44,10 @@ pub enum StatusbarError {
     #[error("Failed to load font: {0}")]
     FontLoadError(String),
 
+    /// Graphics rendering or surface error.
+    #[error("Render error: {0}")]
+    RenderError(String),
+
     /// Process spawn error.
     #[error("Spawn error: {0}")]
     SpawnError(String),

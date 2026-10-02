@@ -11,20 +11,56 @@
 use crate::layout::Rect;
 use crate::statusbar::{ColorScheme, StatusModule, StatusbarError, TiloError};
 use crate::x11::X11Error;
+use pangocairo::pango::{self, FontDescription};
+use std::cell::RefCell;
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::{
-    ChangeGCAux, ConnectionExt, CreateGCAux, Rectangle,
+    ChangeGCAux, ConnectionExt, CreateGCAux, ImageFormat, Rectangle,
 };
+
+/// Converts a 0x00RRGGBB integer color into floating point RGB values (0.0 to 1.0).
+#[inline]
+pub fn color_to_rgb(color: u32) -> (f64, f64, f64) {
+    let r = ((color >> 16) & 0xff) as f64 / 255.0;
+    let g = ((color >> 8) & 0xff) as f64 / 255.0;
+    let b = (color & 0xff) as f64 / 255.0;
+    (r, g, b)
+}
+
+/// Parses an i3-compatible font specification string into a [`pango::FontDescription`].
+///
+/// Supports strings with or without the `pango:` prefix, such as:
+/// - `"pango:monospace 10"`
+/// - `"monospace 10"`
+/// - `"pango:DejaVu Sans Mono Bold 11"`
+/// - `"JetBrainsMono Nerd Font 10"`
+///
+/// If no font size is specified, defaults to 10 points.
+pub fn parse_font_description(font_name: &str) -> FontDescription {
+    let trimmed = font_name.trim();
+    let clean = if let Some(stripped) = trimmed.strip_prefix("pango:") {
+        stripped.trim()
+    } else {
+        trimmed
+    };
+    let mut desc = FontDescription::from_string(clean);
+    if desc.size() == 0 {
+        desc.set_size(10 * pango::SCALE);
+    }
+    desc
+}
 
 /// Responsible for rendering text and shapes to the statusbar or launcher window.
 #[derive(Debug)]
 pub struct Renderer {
     /// The X11 graphics context used for drawing.
     pub gc: u32,
-    /// The loaded font identifier.
+    /// The legacy loaded font identifier.
     pub font_id: u32,
     /// Reusable double-buffer pixmap to prevent flickering.
     pub pixmap: u32,
+    /// Visual depth in bits per pixel.
+    pub depth: u8,
     /// Width of the rendering target / pixmap in pixels.
     pub width: u16,
     /// Height of the rendering target / pixmap in pixels.
@@ -35,7 +71,15 @@ pub struct Renderer {
     pub font_descent: i16,
     /// Average character width in pixels.
     pub char_width: u16,
+    /// Parsed Pango font description.
+    pub font_desc: FontDescription,
+    /// Off-screen Cairo image surface matching the pixmap dimensions.
+    surface: RefCell<cairo::ImageSurface>,
 }
+
+// Cairo's ImageSurface contains a raw NonNull pointer, but the surface inside Renderer
+// is strictly owned and not shared across threads concurrently, making it safe to transfer ownership (Send).
+unsafe impl Send for Renderer {}
 
 impl Renderer {
     /// Attempts to open an X11 font and verifies its existence via `query_font`.
@@ -86,7 +130,7 @@ impl Renderer {
         )))
     }
 
-    /// Creates a new `Renderer` initialized with an off-screen pixmap and graphics context.
+    /// Creates a new `Renderer` initialized with an off-screen pixmap, Cairo surface, and graphics context.
     ///
     /// # Arguments
     /// * `conn` - The active X11 connection.
@@ -114,49 +158,68 @@ impl Renderer {
                         break;
                     }
                 }
-                loaded.ok_or_else(|| {
-                    StatusbarError::FontLoadError(format!(
-                        "Failed to load font '{}' and all fallbacks",
-                        font_name
-                    ))
-                })?
+                loaded.unwrap_or((0, 12, 4, 8))
             };
 
         let gc = conn.generate_id()?;
-        let gc_aux = CreateGCAux::new()
-            .font(font_id)
-            .graphics_exposures(0);
+        let mut gc_aux = CreateGCAux::new().graphics_exposures(0);
+        if font_id > 0 {
+            gc_aux = gc_aux.font(font_id);
+        }
         conn.create_gc(gc, drawable, &gc_aux)?;
 
         let pixmap = conn.generate_id()?;
         conn.create_pixmap(depth, pixmap, drawable, width, height)?;
         conn.flush()?;
 
+        let font_desc = parse_font_description(font_name);
+        let surface = cairo::ImageSurface::create(cairo::Format::Rgb24, width as i32, height as i32)
+            .map_err(|e| StatusbarError::RenderError(format!("Failed to create Cairo surface: {}", e)))?;
+
+        // Calculate accurate font metrics using Pango
+        let (pango_ascent, pango_descent, pango_char_w) = {
+            if let Ok(cr) = cairo::Context::new(&surface) {
+                let layout = pangocairo::functions::create_layout(&cr);
+                layout.set_font_description(Some(&font_desc));
+                layout.set_text("M");
+                let (cw, ch) = layout.pixel_size();
+                let baseline = (layout.baseline() / pango::SCALE) as i16;
+                let ascent = baseline.max(1);
+                let descent = (ch as i16 - baseline).max(0);
+                (ascent, descent, (cw as u16).max(1))
+            } else {
+                (font_ascent, font_descent, char_width)
+            }
+        };
+
         Ok(Self {
             gc,
             font_id,
             pixmap,
+            depth,
             width,
             height,
-            font_ascent,
-            font_descent,
-            char_width,
+            font_ascent: pango_ascent,
+            font_descent: pango_descent,
+            char_width: pango_char_w,
+            font_desc,
+            surface: RefCell::new(surface),
         })
     }
 
-    /// Draws a string of text at the specified baseline coordinates.
+    /// Draws a string of text with Pango anti-aliased font rendering onto the Cairo surface.
     ///
     /// # Arguments
     /// * `conn` - The X11 connection handle.
     /// * `drawable` - The target window or pixmap ID.
     /// * `x` - The starting X coordinate.
-    /// * `y` - The starting Y (baseline) coordinate.
+    /// * `y` - The baseline Y coordinate.
     /// * `text` - The UTF-8 string to draw.
     /// * `color` - The text color in 0xRRGGBB format.
     pub fn draw_text(
         &self,
         conn: &impl Connection,
-        drawable: u32,
+        _drawable: u32,
         x: i16,
         y: i16,
         text: &str,
@@ -165,27 +228,28 @@ impl Renderer {
         if text.is_empty() {
             return Ok(());
         }
-        let aux = ChangeGCAux::new().foreground(color);
-        conn.change_gc(self.gc, &aux)?;
 
-        // Try poly_text8 first so background is transparent / preserved
-        let mut drew_poly = false;
-        if text.len() <= 254 {
-            let mut item = Vec::with_capacity(text.len() + 2);
-            item.push(text.len() as u8);
-            item.push(0u8); // 0 horizontal delta
-            item.extend_from_slice(text.as_bytes());
-            if conn.poly_text8(drawable, self.gc, x, y, &item).is_ok() {
-                drew_poly = true;
-            }
+        let (r, g, b) = color_to_rgb(color);
+        let surface = self.surface.borrow();
+        if let Ok(cr) = cairo::Context::new(&*surface) {
+            cr.set_source_rgb(r, g, b);
+            let layout = pangocairo::functions::create_layout(&cr);
+            layout.set_font_description(Some(&self.font_desc));
+            layout.set_text(text);
+
+            let baseline_px = (layout.baseline() / pango::SCALE) as i16;
+            let top_y = y - baseline_px;
+            cr.move_to(x as f64, top_y as f64);
+            pangocairo::functions::show_layout(&cr, &layout);
         }
-        if !drew_poly {
-            conn.image_text8(drawable, self.gc, x, y, text.as_bytes())?;
-        }
+
+        let aux = ChangeGCAux::new().foreground(color);
+        let _ = conn.change_gc(self.gc, &aux);
+
         Ok(())
     }
 
-    /// Fills a solid rectangular region with the specified color.
+    /// Fills a solid rectangular region on the Cairo surface and updates the underlying X11 drawable.
     #[allow(clippy::too_many_arguments)]
     pub fn fill_rect(
         &self,
@@ -197,9 +261,17 @@ impl Renderer {
         height: u16,
         color: u32,
     ) -> Result<(), StatusbarError> {
+        let (r, g, b) = color_to_rgb(color);
+        let surface = self.surface.borrow();
+        if let Ok(cr) = cairo::Context::new(&*surface) {
+            cr.set_source_rgb(r, g, b);
+            cr.rectangle(x as f64, y as f64, width as f64, height as f64);
+            let _ = cr.fill();
+        }
+
         let aux = ChangeGCAux::new().foreground(color);
-        conn.change_gc(self.gc, &aux)?;
-        conn.poly_fill_rectangle(
+        let _ = conn.change_gc(self.gc, &aux);
+        let _ = conn.poly_fill_rectangle(
             drawable,
             self.gc,
             &[Rectangle {
@@ -208,13 +280,42 @@ impl Renderer {
                 width,
                 height,
             }],
-        )?;
+        );
         Ok(())
     }
 
-    /// Calculates the horizontal pixel width of a given text string.
+    /// Calculates the horizontal pixel width of a given text string using Pango.
     pub fn text_width(&self, text: &str) -> u16 {
-        text.chars().count() as u16 * self.char_width
+        if text.is_empty() {
+            return 0;
+        }
+        let surface = self.surface.borrow();
+        if let Ok(cr) = cairo::Context::new(&*surface) {
+            let layout = pangocairo::functions::create_layout(&cr);
+            layout.set_font_description(Some(&self.font_desc));
+            layout.set_text(text);
+            let (w, _) = layout.pixel_size();
+            w as u16
+        } else {
+            (text.chars().count() as u16) * self.char_width
+        }
+    }
+
+    /// Calculates the pixel dimensions (width, height) of a given text string using Pango.
+    pub fn text_size(&self, text: &str) -> (u16, u16) {
+        if text.is_empty() {
+            return (0, 0);
+        }
+        let surface = self.surface.borrow();
+        if let Ok(cr) = cairo::Context::new(&*surface) {
+            let layout = pangocairo::functions::create_layout(&cr);
+            layout.set_font_description(Some(&self.font_desc));
+            layout.set_text(text);
+            let (w, h) = layout.pixel_size();
+            (w as u16, h as u16)
+        } else {
+            ((text.chars().count() as u16) * self.char_width, (self.font_ascent + self.font_descent) as u16)
+        }
     }
 
     /// Computes the vertical baseline position centered vertically within the statusbar.
@@ -224,7 +325,7 @@ impl Renderer {
         y_offset + self.font_ascent
     }
 
-    /// Resizes the off-screen double-buffer pixmap to match the new dimensions.
+    /// Resizes the off-screen double-buffer pixmap and Cairo surface to match the new dimensions.
     pub fn resize(
         &mut self,
         conn: &impl Connection,
@@ -245,9 +346,39 @@ impl Renderer {
         conn.create_pixmap(depth, new_pixmap, drawable, new_width, new_height)?;
         conn.flush()?;
 
+        let new_surface = cairo::ImageSurface::create(cairo::Format::Rgb24, new_width as i32, new_height as i32)
+            .map_err(|e| StatusbarError::RenderError(format!("Failed to resize Cairo surface: {}", e)))?;
+
         self.pixmap = new_pixmap;
         self.width = new_width;
         self.height = new_height;
+        self.depth = depth;
+        *self.surface.borrow_mut() = new_surface;
+        Ok(())
+    }
+
+    /// Synchronizes the Cairo image surface to the X11 double-buffer pixmap using `put_image`.
+    pub fn flush_cairo_to_pixmap(&self, conn: &impl Connection) -> Result<(), StatusbarError> {
+        let mut surface = self.surface.borrow_mut();
+        surface.flush();
+        let data = surface.data().map_err(|e| {
+            StatusbarError::RenderError(format!("Failed to borrow Cairo surface data: {}", e))
+        })?;
+
+        let depth = if self.depth > 0 { self.depth } else { 24 };
+        conn.put_image(
+            ImageFormat::Z_PIXMAP,
+            self.pixmap,
+            self.gc,
+            self.width,
+            self.height,
+            0,
+            0,
+            0,
+            depth,
+            &data,
+        )?;
+        conn.flush()?;
         Ok(())
     }
 
@@ -264,6 +395,7 @@ impl Renderer {
         width: u16,
         height: u16,
     ) -> Result<(), StatusbarError> {
+        let _ = self.flush_cairo_to_pixmap(conn);
         conn.copy_area(
             self.pixmap,
             window,
@@ -485,6 +617,24 @@ impl Renderer {
 mod tests {
     use super::*;
 
+    fn dummy_renderer() -> Renderer {
+        let surface = cairo::ImageSurface::create(cairo::Format::Rgb24, 1000, 24).unwrap();
+        let font_desc = parse_font_description("monospace 10");
+        Renderer {
+            gc: 1,
+            font_id: 2,
+            pixmap: 3,
+            width: 1000,
+            height: 24,
+            depth: 24,
+            font_ascent: 12,
+            font_descent: 4,
+            char_width: 8,
+            font_desc,
+            surface: RefCell::new(surface),
+        }
+    }
+
     #[test]
     fn test_color_scheme_defaults() {
         let cs = ColorScheme::default();
@@ -495,33 +645,34 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_font_description() {
+        let desc1 = parse_font_description("pango:monospace 10");
+        assert_eq!(desc1.family().as_deref(), Some("monospace"));
+        assert_eq!(desc1.size() / pango::SCALE, 10);
+
+        let desc2 = parse_font_description("DejaVu Sans Mono 12");
+        assert_eq!(desc2.family().as_deref(), Some("DejaVu Sans Mono"));
+        assert_eq!(desc2.size() / pango::SCALE, 12);
+
+        let desc3 = parse_font_description("sans-serif bold 14");
+        assert_eq!(desc3.size() / pango::SCALE, 14);
+    }
+
+    #[test]
     fn test_text_width_calculation() {
-        let renderer = Renderer {
-            gc: 1,
-            font_id: 2,
-            pixmap: 3,
-            width: 1000,
-            height: 24,
-            font_ascent: 12,
-            font_descent: 4,
-            char_width: 8,
-        };
-        assert_eq!(renderer.text_width("Hello"), 40);
+        let renderer = dummy_renderer();
+        let width = renderer.text_width("Hello");
+        assert!(width > 0, "text_width for non-empty string should be positive");
         assert_eq!(renderer.text_width(""), 0);
+
+        let (w, h) = renderer.text_size("Hello");
+        assert_eq!(w, width);
+        assert!(h > 0, "text_height should be positive");
     }
 
     #[test]
     fn test_vertical_center_baseline() {
-        let renderer = Renderer {
-            gc: 1,
-            font_id: 2,
-            pixmap: 3,
-            width: 1000,
-            height: 24,
-            font_ascent: 12,
-            font_descent: 4,
-            char_width: 8,
-        };
+        let renderer = dummy_renderer();
         // font_height = 16. y_offset = (24 - 16)/2 = 4. baseline = 4 + 12 = 16.
         assert_eq!(renderer.vertical_center_baseline(), 16);
     }

@@ -64,13 +64,84 @@ When reloading:
 | Directive | Description | Default | Example |
 | :--- | :--- | :--- | :--- |
 | `mod_key` (or `mod`) | Primary modifier key for window manager bindings | `Mod4` | `mod_key Mod4` |
-| `terminal` | Default terminal emulator command | `foot` | `terminal alacritty` |
-| `font` | Default font for UI elements | `monospace` | `font JetBrainsMono Nerd Font 10` |
+| `terminal` | Default terminal emulator command | `alacritty` | `terminal alacritty` |
+| `font` | Default font for UI elements (status bar, launcher) | `pango:monospace 10` | `font pango:monospace 10` |
 | `layout` | Initial default layout (`bsp`, `master`, `grid`, `tabbed`, `monocle`) | `bsp` | `layout bsp` |
 | `border_width` | Window border width in pixels | `2` | `border_width 2` |
 | `inner_gap` | Gap between adjacent windows in pixels | `8` | `inner_gap 8` |
 | `outer_gap` | Gap between windows and screen edges | `8` | `outer_gap 8` |
 | `master_ratio` | Master window proportion (0.0 to 1.0) | `0.60` | `master_ratio 0.55` |
+
+---
+
+## Font Configuration (i3-Compatible Pango Syntax)
+
+`tilo` uses Pango and Cairo for high-quality, anti-aliased font rendering, glyph metric calculations, and complete UTF-8 Unicode / Nerd Font icon support.
+
+Fonts can be configured globally or overridden per component:
+
+| Directive | Description | Fallback | Example |
+| :--- | :--- | :--- | :--- |
+| `font` | Global font for all UI components | `monospace 10` | `font pango:monospace 10` |
+| `bar_font` | Status bar font override | `font` | `bar_font pango:DejaVu Sans Mono 11` |
+| `launcher_font` | Application launcher font override | `font` | `launcher_font JetBrainsMono Nerd Font 11` |
+
+### Supported Font Syntaxes:
+Like i3 window manager, `tilo` supports both prefixed and direct Pango font specifications:
+1. **Explicit Pango Prefix:**
+   ```text
+   font pango:monospace 10
+   font pango:DejaVu Sans Mono 11
+   font pango:Noto Sans Regular 10
+   ```
+2. **Standard Family & Size:**
+   ```text
+   font JetBrainsMono Nerd Font 10
+   font monospace 11
+   font "Fira Code" 10
+   ```
+
+---
+
+## Unified Theme & Colors
+
+`tilo` features a centralized theme palette that applies consistently across window borders, status bar items, and the application launcher.
+
+### Global Theme Palette:
+```text
+bg #1a1b26           # Window manager / bar / launcher background
+fg #c0caf5           # Primary text foreground
+active_bg #7aa2f7    # Active workspace, selected launcher item, layout badge
+active_fg #15161e    # Text on active backgrounds
+urgent_bg #f7768e    # Urgent workspace or window indicator
+urgent_fg #15161e    # Text on urgent backgrounds
+inactive_fg #555566  # Dimmed text (empty workspaces, inactive items)
+```
+
+### Window Border Colors:
+```text
+border_focused #ffffff
+border_normal #444444
+border_urgent #ff0000
+```
+
+### Component-Specific Overrides (Optional):
+You can override colors specifically for the status bar or the launcher without affecting other UI elements:
+```text
+# Status bar overrides:
+bar_bg #1a1b26
+bar_fg #c0caf5
+bar_active_bg #7aa2f7
+bar_active_fg #15161e
+bar_border #7aa2f7
+
+# Launcher overrides:
+launcher_bg #1a1b26
+launcher_fg #c0caf5
+launcher_selected_bg #7aa2f7
+launcher_selected_fg #15161e
+launcher_border #7aa2f7
+```
 
 ### Keybinding Syntax (`bind`)
 

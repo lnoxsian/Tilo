@@ -1101,7 +1101,8 @@ terminal alacritty
 
 # --- Default Font ---
 # Font specification for the status bar, launcher, and other UI elements.
-font monospace
+# Supports i3-style Pango font descriptions (e.g. "pango:monospace 10", "DejaVu Sans Mono 11", "JetBrainsMono Nerd Font 10").
+font pango:monospace 10
 
 # --- Window Layout ---
 # Initial layout for workspaces: bsp, master, grid, tabbed, monocle.
@@ -1597,7 +1598,7 @@ bind $mod+1 select_tab 1
 
         assert_eq!(config.mod_key, "Mod4");
         assert_eq!(config.terminal, "alacritty");
-        assert_eq!(config.font, "monospace");
+        assert_eq!(config.font, "pango:monospace 10");
         assert_eq!(config.layout, crate::layout::LayoutType::Bsp);
         assert_eq!(config.border_width, 2);
         assert_eq!(config.inner_gap, 8);
