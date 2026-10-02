@@ -9,6 +9,15 @@
 
 ---
 
+## Automatic Initial Configuration Generation
+
+When `tilo` is launched and no configuration file is found at `~/.config/tilo/config` (or `$XDG_CONFIG_HOME/tilo/config`):
+- `tilo` automatically creates the destination directory structure (e.g. `~/.config/tilo/`).
+- `tilo` writes a complete, fully-commented default configuration file populated with default modifier keys, theme palette colors, layout options, status bar behaviors, and the full standard keybinding map.
+- `tilo` loads and applies this freshly generated configuration immediately upon startup.
+
+---
+
 ## Hot Configuration Reload
 
 `tilo` supports live, hot reloading of its configuration without restarting the window manager or closing running client windows.

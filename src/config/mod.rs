@@ -1084,6 +1084,187 @@ fn parse_direction(s: &str, line: usize) -> Result<Direction, ConfigError> {
     }
 }
 
+/// Complete default configuration template created when tilo starts and no config file is found.
+pub const DEFAULT_CONFIG_CONTENT: &str = r#"# ==============================================================================
+# Tilo Window Manager Configuration File
+# Location: ~/.config/tilo/config (or $XDG_CONFIG_HOME/tilo/config)
+# ==============================================================================
+
+# --- Modifier Key ---
+# Set the primary modifier key: Mod1 (Alt) or Mod4 (Super/Windows key).
+# The variable $mod can be used in keybindings below.
+mod Mod4
+
+# --- Terminal Emulator ---
+# Default terminal emulator command.
+terminal alacritty
+
+# --- Default Font ---
+# Font specification for the status bar, launcher, and other UI elements.
+font monospace
+
+# --- Window Layout ---
+# Initial layout for workspaces: bsp, master, grid, tabbed, monocle.
+layout bsp
+
+# --- Window Borders & Geometry ---
+# Width of window borders in pixels.
+border_width 2
+
+# Gap between adjacent windows in pixels.
+inner_gap 8
+
+# Gap between outer windows and screen borders in pixels.
+outer_gap 8
+
+# Master window ratio (0.0 to 1.0) for master-stack layouts.
+master_ratio 0.60
+
+# --- Unified Color Theme ---
+# Global color palette used across window borders, status bar, and launcher.
+# Format: #RRGGBB
+bg #1a1b26
+fg #c0caf5
+active_bg #7aa2f7
+active_fg #15161e
+urgent_bg #f7768e
+urgent_fg #15161e
+inactive_fg #555566
+
+# Window border colors
+border_focused #ffffff
+border_normal #444444
+border_urgent #ff0000
+
+# --- Component-Specific Overrides (Optional) ---
+# Statusbar overrides:
+# bar_bg #1a1b26
+# bar_fg #c0caf5
+# bar_active_bg #7aa2f7
+# bar_active_fg #15161e
+# bar_urgent_bg #f7768e
+# bar_urgent_fg #15161e
+# bar_border #7aa2f7
+# bar_font monospace 10
+
+# Launcher overrides:
+# launcher_bg #1a1b26
+# launcher_fg #c0caf5
+# launcher_selected_bg #7aa2f7
+# launcher_selected_fg #15161e
+# launcher_urgent_bg #f7768e
+# launcher_urgent_fg #15161e
+# launcher_border #7aa2f7
+# launcher_font monospace 10
+
+# --- Status Bar & Workspace Behavior ---
+# Enable clicking on workspace tags in the status bar to switch workspaces.
+workspace_mouse true
+
+# Enable mouse wheel scrolling over workspace tags to cycle workspaces.
+workspace_wheel_switch true
+
+# --- Tabbed Layout Settings ---
+# Show numeric index in tab titles.
+tab_show_index false
+
+# Maximum width of individual tabs in pixels.
+tab_max_width 200
+
+# Enable clicking on tabs to switch active window.
+tab_mouse true
+
+# Enable mouse wheel scrolling over tabs to cycle windows.
+tab_wheel_switch true
+
+# --- Autostart Applications ---
+# Execute external applications and daemons when tilo starts.
+# autostart picom --daemon
+# autostart feh --bg-scale ~/wallpaper.jpg
+
+# --- Keybindings ---
+# Applications
+bind $mod+Return            spawn alacritty
+
+# Window Management & Session
+bind $mod+Shift+q           exit
+bind $mod+q                 close
+
+# Spatial Navigation / Window Focus (Vim keys)
+bind $mod+h                 focus left
+bind $mod+j                 focus down
+bind $mod+k                 focus up
+bind $mod+l                 focus right
+
+# Spatial Navigation / Window Focus (Arrow keys)
+bind $mod+Left              focus left
+bind $mod+Down              focus down
+bind $mod+Up                focus up
+bind $mod+Right             focus right
+
+# Moving Windows (Vim keys)
+bind $mod+Shift+h           move left
+bind $mod+Shift+j           move down
+bind $mod+Shift+k           move up
+bind $mod+Shift+l           move right
+
+# Moving Windows (Arrow keys)
+bind $mod+Shift+Left        move left
+bind $mod+Shift+Down        move down
+bind $mod+Shift+Up          move up
+bind $mod+Shift+Right       move right
+
+# Window States & Launcher & Scratchpad
+bind $mod+f                 toggle_fullscreen
+bind $mod+d                 launcher
+bind $mod+Shift+space       toggle_floating
+bind $mod+space             cycle_layout
+bind $mod+r                 rotate_master
+bind $mod+Tab               focus_next_tab
+bind $mod+Shift+Tab         focus_prev_tab
+bind $mod+grave             toggle_scratchpad
+bind $mod+Shift+grave       set_scratchpad
+
+# Workspaces (1-9)
+bind $mod+1                 workspace 1
+bind $mod+2                 workspace 2
+bind $mod+3                 workspace 3
+bind $mod+4                 workspace 4
+bind $mod+5                 workspace 5
+bind $mod+6                 workspace 6
+bind $mod+7                 workspace 7
+bind $mod+8                 workspace 8
+bind $mod+9                 workspace 9
+
+# Move Window to Workspace (1-9)
+bind $mod+Shift+1           move_to_workspace 1
+bind $mod+Shift+2           move_to_workspace 2
+bind $mod+Shift+3           move_to_workspace 3
+bind $mod+Shift+4           move_to_workspace 4
+bind $mod+Shift+5           move_to_workspace 5
+bind $mod+Shift+6           move_to_workspace 6
+bind $mod+Shift+7           move_to_workspace 7
+bind $mod+Shift+8           move_to_workspace 8
+bind $mod+Shift+9           move_to_workspace 9
+
+# Multi-Monitor Navigation
+bind $mod+comma             focus_monitor left
+bind $mod+period            focus_monitor right
+
+# BSP Tiling Controls
+bind $mod+Ctrl+Left         resize left
+bind $mod+Ctrl+Right        resize right
+bind $mod+Ctrl+Up           resize up
+bind $mod+Ctrl+Down         resize down
+
+# BSP Split Preselection
+bind $mod+v                 split vertical
+bind $mod+b                 split horizontal
+
+# Window Manager Controls
+bind $mod+Shift+r           reload
+"#;
+
 /// Resolves the default configuration file path (`~/.config/tilo/config`).
 pub fn default_config_path() -> Option<PathBuf> {
     if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
@@ -1095,6 +1276,33 @@ pub fn default_config_path() -> Option<PathBuf> {
         return Some(p);
     }
     None
+}
+
+/// Writes the full default configuration to the specified filesystem path.
+///
+/// Automatically creates any missing parent directories.
+pub fn create_default_config_at_path(path: impl AsRef<Path>) -> Result<(), std::io::Error> {
+    let path = path.as_ref();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(path, DEFAULT_CONFIG_CONTENT)?;
+    Ok(())
+}
+
+/// Checks if the default configuration file exists (`~/.config/tilo/config`), creating it if missing.
+///
+/// Returns `Ok(Some(path))` if a new configuration file was created,
+/// `Ok(None)` if the configuration file already existed or the default path could not be resolved,
+/// or `Err(e)` if writing the default configuration failed.
+pub fn create_default_config_if_missing() -> Result<Option<PathBuf>, std::io::Error> {
+    if let Some(path) = default_config_path() {
+        if !path.exists() {
+            create_default_config_at_path(&path)?;
+            return Ok(Some(path));
+        }
+    }
+    Ok(None)
 }
 
 /// Loads and parses the configuration file from disk.
@@ -1121,8 +1329,26 @@ pub fn load_config_from_path(path: impl AsRef<Path>) -> Result<Config, ConfigErr
     parse(&tokens)
 }
 
-/// Loads configuration from disk, falling back to default configuration if not found or invalid.
+/// Loads configuration from disk, creating the full default configuration file if none exists,
+/// and falling back to in-memory defaults if loading or parsing fails.
 pub fn load_config_or_default() -> Config {
+    // If no configuration file exists at the default path, generate the full default config file.
+    match create_default_config_if_missing() {
+        Ok(Some(path)) => {
+            println!(
+                "[INFO  tilo::config] No configuration file found. Created default configuration at: {}",
+                path.display()
+            );
+        }
+        Ok(None) => {}
+        Err(err) => {
+            eprintln!(
+                "[WARN  tilo::config] Failed to create default configuration file: {}",
+                err
+            );
+        }
+    }
+
     match load_config() {
         Ok(cfg) => cfg,
         Err(err) => {
@@ -1362,5 +1588,65 @@ bind $mod+1 select_tab 1
         assert_eq!(config.bindings[2].action, Action::MoveTabLeft);
         assert_eq!(config.bindings[3].action, Action::MoveTabRight);
         assert_eq!(config.bindings[4].action, Action::SelectTab(1));
+    }
+
+    #[test]
+    fn test_default_config_template_parsing() {
+        let tokens = tokenize(DEFAULT_CONFIG_CONTENT).expect("DEFAULT_CONFIG_CONTENT should tokenize successfully");
+        let config = parse(&tokens).expect("DEFAULT_CONFIG_CONTENT should parse successfully");
+
+        assert_eq!(config.mod_key, "Mod4");
+        assert_eq!(config.terminal, "alacritty");
+        assert_eq!(config.font, "monospace");
+        assert_eq!(config.layout, crate::layout::LayoutType::Bsp);
+        assert_eq!(config.border_width, 2);
+        assert_eq!(config.inner_gap, 8);
+        assert_eq!(config.outer_gap, 8);
+        assert!((config.master_ratio - 0.60).abs() < f32::EPSILON);
+
+        assert_eq!(config.theme.bg, 0x1a1b26);
+        assert_eq!(config.theme.fg, 0xc0caf5);
+        assert_eq!(config.theme.active_bg, 0x7aa2f7);
+        assert_eq!(config.theme.active_fg, 0x15161e);
+        assert_eq!(config.theme.urgent_bg, 0xf7768e);
+        assert_eq!(config.theme.urgent_fg, 0x15161e);
+        assert_eq!(config.theme.inactive_fg, 0x555566);
+
+        assert_eq!(config.focused_color, 0x00ffffff);
+        assert_eq!(config.normal_color, 0x00444444);
+        assert_eq!(config.urgent_color, 0x00ff0000);
+
+        assert!(config.workspace_mouse);
+        assert!(config.workspace_wheel_switch);
+
+        assert!(!config.tab_config.show_index);
+        assert_eq!(config.tab_config.max_width, 200);
+        assert!(config.tab_config.mouse);
+        assert!(config.tab_config.wheel_switch);
+
+        let default_bindings = default_keybindings();
+        assert_eq!(config.bindings.len(), default_bindings.len());
+        for (idx, (parsed, expected)) in config.bindings.iter().zip(default_bindings.iter()).enumerate() {
+            assert_eq!(parsed, expected, "Mismatch at binding index {}", idx);
+        }
+    }
+
+    #[test]
+    fn test_create_default_config_at_path() {
+        let temp_dir = std::env::temp_dir().join(format!("tilo_cfg_test_{}", std::process::id()));
+        let config_file = temp_dir.join("subfolder").join("config");
+
+        assert!(!config_file.exists());
+        create_default_config_at_path(&config_file).expect("Creation should succeed");
+        assert!(config_file.exists());
+
+        let content = std::fs::read_to_string(&config_file).expect("File should be readable");
+        assert_eq!(content, DEFAULT_CONFIG_CONTENT);
+
+        let loaded = load_config_from_path(&config_file).expect("Loaded config should parse");
+        assert_eq!(loaded.mod_key, "Mod4");
+        assert_eq!(loaded.layout, crate::layout::LayoutType::Bsp);
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 }

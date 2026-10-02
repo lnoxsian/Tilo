@@ -537,5 +537,68 @@ bar_workspace_wheel yes
     assert!(config.workspace_wheel_switch);
 }
 
+#[test]
+fn test_default_config_created_when_missing() {
+    let temp_dir = std::env::temp_dir().join(format!("tilo_xdg_test_{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&temp_dir);
+    let target_file = temp_dir.join("tilo").join("config");
+
+    // Ensure it doesn't exist initially
+    assert!(!target_file.exists());
+
+    // Create default config at target_file
+    tilo::config::create_default_config_at_path(&target_file)
+        .expect("Failed to create default config at path");
+
+    assert!(target_file.exists());
+
+    // Verify it is a valid, parseable configuration matching default expectations
+    let config = load_config_from_path(&target_file).expect("Failed to load created default config");
+    assert_eq!(config.mod_key, "Mod4");
+    assert_eq!(config.terminal, "alacritty");
+    assert_eq!(config.border_width, 2);
+    assert_eq!(config.inner_gap, 8);
+    assert_eq!(config.outer_gap, 8);
+    assert_eq!(config.layout, tilo::layout::LayoutType::Bsp);
+    assert_eq!(config.theme.bg, 0x1a1b26);
+    assert_eq!(config.theme.fg, 0xc0caf5);
+    assert_eq!(config.bindings.len(), 55);
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_create_default_config_if_missing_xdg() {
+    let temp_dir = std::env::temp_dir().join(format!("tilo_xdg_env_test_{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&temp_dir);
+
+    // Set XDG_CONFIG_HOME
+    let prev_xdg = std::env::var("XDG_CONFIG_HOME").ok();
+    unsafe {
+        std::env::set_var("XDG_CONFIG_HOME", &temp_dir);
+    }
+
+    let expected_path = temp_dir.join("tilo").join("config");
+    assert!(!expected_path.exists());
+
+    let res = tilo::config::create_default_config_if_missing();
+    assert_eq!(res.unwrap(), Some(expected_path.clone()));
+    assert!(expected_path.exists());
+
+    // Second call should detect existing file and return None
+    let res_second = tilo::config::create_default_config_if_missing();
+    assert_eq!(res_second.unwrap(), None);
+
+    // Restore environment
+    unsafe {
+        match prev_xdg {
+            Some(v) => std::env::set_var("XDG_CONFIG_HOME", v),
+            None => std::env::remove_var("XDG_CONFIG_HOME"),
+        }
+    }
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}
+
 
 
