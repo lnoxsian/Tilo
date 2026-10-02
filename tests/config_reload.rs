@@ -162,6 +162,7 @@ master_ratio 0.75
 terminal alacritty
 bind Mod4+Return spawn alacritty
 bind Mod4+q close
+bind Mod4+Shift+r reload
 ";
         std::fs::write(&config_path, updated_cfg).unwrap();
 
@@ -238,6 +239,76 @@ unknown_directive foo bar
         // Point default config path / reload
         assert!(reload_config(&mut wm).is_err() || reload_config(&mut wm).is_ok());
 
+        // 9. Verify Mod4 + Shift + r KeyPress event triggers Action::Reload
+        let mapping = wm.input_manager.mapping.clone().expect("Mapping missing");
+        let kc = mapping.keysym_to_keycodes(tilo::keybind::XK_R)[0];
+        let ev = x11rb::protocol::xproto::KeyPressEvent {
+            response_type: 2,
+            detail: kc,
+            sequence: 1,
+            time: 0,
+            root: wm.context.root_window,
+            event: wm.context.root_window,
+            child: 0,
+            root_x: 0,
+            root_y: 0,
+            event_x: 0,
+            event_y: 0,
+            state: x11rb::protocol::xproto::KeyButMask::from(tilo::keybind::MOD_SUPER | tilo::keybind::MOD_SHIFT),
+            same_screen: true,
+        };
+        assert_eq!(wm.input_manager.handle_event(&ev), Some(Action::Reload));
+        assert!(wm.handle_key_press(&ev).is_ok());
+
         let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+}
+
+#[test]
+fn test_default_keybinding_mod4_shift_r_reload_in_xephyr() {
+    if !Command::new("which")
+        .arg("Xephyr")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+    {
+        return;
+    }
+
+    let xephyr = XephyrServer::start(97);
+    if let Some(server) = xephyr {
+        let wm_ctx = X11Context::connect_to(Some(&server.display))
+            .expect("WM context connect failed");
+        assert!(wm_ctx.become_wm().is_ok());
+
+        let mut wm = WindowManager::new(wm_ctx).expect("Failed to initialize WM");
+
+        // Verify default keybindings include Mod4 + Shift + r mapped to Action::Reload
+        assert!(wm.config.bindings.iter().any(|b| {
+            b.modifiers == (tilo::keybind::MOD_SUPER | tilo::keybind::MOD_SHIFT)
+                && b.keysym == tilo::keybind::XK_R
+                && b.action == Action::Reload
+        }));
+
+        // Verify simulated KeyPress event triggers Action::Reload through handle_key_press
+        let mapping = wm.input_manager.mapping.clone().expect("Mapping missing");
+        let kc = mapping.keysym_to_keycodes(tilo::keybind::XK_R)[0];
+        let ev = x11rb::protocol::xproto::KeyPressEvent {
+            response_type: 2,
+            detail: kc,
+            sequence: 1,
+            time: 0,
+            root: wm.context.root_window,
+            event: wm.context.root_window,
+            child: 0,
+            root_x: 0,
+            root_y: 0,
+            event_x: 0,
+            event_y: 0,
+            state: x11rb::protocol::xproto::KeyButMask::from(tilo::keybind::MOD_SUPER | tilo::keybind::MOD_SHIFT),
+            same_screen: true,
+        };
+        assert_eq!(wm.input_manager.handle_event(&ev), Some(Action::Reload));
+        assert!(wm.handle_key_press(&ev).is_ok());
     }
 }

@@ -329,11 +329,11 @@ fn parse_line(
     };
 
     match directive {
-        "mod" => {
+        "mod" | "mod_key" | "modifier" => {
             if line.len() < 2 {
                 return Err(ConfigError::ParseError {
                     line: line_number,
-                    message: "Directive 'mod' requires a key argument (e.g. 'mod Mod4')".to_string(),
+                    message: format!("Directive '{}' requires a key argument (e.g. '{} Mod4')", directive, directive),
                 });
             }
             let key = token_to_string(line[1]);
@@ -1212,6 +1212,21 @@ bind Mod4+Shift+2 move_workspace 2
         assert_eq!(config.bindings[0].modifiers, MOD_SUPER);
         assert_eq!(config.bindings[0].keysym, XK_RETURN);
         assert_eq!(config.bindings[0].action, Action::Spawn("foot".to_string()));
+    }
+
+    #[test]
+    fn test_parse_mod_key_alias() {
+        let input1 = "mod_key Mod4\nborder_width 3\n";
+        let tokens1 = tokenize(input1).unwrap();
+        let config1 = parse(&tokens1).unwrap();
+        assert_eq!(config1.mod_key, "Mod4");
+        assert_eq!(config1.border_width, 3);
+
+        let input2 = "modifier Mod1\nborder_width 4\n";
+        let tokens2 = tokenize(input2).unwrap();
+        let config2 = parse(&tokens2).unwrap();
+        assert_eq!(config2.mod_key, "Mod1");
+        assert_eq!(config2.border_width, 4);
     }
 
     #[test]

@@ -360,6 +360,7 @@ mod tests {
         assert!(binds.iter().any(|b| b.action == Action::Close));
         assert!(binds.iter().any(|b| b.action == Action::Exit));
         assert!(binds.iter().any(|b| b.modifiers == MOD_SUPER && b.keysym == XK_R && b.action == Action::RotateMaster));
+        assert!(binds.iter().any(|b| b.modifiers == MOD_SUPER | MOD_SHIFT && b.keysym == XK_R && b.action == Action::Reload));
         assert!(binds.iter().any(|b| b.modifiers == MOD_SUPER && b.keysym == XK_SPACE && b.action == Action::CycleLayout));
     }
 }
