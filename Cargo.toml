@@ -1,16 +1,11 @@
 [package]
 name = "tilo"
-version = "0.2.2"
+version = "0.2.5"
 edition = "2024"
 
-[features]
-default = ["pango"]
-pango = ["dep:cairo-rs", "dep:pangocairo"]
-
 [dependencies]
-cairo-rs = { version = "0.22", optional = true }
+fontdue = "0.9.4"
 libc = "0.2"
-pangocairo = { version = "0.22", optional = true }
 thiserror = "2.0.21"
 x11rb = { version = "0.14.0", features = ["randr", "cursor", "resource_manager"] }
 

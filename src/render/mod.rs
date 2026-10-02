@@ -1,29 +1,28 @@
 //! Statusbar and text rendering pipeline.
 //!
-//! Implements Phase 18 of Plan.md:
+//! Implements a modern, 100% pure Rust rendering engine:
 //! - Dual-engine rendering architecture:
-//!   1. Zero-allocation X11 Core font engine (`is_core = true`) for < 2 MB RAM usage.
-//!   2. Anti-aliased Pango/Cairo engine for modern TrueType / OpenType font rendering.
+//!   1. Modern pure Rust TrueType/OpenType font engine powered by `fontdue` and an in-memory
+//!      software framebuffer with SIMD rasterization and smooth alpha blending.
+//!   2. Zero-allocation X11 Core font engine (`is_core = true`) for < 2 MB RAM usage or as
+//!      an automatic fallback when no font files exist on the host.
 //! - X11 core font loading and baseline metrics calculation ([`Renderer::load_font`]).
 //! - Double-buffered rendering via off-screen `Pixmap` to eliminate visual flickering.
 //! - Workspace highlighting (active workspace pill background and text).
 //! - Active window title indication.
 //! - Status metrics rendering (RAM, CPU, Clock, Layout).
 
+pub mod font;
+pub use font::{parse_font_spec, resolve_font_file, FontEngine};
+
 use crate::layout::Rect;
 use crate::statusbar::{ColorScheme, StatusModule, StatusbarError, TiloError};
 use crate::x11::X11Error;
-#[cfg(feature = "pango")]
-use pangocairo::pango::{self, FontDescription};
-#[cfg(feature = "pango")]
 use std::cell::RefCell;
-#[cfg(feature = "pango")]
 use std::collections::HashMap;
 use x11rb::connection::Connection;
-#[cfg(feature = "pango")]
-use x11rb::protocol::xproto::ImageFormat;
 use x11rb::protocol::xproto::{
-    ChangeGCAux, ConnectionExt, CreateGCAux, Rectangle,
+    ChangeGCAux, ConnectionExt, CreateGCAux, ImageFormat, Rectangle,
 };
 
 /// Converts a 0x00RRGGBB integer color into floating point RGB values (0.0 to 1.0).
@@ -35,52 +34,20 @@ pub fn color_to_rgb(color: u32) -> (f64, f64, f64) {
     (r, g, b)
 }
 
-/// Parses an i3-compatible font specification string into a [`pango::FontDescription`].
-///
-/// Supports strings with or without the `pango:` prefix, such as:
-/// - `"pango:monospace 10"`
-/// - `"monospace 10"`
-/// - `"pango:DejaVu Sans Mono Bold 11"`
-/// - `"JetBrainsMono Nerd Font 10"`
-///
-/// If no font size is specified, defaults to 10 points.
-#[cfg(feature = "pango")]
-pub fn parse_font_description(font_name: &str) -> FontDescription {
-    let trimmed = font_name.trim();
-    let clean = if let Some(stripped) = trimmed.strip_prefix("pango:") {
-        stripped.trim()
-    } else {
-        trimmed
-    };
-    let mut desc = FontDescription::from_string(clean);
-    if desc.size() == 0 {
-        desc.set_size(10 * pango::SCALE);
-    }
-    desc
-}
-
 /// Determines if a font specification should use the ultra-low-memory X11 Core font engine.
 pub fn is_core_font_spec(font_name: &str) -> bool {
-    #[cfg(not(feature = "pango"))]
-    {
-        let _ = font_name;
-        true
+    let trimmed = font_name.trim();
+    if trimmed.starts_with("core:") {
+        return true;
     }
-    #[cfg(feature = "pango")]
-    {
-        let trimmed = font_name.trim();
-        if trimmed.starts_with("core:") {
-            return true;
-        }
-        if trimmed.starts_with("pango:") {
-            return false;
-        }
-        trimmed == "fixed"
-            || trimmed.starts_with("-misc-fixed")
-            || trimmed == "6x13"
-            || trimmed == "9x15"
-            || trimmed.starts_with('-')
+    if trimmed.starts_with("pango:") {
+        return false;
     }
+    trimmed == "fixed"
+        || trimmed.starts_with("-misc-fixed")
+        || trimmed == "6x13"
+        || trimmed == "9x15"
+        || trimmed.starts_with('-')
 }
 
 /// Strips the `"core:"` prefix from a font specification if present.
@@ -90,6 +57,19 @@ pub fn clean_core_font_name(font_name: &str) -> &str {
         stripped.trim()
     } else {
         trimmed
+    }
+}
+
+/// Formats a layout indicator so that all layout symbols are consistently 3 characters long,
+/// stripping outer brackets if a 5-character symbol was provided (e.g. "[|||]" -> "|||", "[===]" -> "===", "[[] =]" -> "[]=")
+/// and wrapping 1-character symbols (e.g. "M" -> "[M]").
+pub fn format_layout_symbol(layout_symbol: &str) -> std::borrow::Cow<'_, str> {
+    if layout_symbol.len() > 3 && layout_symbol.starts_with('[') && layout_symbol.ends_with(']') {
+        std::borrow::Cow::Borrowed(&layout_symbol[1..layout_symbol.len() - 1])
+    } else if layout_symbol.len() == 1 {
+        std::borrow::Cow::Owned(format!("[{}]", layout_symbol))
+    } else {
+        std::borrow::Cow::Borrowed(layout_symbol)
     }
 }
 
@@ -117,22 +97,15 @@ pub struct Renderer {
     /// Whether this renderer is operating in the zero-allocation pure X11 Core font engine mode.
     pub is_core: bool,
 
-    #[cfg(feature = "pango")]
-    /// Parsed Pango font description.
-    pub font_desc: FontDescription,
-    #[cfg(feature = "pango")]
-    /// Off-screen Cairo image surface matching the pixmap dimensions (`None` if `is_core` is true).
-    surface: Option<RefCell<cairo::ImageSurface>>,
-    #[cfg(feature = "pango")]
-    /// Reusable Pango layout for zero-allocation text measurement and rendering (`None` if `is_core` is true).
-    layout: Option<RefCell<pango::Layout>>,
-    #[cfg(feature = "pango")]
-    /// Bounded cache of calculated text widths to avoid repeated layout passes.
+    /// Pure Rust TrueType/OpenType font engine powered by `fontdue` (None if `is_core` is true).
+    pub font_engine: Option<FontEngine>,
+    /// Software pixel framebuffer for anti-aliased font rendering and shape drawing (None if `is_core` is true).
+    framebuffer: Option<RefCell<Vec<u32>>>,
+    /// Bounded cache of calculated text widths to avoid repeated metrics calculations.
     text_width_cache: RefCell<HashMap<String, u16>>,
 }
 
-// Cairo's ImageSurface contains a raw NonNull pointer, but the surface inside Renderer
-// is strictly owned and not shared across threads concurrently, making it safe to transfer ownership (Send).
+// Renderer is strictly owned and not shared across threads concurrently, making it safe to transfer ownership (Send).
 unsafe impl Send for Renderer {}
 
 impl Renderer {
@@ -187,9 +160,9 @@ impl Renderer {
 
     /// Creates a new `Renderer` initialized with an off-screen pixmap and graphics context.
     ///
-    /// In X11 Core font mode (`is_core = true`), no Cairo surfaces or Pango layouts are allocated,
-    /// keeping RAM consumption strictly under 2 MB.
-    /// In Pango mode, TrueType / OpenType anti-aliased font rendering is enabled.
+    /// In pure Rust mode, loads TrueType/OpenType fonts via `fontdue` and renders anti-aliased text
+    /// into an in-memory software buffer, syncing to X11 via `put_image` without any C dependencies.
+    /// In X11 Core font mode (`is_core = true`), no software buffer is allocated, keeping RAM strictly under 2 MB.
     pub fn new(
         conn: &impl Connection,
         drawable: u32,
@@ -198,24 +171,32 @@ impl Renderer {
         depth: u8,
         font_name: &str,
     ) -> Result<Self, StatusbarError> {
-        let is_core = is_core_font_spec(font_name);
+        let is_explicit_core = is_core_font_spec(font_name);
         let clean_name = clean_core_font_name(font_name);
 
-        let (font_id, core_ascent, core_descent, core_width) = if is_core {
-            if let Ok(res) = Self::try_open_font(conn, clean_name) {
-                res
-            } else {
-                let mut loaded = None;
-                for fallback in &["fixed", "6x13", "9x15", "-misc-fixed-medium-r-*-*-13-*-*-*-*-*-*-*"] {
-                    if let Ok(res) = Self::try_open_font(conn, fallback) {
-                        loaded = Some(res);
-                        break;
-                    }
-                }
-                loaded.unwrap_or((0, 12, 4, 8))
+        // 1. If not explicitly core, attempt to load via fontdue pure Rust engine
+        let mut font_engine_opt = None;
+        if !is_explicit_core
+            && let Ok(engine) = FontEngine::load(font_name) {
+                font_engine_opt = Some(engine);
             }
+
+        let is_core = is_explicit_core || font_engine_opt.is_none();
+
+        // 2. Metrics calculation: from FontEngine if loaded, otherwise from core X11 font
+        let (font_id, core_ascent, core_descent, core_width) = if let Some(ref fe) = font_engine_opt {
+            (0, fe.ascent, fe.descent, fe.char_width)
+        } else if let Ok(res) = Self::try_open_font(conn, clean_name) {
+            res
         } else {
-            (0, 12, 4, 8)
+            let mut loaded = None;
+            for fallback in &["fixed", "6x13", "9x15", "-misc-fixed-medium-r-*-*-13-*-*-*-*-*-*-*"] {
+                if let Ok(res) = Self::try_open_font(conn, fallback) {
+                    loaded = Some(res);
+                    break;
+                }
+            }
+            loaded.unwrap_or((0, 12, 4, 8))
         };
 
         let gc = conn.generate_id()?;
@@ -229,97 +210,170 @@ impl Renderer {
         conn.create_pixmap(depth, pixmap, drawable, width, height)?;
         conn.flush()?;
 
-        #[cfg(not(feature = "pango"))]
-        {
-            let _ = is_core;
-            #[cfg(target_os = "linux")]
-            unsafe {
-                libc::malloc_trim(0);
-            }
-            Ok(Self {
-                gc,
-                font_id,
-                pixmap,
-                depth,
-                width,
-                height,
-                font_ascent: core_ascent,
-                font_descent: core_descent,
-                char_width: core_width,
-                is_core: true,
-            })
+        let framebuffer = if !is_core {
+            let len = (width as usize) * (height as usize);
+            Some(RefCell::new(vec![0u32; len]))
+        } else {
+            None
+        };
+
+        #[cfg(target_os = "linux")]
+        unsafe {
+            libc::malloc_trim(0);
         }
 
-        #[cfg(feature = "pango")]
-        {
-            if is_core {
-                #[cfg(target_os = "linux")]
-                unsafe {
-                    libc::malloc_trim(0);
+        Ok(Self {
+            gc,
+            font_id,
+            pixmap,
+            depth,
+            width,
+            height,
+            font_ascent: core_ascent,
+            font_descent: core_descent,
+            char_width: core_width,
+            is_core,
+            font_engine: font_engine_opt,
+            framebuffer,
+            text_width_cache: RefCell::new(HashMap::new()),
+        })
+    }
+
+    /// Fills a solid rectangle in the software framebuffer using fast SIMD slice filling.
+    fn fill_rect_software(
+        &self,
+        fb: &mut [u32],
+        x: i16,
+        y: i16,
+        width: u16,
+        height: u16,
+        color: u32,
+    ) {
+        let fb_w = self.width as usize;
+        let fb_h = self.height as usize;
+        if fb_w == 0 || fb_h == 0 || width == 0 || height == 0 {
+            return;
+        }
+
+        let x0 = (x.max(0) as usize).min(fb_w);
+        let y0 = (y.max(0) as usize).min(fb_h);
+        let x1 = ((x as i32 + width as i32).max(0) as usize).min(fb_w);
+        let y1 = ((y as i32 + height as i32).max(0) as usize).min(fb_h);
+
+        if x1 > x0 && y1 > y0 {
+            let fill_len = x1 - x0;
+            for row in y0..y1 {
+                let start = row * fb_w + x0;
+                fb[start..start + fill_len].fill(color);
+            }
+        }
+    }
+
+    /// Draws anti-aliased text into the software framebuffer using alpha coverage blending.
+    fn draw_text_software(
+        &self,
+        fb: &mut [u32],
+        fe: &FontEngine,
+        x: i16,
+        y: i16,
+        text: &str,
+        color: u32,
+    ) {
+        let fb_w = self.width as usize;
+        let fb_h = self.height as usize;
+        if fb_w == 0 || fb_h == 0 {
+            return;
+        }
+
+        let src_r = (color >> 16) & 0xff;
+        let src_g = (color >> 8) & 0xff;
+        let src_b = color & 0xff;
+
+        let mut pen_x = x as i32;
+        let pen_y = y as i32;
+
+        let div255 = |v: u32| (v + 1 + (v >> 8)) >> 8;
+
+        for ch in text.chars() {
+            fe.with_glyph(ch, |metrics, bitmap| {
+                if metrics.width > 0 && metrics.height > 0 {
+                    let left_x = pen_x + metrics.xmin;
+                    let bottom_y = pen_y - metrics.ymin;
+                    let top_y = bottom_y - metrics.height as i32;
+                    let glyph_w = metrics.width;
+                    let glyph_h = metrics.height;
+
+                    let is_horizontally_inside = left_x >= 0 && (left_x + glyph_w as i32) <= fb_w as i32;
+
+                    for r in 0..glyph_h {
+                        let screen_y = top_y + r as i32;
+                        if screen_y < 0 || screen_y >= fb_h as i32 {
+                            continue;
+                        }
+                        let row_offset = (screen_y as usize) * fb_w;
+                        let bitmap_row = r * glyph_w;
+
+                        if is_horizontally_inside {
+                            // Fast path: contiguous unclipped row slice enables auto-vectorization
+                            let x_start = left_x as usize;
+                            let row_slice = &mut fb[row_offset + x_start..row_offset + x_start + glyph_w];
+                            for c in 0..glyph_w {
+                                let coverage = bitmap[bitmap_row + c] as u32;
+                                if coverage == 0 {
+                                    continue;
+                                }
+                                if coverage == 255 {
+                                    row_slice[c] = color;
+                                } else {
+                                    let dst = row_slice[c];
+                                    let dst_r = (dst >> 16) & 0xff;
+                                    let dst_g = (dst >> 8) & 0xff;
+                                    let dst_b = dst & 0xff;
+                                    let inv_a = 255 - coverage;
+                                    let out_r = div255(src_r * coverage + dst_r * inv_a);
+                                    let out_g = div255(src_g * coverage + dst_g * inv_a);
+                                    let out_b = div255(src_b * coverage + dst_b * inv_a);
+                                    row_slice[c] = (out_r << 16) | (out_g << 8) | out_b;
+                                }
+                            }
+                        } else {
+                            // Clipped edge path
+                            for c in 0..glyph_w {
+                                let screen_x = left_x + c as i32;
+                                if screen_x < 0 || screen_x >= fb_w as i32 {
+                                    continue;
+                                }
+                                let coverage = bitmap[bitmap_row + c] as u32;
+                                if coverage == 0 {
+                                    continue;
+                                }
+                                let idx = row_offset + screen_x as usize;
+                                if coverage == 255 {
+                                    fb[idx] = color;
+                                } else {
+                                    let dst = fb[idx];
+                                    let dst_r = (dst >> 16) & 0xff;
+                                    let dst_g = (dst >> 8) & 0xff;
+                                    let dst_b = dst & 0xff;
+                                    let inv_a = 255 - coverage;
+                                    let out_r = div255(src_r * coverage + dst_r * inv_a);
+                                    let out_g = div255(src_g * coverage + dst_g * inv_a);
+                                    let out_b = div255(src_b * coverage + dst_b * inv_a);
+                                    fb[idx] = (out_r << 16) | (out_g << 8) | out_b;
+                                }
+                            }
+                        }
+                    }
                 }
-                return Ok(Self {
-                    gc,
-                    font_id,
-                    pixmap,
-                    depth,
-                    width,
-                    height,
-                    font_ascent: core_ascent,
-                    font_descent: core_descent,
-                    char_width: core_width,
-                    is_core: true,
-                    font_desc: parse_font_description("fixed"),
-                    surface: None,
-                    layout: None,
-                    text_width_cache: RefCell::new(HashMap::new()),
-                });
-            }
-
-            let font_desc = parse_font_description(font_name);
-            let surface = cairo::ImageSurface::create(cairo::Format::Rgb24, width as i32, height as i32)
-                .map_err(|e| StatusbarError::RenderError(format!("Failed to create Cairo surface: {}", e)))?;
-
-            let cr = cairo::Context::new(&surface)
-                .map_err(|e| StatusbarError::RenderError(format!("Failed to create Cairo context: {}", e)))?;
-            let layout = pangocairo::functions::create_layout(&cr);
-            layout.set_font_description(Some(&font_desc));
-
-            // Calculate accurate font metrics using Pango
-            layout.set_text("M");
-            let (cw, ch) = layout.pixel_size();
-            let baseline = (layout.baseline() / pango::SCALE) as i16;
-            let pango_ascent = baseline.max(1);
-            let pango_descent = (ch as i16 - baseline).max(0);
-            let pango_char_w = (cw as u16).max(1);
-
-            #[cfg(target_os = "linux")]
-            unsafe {
-                libc::malloc_trim(0);
-            }
-
-            Ok(Self {
-                gc,
-                font_id,
-                pixmap,
-                depth,
-                width,
-                height,
-                font_ascent: pango_ascent,
-                font_descent: pango_descent,
-                char_width: pango_char_w,
-                is_core: false,
-                font_desc,
-                surface: Some(RefCell::new(surface)),
-                layout: Some(RefCell::new(layout)),
-                text_width_cache: RefCell::new(HashMap::new()),
-            })
+                pen_x += metrics.advance_width.round() as i32;
+            });
         }
     }
 
     /// Draws a string of text onto the active rendering target.
     ///
+    /// In pure Rust mode, renders anti-aliased glyphs into the software framebuffer.
     /// In X11 Core mode, uses direct zero-allocation `poly_text8`/`image_text8` protocol requests.
-    /// In Pango mode, renders anti-aliased glyphs via Cairo/Pango.
     pub fn draw_text(
         &self,
         conn: &impl Connection,
@@ -333,24 +387,11 @@ impl Renderer {
             return Ok(());
         }
 
-        #[cfg(feature = "pango")]
-        if !self.is_core {
-            if let Some(ref surface_cell) = self.surface
-                && let Some(ref layout_cell) = self.layout {
-                    let (r, g, b) = color_to_rgb(color);
-                    let surface = surface_cell.borrow();
-                    if let Ok(cr) = cairo::Context::new(&*surface) {
-                        cr.set_source_rgb(r, g, b);
-                        let layout = layout_cell.borrow();
-                        layout.set_text(text);
-
-                        let baseline_px = (layout.baseline() / pango::SCALE) as i16;
-                        let top_y = y - baseline_px;
-                        cr.move_to(x as f64, top_y as f64);
-                        pangocairo::functions::show_layout(&cr, &layout);
-                    }
-                }
-            return Ok(());
+        if !self.is_core
+            && let Some(ref fe) = self.font_engine
+            && let Some(ref fb_cell) = self.framebuffer {
+                self.draw_text_software(&mut fb_cell.borrow_mut(), fe, x, y, text, color);
+                return Ok(());
         }
 
         // Core X11 font rendering path (zero heap allocations)
@@ -386,18 +427,10 @@ impl Renderer {
         height: u16,
         color: u32,
     ) -> Result<(), StatusbarError> {
-        #[cfg(feature = "pango")]
-        if !self.is_core {
-            if let Some(ref surface_cell) = self.surface {
-                let (r, g, b) = color_to_rgb(color);
-                let surface = surface_cell.borrow();
-                if let Ok(cr) = cairo::Context::new(&*surface) {
-                    cr.set_source_rgb(r, g, b);
-                    cr.rectangle(x as f64, y as f64, width as f64, height as f64);
-                    let _ = cr.fill();
-                }
-            }
-            return Ok(());
+        if !self.is_core
+            && let Some(ref fb_cell) = self.framebuffer {
+                self.fill_rect_software(&mut fb_cell.borrow_mut(), x, y, width, height, color);
+                return Ok(());
         }
 
         // Core X11 fill path (zero heap allocations)
@@ -419,19 +452,19 @@ impl Renderer {
             return 0;
         }
 
-        #[cfg(feature = "pango")]
-        if !self.is_core {
-            if let Some(&w) = self.text_width_cache.borrow().get(text) {
-                return w;
-            }
+        if !self.is_core
+            && let Some(ref fe) = self.font_engine {
+                if let Some(&w) = self.text_width_cache.borrow().get(text) {
+                    return w;
+                }
 
-            if let Some(ref layout_cell) = self.layout {
-                let layout = layout_cell.borrow();
-                layout.set_text(text);
-                let (w, _) = layout.pixel_size();
-                let width = w as u16;
+                let mut width_px = 0.0f32;
+                for ch in text.chars() {
+                    width_px += fe.char_advance(ch);
+                }
+                let width = width_px.round() as u16;
 
-                if text.len() <= 24 && !text.contains(':') {
+                if text.len() <= 32 && !text.contains(':') {
                     let mut cache = self.text_width_cache.borrow_mut();
                     if cache.len() >= 256 {
                         cache.clear();
@@ -440,7 +473,6 @@ impl Renderer {
                 }
 
                 return width;
-            }
         }
 
         (text.chars().count() as u16) * self.char_width
@@ -448,21 +480,8 @@ impl Renderer {
 
     /// Calculates the pixel dimensions (width, height) of a given text string.
     pub fn text_size(&self, text: &str) -> (u16, u16) {
-        if text.is_empty() {
-            return (0, 0);
-        }
-
-        #[cfg(feature = "pango")]
-        if !self.is_core
-            && let Some(ref layout_cell) = self.layout {
-                let layout = layout_cell.borrow();
-                layout.set_text(text);
-                let (w, h) = layout.pixel_size();
-                return (w as u16, h as u16);
-            }
-
         (
-            (text.chars().count() as u16) * self.char_width,
+            self.text_width(text),
             (self.font_ascent + self.font_descent) as u16,
         )
     }
@@ -474,7 +493,7 @@ impl Renderer {
         y_offset + self.font_ascent
     }
 
-    /// Resizes the off-screen double-buffer pixmap and Cairo surface to match new dimensions.
+    /// Resizes the off-screen double-buffer pixmap and software framebuffer to match new dimensions.
     pub fn resize(
         &mut self,
         conn: &impl Connection,
@@ -500,23 +519,16 @@ impl Renderer {
         self.height = new_height;
         self.depth = depth;
 
-        #[cfg(feature = "pango")]
-        if !self.is_core {
-            let new_surface = cairo::ImageSurface::create(cairo::Format::Rgb24, new_width as i32, new_height as i32)
-                .map_err(|e| StatusbarError::RenderError(format!("Failed to resize Cairo surface: {}", e)))?;
-
-            let cr = cairo::Context::new(&new_surface)
-                .map_err(|e| StatusbarError::RenderError(format!("Failed to create Cairo context on resize: {}", e)))?;
-            let new_layout = pangocairo::functions::create_layout(&cr);
-            new_layout.set_font_description(Some(&self.font_desc));
-
-            self.surface = Some(RefCell::new(new_surface));
-            self.layout = Some(RefCell::new(new_layout));
-            self.text_width_cache.borrow_mut().clear();
-            #[cfg(target_os = "linux")]
-            unsafe {
-                libc::malloc_trim(0);
-            }
+        if !self.is_core
+            && let Some(ref fb_cell) = self.framebuffer {
+                let new_len = (new_width as usize) * (new_height as usize);
+                let mut fb = fb_cell.borrow_mut();
+                fb.resize(new_len, 0);
+                self.text_width_cache.borrow_mut().clear();
+                #[cfg(target_os = "linux")]
+                unsafe {
+                    libc::malloc_trim(0);
+                }
         }
 
         Ok(())
@@ -539,31 +551,35 @@ impl Renderer {
         Ok(())
     }
 
-    /// Synchronizes the Cairo image surface to the X11 double-buffer pixmap using `put_image`.
-    pub fn flush_cairo_to_pixmap(&self, _conn: &impl Connection) -> Result<(), StatusbarError> {
-        #[cfg(feature = "pango")]
-        if !self.is_core
-            && let Some(ref surface_cell) = self.surface {
-                let mut surface = surface_cell.borrow_mut();
-                surface.flush();
-                let data = surface.data().map_err(|e| {
-                    StatusbarError::RenderError(format!("Failed to borrow Cairo surface data: {}", e))
-                })?;
+    /// Synchronizes the software framebuffer to the X11 double-buffer pixmap using `put_image`.
+    pub fn flush_framebuffer_to_pixmap(&self, conn: &impl Connection) -> Result<(), StatusbarError> {
+        if self.is_core || self.framebuffer.is_none() {
+            return Ok(());
+        }
 
-                let depth = if self.depth > 0 { self.depth } else { 24 };
-                _conn.put_image(
-                    ImageFormat::Z_PIXMAP,
-                    self.pixmap,
-                    self.gc,
-                    self.width,
-                    self.height,
-                    0,
-                    0,
-                    0,
-                    depth,
-                    &data,
-                )?;
-            }
+        let fb = self.framebuffer.as_ref().unwrap().borrow();
+        let depth = if self.depth > 0 { self.depth } else { 24 };
+
+        // Zero-copy byte slice cast for ImageFormat::Z_PIXMAP
+        let byte_slice: &[u8] = unsafe {
+            std::slice::from_raw_parts(
+                fb.as_ptr() as *const u8,
+                fb.len() * std::mem::size_of::<u32>(),
+            )
+        };
+
+        conn.put_image(
+            ImageFormat::Z_PIXMAP,
+            self.pixmap,
+            self.gc,
+            self.width,
+            self.height,
+            0,
+            0,
+            0,
+            depth,
+            byte_slice,
+        )?;
         Ok(())
     }
 
@@ -580,9 +596,8 @@ impl Renderer {
         width: u16,
         height: u16,
     ) -> Result<(), StatusbarError> {
-        #[cfg(feature = "pango")]
         if !self.is_core {
-            let _ = self.flush_cairo_to_pixmap(conn);
+            let _ = self.flush_framebuffer_to_pixmap(conn);
         }
         conn.copy_area(
             self.pixmap,
@@ -597,42 +612,6 @@ impl Renderer {
         )?;
         conn.flush()?;
         Ok(())
-    }
-
-    #[cfg(feature = "pango")]
-    fn fill_rect_cairo(
-        cr: &cairo::Context,
-        x: i16,
-        y: i16,
-        width: u16,
-        height: u16,
-        color: u32,
-    ) {
-        let (r, g, b) = color_to_rgb(color);
-        cr.set_source_rgb(r, g, b);
-        cr.rectangle(x as f64, y as f64, width as f64, height as f64);
-        let _ = cr.fill();
-    }
-
-    #[cfg(feature = "pango")]
-    fn draw_text_cairo(
-        cr: &cairo::Context,
-        layout: &pango::Layout,
-        x: i16,
-        y: i16,
-        text: &str,
-        color: u32,
-    ) {
-        if text.is_empty() {
-            return;
-        }
-        let (r, g, b) = color_to_rgb(color);
-        cr.set_source_rgb(r, g, b);
-        layout.set_text(text);
-        let baseline_px = (layout.baseline() / pango::SCALE) as i16;
-        let top_y = y - baseline_px;
-        cr.move_to(x as f64, top_y as f64);
-        pangocairo::functions::show_layout(cr, layout);
     }
 
     /// Renders the entire statusbar: background, workspace indicators, layout indicator,
@@ -651,36 +630,23 @@ impl Renderer {
         tab_config: &crate::bar::tabs::TabbedConfig,
         modules: &[Box<dyn StatusModule>],
         color_scheme: &ColorScheme,
+        separator: &str,
     ) -> Result<crate::bar::StatusbarHitRects, StatusbarError> {
-        #[cfg(feature = "pango")]
-        let (surface_guard, cr_opt, layout_guard) = if !self.is_core {
-            if let Some(ref surface_cell) = self.surface
-                && let Some(ref layout_cell) = self.layout {
-                    let surface = surface_cell.borrow();
-                    let cr = cairo::Context::new(&*surface).ok();
-                    let layout = layout_cell.borrow();
-                    (Some(surface), cr, Some(layout))
-            } else {
-                (None, None, None)
-            }
-        } else {
-            (None, None, None)
-        };
-
         let do_fill_rect = |x: i16, y: i16, w: u16, h: u16, col: u32| -> Result<(), StatusbarError> {
-            #[cfg(feature = "pango")]
-            if let Some(ref cr) = cr_opt {
-                Self::fill_rect_cairo(cr, x, y, w, h, col);
-                return Ok(());
+            if !self.is_core
+                && let Some(ref fb_cell) = self.framebuffer {
+                    self.fill_rect_software(&mut fb_cell.borrow_mut(), x, y, w, h, col);
+                    return Ok(());
             }
             self.fill_rect(conn, self.pixmap, x, y, w, h, col)
         };
 
         let do_draw_text = |x: i16, y: i16, text: &str, col: u32| -> Result<(), StatusbarError> {
-            #[cfg(feature = "pango")]
-            if let (Some(cr), Some(layout)) = (&cr_opt, &layout_guard) {
-                Self::draw_text_cairo(cr, layout, x, y, text, col);
-                return Ok(());
+            if !self.is_core
+                && let Some(ref fe) = self.font_engine
+                && let Some(ref fb_cell) = self.framebuffer {
+                    self.draw_text_software(&mut fb_cell.borrow_mut(), fe, x, y, text, col);
+                    return Ok(());
             }
             self.draw_text(conn, self.pixmap, x, y, text, col).map_err(|e| StatusbarError::RenderError(e.to_string()))
         };
@@ -749,13 +715,9 @@ impl Renderer {
             cur_x += pill_w as i16 + 4;
         }
 
-        // 3. Render layout symbol
+        // 3. Render layout symbol (consistently 3 characters)
         cur_x += 6;
-        let layout_text = if layout_symbol.starts_with('[') && layout_symbol.ends_with(']') {
-            layout_symbol.to_string()
-        } else {
-            format!("[{}]", layout_symbol)
-        };
+        let layout_text = format_layout_symbol(layout_symbol);
         do_draw_text(cur_x, baseline, &layout_text, color_scheme.active_bg)?;
         cur_x += self.text_width(&layout_text) as i16 + 12;
 
@@ -772,7 +734,7 @@ impl Renderer {
         }
 
         let right_text = if !right_items.is_empty() {
-            Some(right_items.join("  |  "))
+            Some(right_items.join(separator))
         } else {
             None
         };
@@ -788,7 +750,7 @@ impl Renderer {
         // 5. Render tabs (in Tabbed mode) OR active window title (in other modes)
         if let Some(tab_list) = tabs {
             if !tab_list.is_empty() {
-                let reserved_right = (right_width + 24).max(60);
+                let reserved_right = (right_width + 16).max(40);
                 let available_width = (self.width as i16 - cur_x - reserved_right).max(0) as u16;
                 let (geoms, consumed_w) = crate::bar::tabs::calculate_tab_geometries(
                     tab_list,
@@ -845,16 +807,8 @@ impl Renderer {
         }
 
         // 7. Blit completed frame to visible window
-        #[cfg(feature = "pango")]
-        {
-            drop(layout_guard);
-            drop(cr_opt);
-            drop(surface_guard);
-        }
-
-        #[cfg(feature = "pango")]
         if !self.is_core {
-            self.flush_cairo_to_pixmap(conn)?;
+            self.flush_framebuffer_to_pixmap(conn)?;
         }
         self.copy_pixmap_to_window(conn, window)?;
 
@@ -884,27 +838,26 @@ impl Renderer {
 mod tests {
     use super::*;
 
-    #[cfg(feature = "pango")]
-    fn dummy_pango_renderer() -> Renderer {
-        let surface = cairo::ImageSurface::create(cairo::Format::Rgb24, 1000, 24).unwrap();
-        let font_desc = parse_font_description("monospace 10");
-        let cr = cairo::Context::new(&surface).unwrap();
-        let layout = pangocairo::functions::create_layout(&cr);
-        layout.set_font_description(Some(&font_desc));
+    fn dummy_fontdue_renderer() -> Renderer {
+        let engine = FontEngine::load("monospace 10").ok();
+        let (ascent, descent, char_width) = if let Some(ref fe) = engine {
+            (fe.ascent, fe.descent, fe.char_width)
+        } else {
+            (12, 4, 8)
+        };
         Renderer {
             gc: 1,
-            font_id: 2,
+            font_id: 0,
             pixmap: 3,
             width: 1000,
             height: 24,
             depth: 24,
-            font_ascent: 12,
-            font_descent: 4,
-            char_width: 8,
+            font_ascent: ascent,
+            font_descent: descent,
+            char_width,
             is_core: false,
-            font_desc,
-            surface: Some(RefCell::new(surface)),
-            layout: Some(RefCell::new(layout)),
+            font_engine: engine,
+            framebuffer: Some(RefCell::new(vec![0u32; 1000 * 24])),
             text_width_cache: RefCell::new(HashMap::new()),
         }
     }
@@ -921,13 +874,8 @@ mod tests {
             font_descent: 4,
             char_width: 8,
             is_core: true,
-            #[cfg(feature = "pango")]
-            font_desc: parse_font_description("fixed"),
-            #[cfg(feature = "pango")]
-            surface: None,
-            #[cfg(feature = "pango")]
-            layout: None,
-            #[cfg(feature = "pango")]
+            font_engine: None,
+            framebuffer: None,
             text_width_cache: RefCell::new(HashMap::new()),
         }
     }
@@ -941,21 +889,6 @@ mod tests {
         assert_eq!(cs.active_fg, 0x15161e);
     }
 
-    #[cfg(feature = "pango")]
-    #[test]
-    fn test_parse_font_description() {
-        let desc1 = parse_font_description("pango:monospace 10");
-        assert_eq!(desc1.family().as_deref(), Some("monospace"));
-        assert_eq!(desc1.size() / pango::SCALE, 10);
-
-        let desc2 = parse_font_description("DejaVu Sans Mono 12");
-        assert_eq!(desc2.family().as_deref(), Some("DejaVu Sans Mono"));
-        assert_eq!(desc2.size() / pango::SCALE, 12);
-
-        let desc3 = parse_font_description("sans-serif bold 14");
-        assert_eq!(desc3.size() / pango::SCALE, 14);
-    }
-
     #[test]
     fn test_core_font_spec_detection() {
         assert!(is_core_font_spec("fixed"));
@@ -964,12 +897,9 @@ mod tests {
         assert!(is_core_font_spec("core:monospace"));
         assert!(is_core_font_spec("-misc-fixed-medium-r-*-*-13-*-*-*-*-*-*-*"));
 
-        #[cfg(feature = "pango")]
-        {
-            assert!(!is_core_font_spec("pango:monospace 10"));
-            assert!(!is_core_font_spec("monospace 10"));
-            assert!(!is_core_font_spec("DejaVu Sans Mono"));
-        }
+        assert!(!is_core_font_spec("pango:monospace 10"));
+        assert!(!is_core_font_spec("monospace 10"));
+        assert!(!is_core_font_spec("DejaVu Sans Mono"));
     }
 
     #[test]
@@ -983,13 +913,35 @@ mod tests {
         assert_eq!(w, 40);
         assert_eq!(h, 16);
 
-        #[cfg(feature = "pango")]
-        {
-            let pango_renderer = dummy_pango_renderer();
-            let p_w = pango_renderer.text_width("Hello");
-            assert!(p_w > 0);
-            assert_eq!(pango_renderer.text_width(""), 0);
-        }
+        let fontdue_renderer = dummy_fontdue_renderer();
+        let p_w = fontdue_renderer.text_width("Hello");
+        assert!(p_w > 0);
+        assert_eq!(fontdue_renderer.text_width(""), 0);
+    }
+
+    #[test]
+    fn test_software_framebuffer_fill_and_draw() {
+        let renderer = dummy_fontdue_renderer();
+        assert!(renderer.framebuffer.is_some());
+
+        // Fill rectangle test
+        renderer.fill_rect_software(
+            &mut renderer.framebuffer.as_ref().unwrap().borrow_mut(),
+            10,
+            5,
+            20,
+            10,
+            0x00FF0000,
+        );
+
+        let fb = renderer.framebuffer.as_ref().unwrap().borrow();
+        // Check pixel at (15, 8)
+        let idx = 8 * 1000 + 15;
+        assert_eq!(fb[idx], 0x00FF0000);
+
+        // Check pixel outside rect at (5, 5)
+        let outside_idx = 5 * 1000 + 5;
+        assert_eq!(fb[outside_idx], 0);
     }
 
     #[test]
@@ -998,4 +950,41 @@ mod tests {
         // font_height = 16. y_offset = (24 - 16)/2 = 4. baseline = 4 + 12 = 16.
         assert_eq!(renderer.vertical_center_baseline(), 16);
     }
+
+    #[test]
+    fn test_format_layout_symbol_always_three_chars() {
+        // Standard 3-character symbols
+        assert_eq!(format_layout_symbol("[]="), "[]=");
+        assert_eq!(format_layout_symbol("=[]"), "=[]");
+        assert_eq!(format_layout_symbol("TT="), "TT=");
+        assert_eq!(format_layout_symbol("=TT"), "=TT");
+        assert_eq!(format_layout_symbol("|M|"), "|M|");
+        assert_eq!(format_layout_symbol("|||"), "|||");
+        assert_eq!(format_layout_symbol("==="), "===");
+        assert_eq!(format_layout_symbol("><>"), "><>");
+        assert_eq!(format_layout_symbol("[G]"), "[G]");
+        assert_eq!(format_layout_symbol("[M]"), "[M]");
+        assert_eq!(format_layout_symbol("[T]"), "[T]");
+        assert_eq!(format_layout_symbol("[S]"), "[S]");
+        assert_eq!(format_layout_symbol("[B]"), "[B]");
+
+        // 5-character bracketed symbols stripped to 3 characters
+        assert_eq!(format_layout_symbol("[|||]"), "|||");
+        assert_eq!(format_layout_symbol("[===]"), "===");
+        assert_eq!(format_layout_symbol(&format!("[{}]", "[]=")), "[]=");
+
+        // 1-character symbol wrapped to 3 characters
+        assert_eq!(format_layout_symbol("M"), "[M]");
+
+        // Verify all resulting strings are exactly 3 characters
+        let wrapped_master = format!("[{}]", "[]=");
+        let all_symbols = [
+            "[]=", "=[]", "TT=", "=TT", "|M|", "|||", "===", "><>",
+            "[G]", "[M]", "[T]", "[S]", "[B]", "[|||]", "[===]", &wrapped_master, "M",
+        ];
+        for s in all_symbols {
+            assert_eq!(format_layout_symbol(s).chars().count(), 3);
+        }
+    }
 }
+

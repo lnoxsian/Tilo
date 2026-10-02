@@ -8,6 +8,7 @@ use crate::icccm::{get_wm_hints, get_wm_normal_hints, WmState};
 use crate::keybind::{Action, MOD_LOCK, MOD_SHIFT};
 use crate::layout::{LayoutType, Rect};
 use crate::x11::X11Error;
+use x11rb::connection::Connection;
 use x11rb::protocol::xproto::{
     Allow, AtomEnum, ButtonPressEvent, ButtonReleaseEvent, ClientMessageEvent,
     ConfigWindow, ConfigureRequestEvent, ConfigureWindowAux, ConnectionExt, EventMask,
@@ -55,7 +56,12 @@ impl WindowManager {
                 self.stats.button_presses += 1;
                 self.handle_button_press(&ev)?;
             }
-            Event::MotionNotify(ev) => {
+            Event::MotionNotify(mut ev) => {
+                // MotionNotify compression: discard older pending motion events
+                // to eliminate mouse drag latency during rapid pointer movement.
+                while let Ok(Some(Event::MotionNotify(next_ev))) = self.context.connection.poll_for_event() {
+                    ev = next_ev;
+                }
                 self.handle_motion_notify(&ev)?;
             }
             Event::ButtonRelease(ev) => {

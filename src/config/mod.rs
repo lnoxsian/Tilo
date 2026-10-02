@@ -68,7 +68,7 @@ pub enum ReloadError {
 pub struct Config {
     /// The modifier key used for WM actions (e.g., "Mod4" for Super).
     pub mod_key: String,
-    /// Font string for Xft or pango.
+    /// Font specification string (e.g. "monospace 10", "DejaVu Sans Mono 11").
     pub font: String,
     /// Width of window borders in pixels.
     pub border_width: u32,
@@ -116,6 +116,11 @@ impl Config {
     /// Returns the effective font for the status bar.
     pub fn bar_font(&self) -> &str {
         self.theme.bar_font.as_deref().unwrap_or(&self.font)
+    }
+
+    /// Returns the effective separator between modules in the status bar (default: " | ").
+    pub fn bar_separator(&self) -> &str {
+        self.theme.bar_separator.as_deref().unwrap_or(" | ")
     }
 
     /// Returns the effective font for the application launcher.
@@ -567,6 +572,15 @@ fn parse_line(
             }
             let words: Vec<String> = line[1..].iter().map(|t| token_to_string(t)).collect();
             config.theme.bar_font = Some(words.join(" "));
+        }
+        "bar_separator" | "statusbar_separator" => {
+            if line.len() < 2 {
+                return Err(ConfigError::ParseError {
+                    line: line_number,
+                    message: format!("Directive '{}' requires a separator string", directive),
+                });
+            }
+            config.theme.bar_separator = Some(token_to_string(line[1]));
         }
 
         // --- Launcher Specific Overrides ---
@@ -1101,8 +1115,9 @@ terminal alacritty
 
 # --- Default Font ---
 # Font specification for the status bar, launcher, and other UI elements.
-# Supports i3-style Pango font descriptions (e.g. "pango:monospace 10", "DejaVu Sans Mono 11", "JetBrainsMono Nerd Font 10").
-font pango:monospace 10
+# Supports font descriptions (e.g. "monospace 10", "DejaVu Sans Mono 11", "JetBrainsMono Nerd Font 10").
+# Direct TrueType paths and legacy "pango:" prefixes are also recognized.
+font monospace 10
 
 # --- Window Layout ---
 # Initial layout for workspaces: bsp, master, grid, tabbed, monocle.
@@ -1147,6 +1162,7 @@ border_urgent #ff0000
 # bar_urgent_fg #15161e
 # bar_border #7aa2f7
 # bar_font monospace 10
+# bar_separator " | "
 
 # Launcher overrides:
 # launcher_bg #1a1b26
@@ -1597,7 +1613,7 @@ bind $mod+1 select_tab 1
 
         assert_eq!(config.mod_key, "Mod4");
         assert_eq!(config.terminal, "alacritty");
-        assert_eq!(config.font, "pango:monospace 10");
+        assert_eq!(config.font, "monospace 10");
         assert_eq!(config.layout, crate::layout::LayoutType::Bsp);
         assert_eq!(config.border_width, 2);
         assert_eq!(config.inner_gap, 8);
@@ -1648,5 +1664,17 @@ bind $mod+1 select_tab 1
         assert_eq!(loaded.layout, crate::layout::LayoutType::Bsp);
 
         let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_bar_separator_config() {
+        let config = Config::default();
+        assert_eq!(config.bar_separator(), " | ");
+
+        let parsed = parse(&tokenize("bar_separator \" | \"").unwrap()).expect("Should parse quoted separator");
+        assert_eq!(parsed.bar_separator(), " | ");
+
+        let parsed_pipe = parse(&tokenize("statusbar_separator \"|\"").unwrap()).expect("Should parse pipe separator");
+        assert_eq!(parsed_pipe.bar_separator(), "|");
     }
 }

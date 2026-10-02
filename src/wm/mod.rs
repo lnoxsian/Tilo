@@ -285,6 +285,7 @@ impl WindowManager {
         // Apply updated theme to statusbar if active
         if let Some(ref mut bar) = self.statusbar {
             bar.color_scheme = self.config.bar_color_scheme();
+            bar.separator = self.config.bar_separator().to_string();
             let font_name = self.config.bar_font();
             let screen = &self.context.connection.setup().roots[self.context.screen_num];
             if let Ok(new_renderer) = crate::render::Renderer::new(

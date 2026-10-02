@@ -2,7 +2,7 @@
 # ==============================================================================
 # tilo - Dependency & Rust Toolchain Installer
 # ==============================================================================
-# Installs all system build dependencies, C libraries (Cairo, Pango, Fontconfig),
+# Installs all system build dependencies, fonts,
 # runtime debug tools (Xephyr, xterm, x11-apps), and the Rust toolchain via rustup.
 # Supports: Debian / Ubuntu / Linux Mint, Arch Linux, Fedora, openSUSE, and Alpine.
 # ==============================================================================
@@ -90,10 +90,7 @@ case "${DISTRO_FAMILY}" in
             git \
             make \
             pkg-config \
-            libcairo2-dev \
-            libpango1.0-dev \
-            libfontconfig1-dev \
-            libfreetype6-dev \
+            fonts-dejavu-core \
             xserver-xephyr \
             x11-apps \
             xterm
@@ -106,10 +103,7 @@ case "${DISTRO_FAMILY}" in
             git \
             make \
             pkgconf \
-            cairo \
-            pango \
-            fontconfig \
-            freetype2 \
+            ttf-dejavu \
             xorg-server-xephyr \
             xorg-xcalc \
             xorg-xclock \
@@ -123,10 +117,7 @@ case "${DISTRO_FAMILY}" in
             curl \
             git \
             pkgconf-pkg-config \
-            cairo-devel \
-            pango-devel \
-            fontconfig-devel \
-            freetype-devel \
+            dejavu-sans-mono-fonts \
             xorg-x11-server-Xephyr \
             xorg-x11-apps \
             xterm
@@ -140,10 +131,7 @@ case "${DISTRO_FAMILY}" in
             curl \
             git \
             pkg-config \
-            cairo-devel \
-            pango-devel \
-            fontconfig-devel \
-            freetype2-devel \
+            dejavu-fonts \
             xorg-x11-server-extra \
             xterm
         ;;
@@ -156,16 +144,13 @@ case "${DISTRO_FAMILY}" in
             git \
             make \
             pkgconf \
-            cairo-dev \
-            pango-dev \
-            fontconfig-dev \
-            freetype-dev \
+            font-dejavu \
             xserver-xephyr \
             xterm
         ;;
     *)
         echo -e "${C_YELLOW}Warning: Unrecognized distribution '${DISTRO}'. Attempting generic package installation...${C_RESET}" >&2
-        echo "Please ensure you have: gcc, make, pkg-config, cairo-dev, pango-dev, and xserver-xephyr installed." >&2
+        echo "Please ensure you have: gcc, make, pkg-config, fonts, and xserver-xephyr installed." >&2
         ;;
 esac
 

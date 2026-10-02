@@ -45,8 +45,8 @@ X11
 - Dedicated scratchpad window
 - Hot-reload configuration (`Mod+Shift+r` / `SIGHUP`)
 - ICCCM and EWMH protocol compliance
-- Optional Cairo/Pango font rendering (disable with `--no-default-features`)
-- Dependency-minimal: `x11rb`, `libc`, `thiserror`, optional `cairo-rs`/`pangocairo`
+- Pure Rust TrueType/OpenType font rendering with anti-aliasing via `fontdue` (zero C GUI dependencies)
+- Dependency-minimal: `fontdue`, `x11rb`, `libc`, `thiserror`
 
 ---
 
@@ -59,14 +59,14 @@ X11
 | Rust stable (edition 2024) | Install via [rustup](https://rustup.rs/) |
 | Cargo | Included with Rust |
 | X11 development libraries | `libx11-dev`, `libxrandr-dev`, `libxcb-*` |
-| Cairo + Pango dev libraries | Required for the default `pango` feature |
+| TrueType / OpenType fonts | `fonts-dejavu-core` or `fonts-liberation` |
 | pkg-config | For build-time library detection |
 | GNU Make | Optional, wraps Cargo commands |
 
 On Debian/Ubuntu:
 ```bash
 sudo apt install libx11-dev libxrandr-dev libxcb1-dev \
-    libcairo2-dev libpango1.0-dev pkg-config build-essential
+    pkg-config build-essential fonts-dejavu-core
 ```
 
 ### Build
@@ -75,11 +75,8 @@ sudo apt install libx11-dev libxrandr-dev libxcb1-dev \
 # Debug build
 cargo build
 
-# Optimized release build (small binary, LTO, stripped)
+# Optimized release build (small binary < 1 MB, LTO, stripped)
 cargo build --release
-
-# Build without Cairo/Pango (core X11 font renderer only)
-cargo build --release --no-default-features
 ```
 
 Or via Make:

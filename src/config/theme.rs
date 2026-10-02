@@ -52,6 +52,8 @@ pub struct ThemeConfig {
     pub bar_border: Option<u32>,
     /// Specific font specification for the statusbar.
     pub bar_font: Option<String>,
+    /// Specific separator between statusbar modules (default: " | ").
+    pub bar_separator: Option<String>,
 
     // --- Launcher Overrides (None = inherit from global palette) ---
     /// Specific background color for the application launcher overlay.
@@ -97,6 +99,7 @@ impl Default for ThemeConfig {
             bar_inactive_fg: None,
             bar_border: None,
             bar_font: None,
+            bar_separator: None,
 
             launcher_bg: None,
             launcher_fg: None,

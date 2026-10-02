@@ -105,7 +105,7 @@ pub fn calculate_tab_geometries(
     // Calculate maximum width per tab respecting available space
     let total_gaps = (n.saturating_sub(1) as i16) * gap;
     let usable_w = (available_width as i16).saturating_sub(total_gaps).max(20);
-    let per_tab_budget = (usable_w / n as i16).clamp(36, config.max_width as i16);
+    let per_tab_budget = (usable_w / n as i16).clamp(20, config.max_width as i16);
 
     let mut geometries = Vec::with_capacity(n);
     let mut cur_x = start_x;

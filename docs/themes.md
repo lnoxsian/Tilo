@@ -195,20 +195,21 @@ When tilo reloads the configuration:
 
 ## Font Selection
 
-Font rendering depends on build features and the font specification format:
+Font rendering uses a 100% pure Rust dual-engine pipeline:
+- TrueType/OpenType anti-aliased font rendering via `fontdue`.
+- Core X11 font rendering for explicit `core:...` specifications or automatic fallback.
 
 | Specification | Renderer Used |
 |---|---|
-| `monospace` | Pango (default size 10pt, requires `pango` feature) |
-| `"JetBrainsMono 11"` | Pango |
-| `pango:Noto Sans 10` | Explicit Pango |
+| `monospace` | Pure Rust TrueType/OpenType (`fontdue`, default size 10pt) |
+| `"JetBrainsMono 11"` | Pure Rust TrueType/OpenType (`fontdue`) |
+| `pango:Noto Sans 10` | Legacy prefix alias (maps to `fontdue`) |
 | `fixed` | X11 core font |
 | `6x13`, `9x15` | X11 core bitmap font |
 | `core:fixed` | Explicit X11 core font |
 | XLFD (`-*-fixed-*-*-*-*-13-*`) | X11 core font |
-| Any name when built `--no-default-features` | X11 core font only |
 
-When a requested core font is unavailable, tilo falls back to standard X11 fonts. Pango requires the `pango` feature (enabled by default).
+When a requested font is unavailable or if no font files exist on the host, tilo automatically falls back to standard X11 core fonts (`fixed`, `6x13`).
 
 ---
 

@@ -15,20 +15,17 @@ This document covers everything needed to build, test, install, and release tilo
 | X11 development headers | `x11rb` XCB bindings | `libx11-dev libxrandr-dev libxcb1-dev libxcb-util-dev` |
 | pkg-config | Build-time library detection | `pkg-config` |
 
-### Required for the default `pango` feature
+### Font Requirements
 
-| Library | Purpose | Install (Debian/Ubuntu) |
+| Package | Purpose | Install (Debian/Ubuntu) |
 |---|---|---|
-| Cairo development headers | 2D rendering | `libcairo2-dev` |
-| Pango development headers | Font layout | `libpango1.0-dev` |
-| GLib development headers | Dependency of Pango | `libglib2.0-dev` |
+| TrueType / OpenType fonts | System fonts for UI rendering | `fonts-dejavu-core` or `fonts-liberation` |
 
 > [!TIP]
 > One-liner for Debian/Ubuntu:
 > ```bash
 > sudo apt install build-essential pkg-config \
->     libx11-dev libxrandr-dev libxcb1-dev \
->     libcairo2-dev libpango1.0-dev libglib2.0-dev
+>     libx11-dev libxrandr-dev libxcb1-dev fonts-dejavu-core
 > ```
 
 ### Required for testing only
@@ -75,15 +72,11 @@ panic = "abort"       # no unwinding, smaller binary
 strip = true          # strip debug symbols from final binary
 ```
 
-### Build Without Cairo/Pango
+### Dual-Engine Font Architecture
 
-If you do not have or want Cairo/Pango, build with the core X11 font renderer only:
-
-```bash
-cargo build --release --no-default-features
-```
-
-This removes the `cairo-rs` and `pangocairo` dependencies. Font rendering falls back to X11 core fonts (`fixed`, `6x13`, `9x15`, XLFD names).
+Tilo features a 100% pure Rust dual-engine font rendering pipeline:
+1. **Modern TrueType / OpenType Engine (`fontdue`)**: Renders anti-aliased glyphs into an in-memory software framebuffer with SIMD rasterization.
+2. **Zero-Allocation Core X11 Fallback (`is_core = true`)**: Automatically activates if `font fixed` or `font core:...` is configured, or if no font files are present on the host system, keeping memory under 2 MB RSS.
 
 ---
 
@@ -190,8 +183,7 @@ ls -lh target/release/tilo
 ```
 
 Expected sizes:
-- With `pango` feature: ~3–6 MB (depending on dynamic vs. static linking)
-- Without `pango` feature (`--no-default-features`): smaller, no Cairo/Pango dependency
+- Optimized release build: **< 1 MB** (~945 KB stripped)
 
 Strip manually if needed:
 ```bash
@@ -202,15 +194,14 @@ strip target/release/tilo
 
 ## Dependency Audit
 
-The dependency tree is intentionally minimal:
+The dependency tree is 100% pure Rust and zero-C-library:
 
 ```
 tilo
+├── fontdue        — Pure Rust TrueType/OpenType rasterizer (SIMD)
 ├── x11rb          — X11/XCB protocol bindings (with randr, cursor, resource_manager)
 ├── libc           — Linux syscall bindings (malloc_trim on Linux)
-├── thiserror      — Error type derivation
-├── cairo-rs       — Cairo 2D rendering (optional, pango feature)
-└── pangocairo     — Pango text layout via Cairo (optional, pango feature)
+└── thiserror      — Error type derivation
 ```
 
 Run a dependency audit:
@@ -227,7 +218,6 @@ cargo tree         # visualize full dependency tree
 cargo check                   # Fast type-check without producing a binary
 cargo build                   # Debug build
 cargo build --release         # Release build
-cargo build --no-default-features  # Build without Cairo/Pango
 cargo test                    # Run all unit and integration tests
 cargo test --test layout      # Run only the layout integration tests
 cargo test --test config      # Run only the config tests
@@ -241,8 +231,6 @@ cargo doc --open              # Generate and open Rust API documentation
 
 | Problem | Solution |
 |---|---|
-| `pkg-config: cairo not found` | Install `libcairo2-dev` or use `--no-default-features` |
-| `pkg-config: pango not found` | Install `libpango1.0-dev` or use `--no-default-features` |
 | `xcb.h: No such file` | Install `libxcb1-dev` |
 | `error[E0463]: can't find crate for std` | Ensure Rust stable is installed and up-to-date |
 | Compilation error on edition 2024 features | Run `rustup update stable` to get latest Rust |

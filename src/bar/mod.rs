@@ -130,13 +130,15 @@ pub struct Statusbar {
     pub modules: Vec<Box<dyn StatusModule>>,
     /// Active foreground and background colors.
     pub color_scheme: ColorScheme,
+    /// Delimiter/separator between right-aligned status modules (default: " | ").
+    pub separator: String,
     /// Optional graphical text and shape renderer.
     pub renderer: Option<crate::render::Renderer>,
     /// Hit-test geometries for clickable tabs in tabbed layout: (client_window, tab_rect).
     pub tab_rects: Vec<(u32, Rect)>,
     /// Hit-test geometries for clickable workspace tags: (workspace_id, rect).
     pub workspace_rects: Vec<(u32, Rect)>,
-    /// Hash of last rendered frame state to eliminate redundant Cairo passes and socket writes.
+    /// Hash of last rendered frame state to eliminate redundant rendering passes and socket writes.
     pub last_render_sig: Option<u64>,
 }
 
@@ -161,6 +163,7 @@ impl Statusbar {
             rect,
             modules,
             color_scheme,
+            separator: " | ".to_string(),
             renderer: None,
             tab_rects: Vec::new(),
             workspace_rects,
@@ -235,7 +238,7 @@ impl Statusbar {
             .map(|m| m.current_text())
             .filter(|t| !t.is_empty())
             .collect::<Vec<_>>()
-            .join("  |  ")
+            .join(&self.separator)
     }
 
     /// Updates the active and occupied workspaces in the workspace module if present.
@@ -311,6 +314,7 @@ impl Statusbar {
             self.color_scheme.urgent_bg.hash(&mut hasher);
             self.color_scheme.urgent_fg.hash(&mut hasher);
             self.color_scheme.inactive_fg.hash(&mut hasher);
+            self.separator.hash(&mut hasher);
             let sig = hasher.finish();
 
             if self.last_render_sig == Some(sig) {
@@ -329,6 +333,7 @@ impl Statusbar {
                 tab_config,
                 &self.modules,
                 &self.color_scheme,
+                &self.separator,
             )?;
             self.tab_rects = hit_rects.tab_rects;
             self.workspace_rects = hit_rects.workspace_rects;
@@ -557,6 +562,16 @@ Cached:          2000000 kB
         assert_eq!(layout.current_text(), "[T]");
         layout.set_layout("grid");
         assert_eq!(layout.current_text(), "[G]");
+        layout.set_layout("columns");
+        assert_eq!(layout.current_text(), "|||");
+        layout.set_layout("rows");
+        assert_eq!(layout.current_text(), "===");
+        layout.set_layout("[|||]");
+        assert_eq!(layout.current_text(), "|||");
+        layout.set_layout("[===]");
+        assert_eq!(layout.current_text(), "===");
+        layout.set_layout("M");
+        assert_eq!(layout.current_text(), "[M]");
     }
 
     #[test]
@@ -646,5 +661,11 @@ Cached:          2000000 kB
         assert!(full.contains("RAM"));
         assert!(full.contains("CPU"));
         assert!(full.contains("BAT"));
+        assert!(full.contains(" | "));
+        assert!(!full.contains("  |  "));
+
+        bar.separator = " • ".to_string();
+        let custom = bar.full_text();
+        assert!(custom.contains(" • "));
     }
 }

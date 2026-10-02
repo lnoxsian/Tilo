@@ -39,7 +39,7 @@ The bar is divided into three logical sections:
 
 ## Default Modules
 
-Modules are polled on individual intervals and joined with `  |  ` separators:
+Modules are polled on individual intervals and joined with ` | ` separators (configurable via `bar_separator`):
 
 | Module | Poll Interval | Data Source | Example Output |
 |---|---|---|---|
@@ -170,14 +170,14 @@ The renderer uses an off-screen pixmap to eliminate flicker. A hash of the last 
 
 | Font specification | Renderer |
 |---|---|
-| `"Family Size"` or `monospace` | Cairo/Pango (requires `pango` feature) |
-| `pango:Family Size` | Explicit Pango |
+| `"Family Size"` or `monospace` | Pure Rust TrueType/OpenType (`fontdue`) |
+| `pango:Family Size` | Legacy prefix alias (maps to `fontdue`) |
+| `/path/to/font.ttf Size` | Direct font file loading (`fontdue`) |
 | `fixed`, `6x13`, `9x15` | X11 core font |
 | `core:...` | X11 core font (explicit) |
 | XLFD name | X11 core font |
-| Any, when built `--no-default-features` | X11 core font only |
 
-When a requested core font is unavailable, tilo falls back to standard X11 fonts. Reload recreates the renderer when the effective font changes.
+When a requested font is unavailable or if no font files exist on the host, tilo automatically falls back to standard X11 core fonts. Reload recreates the renderer when the effective font changes.
 
 ---
 

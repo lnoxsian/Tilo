@@ -119,8 +119,12 @@ impl LayoutModule {
             "center-master" | "centered-master" | "|M|" | "=M=" => "|M|".to_string(),
             "grid" | "[G]" => "[G]".to_string(),
             _ => {
-                if layout.starts_with('[') && layout.ends_with(']') {
+                if layout.len() == 3 {
                     layout.to_string()
+                } else if layout.len() > 3 && layout.starts_with('[') && layout.ends_with(']') {
+                    layout[1..layout.len() - 1].to_string()
+                } else if layout.len() == 1 {
+                    format!("[{}]", layout)
                 } else {
                     "[]=".to_string()
                 }

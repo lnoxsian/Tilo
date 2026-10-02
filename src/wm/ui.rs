@@ -18,6 +18,7 @@ impl WindowManager {
         let _ = self.cursor_manager.apply_window(&self.context.connection, win_id);
         let mut bar = Statusbar::default_with_window(win_id, rect);
         bar.color_scheme = bar_colors;
+        bar.separator = self.config.bar_separator().to_string();
         let occupied = self.workspace_manager.occupied_workspaces();
         bar.set_workspace(self.current_workspace, &occupied);
 

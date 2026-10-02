@@ -8,9 +8,9 @@ Tilo is a single binary. It does not provide Wayland, a compositor, wallpaper ma
 
 ## Build Prerequisites
 
-Install Rust stable with edition 2024 support, Cargo, GNU Make, an X11 development environment, and `pkg-config`. The default `pango` feature also needs Cairo/Pango development libraries. Xephyr and ordinary X11 test clients are required for isolated integration testing.
+Install Rust stable with edition 2024 support, Cargo, GNU Make, an X11 development environment, and `pkg-config`. TrueType/OpenType fonts (e.g. `fonts-dejavu-core`) are used for UI rendering. Xephyr and ordinary X11 test clients are required for isolated integration testing.
 
-Dependencies are intentionally small: `x11rb`, `libc`, `thiserror`, and optional `cairo-rs`/`pangocairo`. The default release profile uses `opt-level = "z"`, LTO, one codegen unit, aborting panics, and symbol stripping.
+Dependencies are 100% pure Rust: `fontdue`, `x11rb`, `libc`, and `thiserror`. The default release profile uses `opt-level = "z"`, LTO, one codegen unit, aborting panics, and symbol stripping.
 
 ## Build and Test
 
@@ -28,12 +28,6 @@ make test-xephyr-release
 make test-layouts
 make clean
 make install
-```
-
-For the core-font renderer without Pango/Cairo:
-
-```bash
-cargo build --release --no-default-features
 ```
 
 Version helpers validate or update `VERSION` and `Cargo.toml`: `make version`, `make version-check`, `make bump-patch`, `make bump-minor`, `make bump-major`, and `make set-version V=x.y.z`.
@@ -1903,7 +1897,7 @@ pub enum Token {
 pub struct Config {
     /// The modifier key used for WM actions (e.g., "Mod4" for Super).
     pub mod_key: String,
-    /// Font string for Xft or pango.
+    /// Font specification string (e.g. "monospace 10", "DejaVu Sans Mono 11").
     pub font: String,
     /// Width of window borders in pixels.
     pub border_width: u32,
@@ -2227,9 +2221,7 @@ Keep rendering lightweight.
 
 If proper modern font rendering is required, introduce the smallest practical font-rendering dependency at this stage.
 
-### Text Rendering Pipeline
-
-For modern UTF-8 support without heavy UI frameworks, using `x11rb` alongside an Xft wrapper or basic X11 core fonts is recommended. For proper anti-aliasing and Unicode, an Xft or Pango-based approach is often preferred, but X11 core fonts (`ImageText8`) can be used for absolute minimalism if ASCII-only is acceptable.
+For modern UTF-8 support without heavy UI frameworks, using `x11rb` alongside a pure Rust TrueType/OpenType rasterizer (`fontdue`) is implemented. For proper anti-aliasing and Unicode, `fontdue` renders into a software framebuffer with alpha blending; X11 core fonts (`ImageText8`) can be used for absolute minimalism (< 2 MB RAM).
 
 ```rust
 /// Defines the color scheme for the statusbar or launcher.

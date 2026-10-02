@@ -69,7 +69,7 @@ Initialization failures are fatal (cannot manage a display without a connection,
 | Application launcher | `src/launcher/mod.rs` | Launcher overlay lifecycle |
 | Desktop scanner | `src/launcher/scanner.rs` | `$PATH` scanning and incremental cache |
 | Fuzzy match | `src/launcher/fuzzy.rs` | Scoring and ranking |
-| Renderer | `src/render/mod.rs` | X11 pixmap renderer, Pango/core-font paths |
+| Renderer | `src/render/mod.rs` | Double-buffered pixmap renderer, pure Rust `fontdue` & core-font paths |
 | X11 connection | `src/x11/mod.rs` | `X11Context`, `X11Error` |
 | Atom cache | `src/x11/atoms.rs` | Intern and cache all used atoms |
 | EWMH | `src/x11/ewmh.rs` | EWMH root properties and client messages |
@@ -183,7 +183,7 @@ calculate_layout(
 
 The bar and launcher render into an X11 pixmap and copy it to the visible window via `CopyArea`. A hash of the last frame state avoids a full redraw when nothing changed.
 
-With the default `pango` feature, ordinary font names use Cairo/Pango; core-font specifications (`fixed`, `6x13`, XLFD) use X11 core text drawing. `--no-default-features` builds the core-font path only.
+Font rendering uses a 100% pure Rust dual-engine pipeline: TrueType/OpenType font specifications use `fontdue` and an in-memory software framebuffer with SIMD rasterization; core-font specifications (`fixed`, `6x13`, XLFD) or host fallback use X11 core text drawing. Zero C GUI libraries are required.
 
 ---
 
