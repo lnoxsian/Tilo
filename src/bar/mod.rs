@@ -136,6 +136,8 @@ pub struct Statusbar {
     pub tab_rects: Vec<(u32, Rect)>,
     /// Hit-test geometries for clickable workspace tags: (workspace_id, rect).
     pub workspace_rects: Vec<(u32, Rect)>,
+    /// Hash of last rendered frame state to eliminate redundant Cairo passes and socket writes.
+    pub last_render_sig: Option<u64>,
 }
 
 impl Statusbar {
@@ -162,6 +164,7 @@ impl Statusbar {
             renderer: None,
             tab_rects: Vec::new(),
             workspace_rects,
+            last_render_sig: None,
         }
     }
 
@@ -265,6 +268,7 @@ impl Statusbar {
     /// Attaches an initialized [`crate::render::Renderer`] to this statusbar.
     pub fn attach_renderer(&mut self, renderer: crate::render::Renderer) {
         self.renderer = Some(renderer);
+        self.last_render_sig = None;
     }
 
     /// Renders the complete statusbar UI using the attached [`crate::render::Renderer`].
@@ -280,6 +284,41 @@ impl Statusbar {
         tab_config: &crate::bar::tabs::TabbedConfig,
     ) -> Result<(), StatusbarError> {
         if let Some(ref r) = self.renderer {
+            use std::hash::{Hash, Hasher};
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            current_ws.hash(&mut hasher);
+            occupied_ws.hash(&mut hasher);
+            layout_symbol.hash(&mut hasher);
+            active_title.hash(&mut hasher);
+            tab_config.show_index.hash(&mut hasher);
+            tab_config.max_width.hash(&mut hasher);
+            if let Some(tab_list) = tabs {
+                tab_list.len().hash(&mut hasher);
+                for t in tab_list {
+                    t.window.hash(&mut hasher);
+                    t.title.hash(&mut hasher);
+                    t.focused.hash(&mut hasher);
+                    t.urgent.hash(&mut hasher);
+                }
+            }
+            for m in &self.modules {
+                m.current_text().hash(&mut hasher);
+            }
+            self.color_scheme.bg.hash(&mut hasher);
+            self.color_scheme.fg.hash(&mut hasher);
+            self.color_scheme.active_bg.hash(&mut hasher);
+            self.color_scheme.active_fg.hash(&mut hasher);
+            self.color_scheme.urgent_bg.hash(&mut hasher);
+            self.color_scheme.urgent_fg.hash(&mut hasher);
+            self.color_scheme.inactive_fg.hash(&mut hasher);
+            let sig = hasher.finish();
+
+            if self.last_render_sig == Some(sig) {
+                // Contents are identical: skip re-rendering and socket put_image, fast copy existing pixmap
+                r.copy_pixmap_to_window(conn, self.window_id)?;
+                return Ok(());
+            }
+
             let hit_rects = r.render_statusbar(
                 conn,
                 self.window_id,
@@ -294,6 +333,7 @@ impl Statusbar {
             )?;
             self.tab_rects = hit_rects.tab_rects;
             self.workspace_rects = hit_rects.workspace_rects;
+            self.last_render_sig = Some(sig);
         } else {
             let mut wss = Vec::new();
             let mut cur_x = 8i32;
@@ -315,6 +355,7 @@ impl Statusbar {
         root_depth: u8,
     ) -> Result<(), StatusbarError> {
         self.rect = new_rect;
+        self.last_render_sig = None;
 
         // 1. Configure the X11 statusbar window geometry
         let aux = x11rb::protocol::xproto::ConfigureWindowAux::new()

@@ -308,7 +308,7 @@ impl WindowManager {
         if let Some(ref mut launcher) = self.launcher {
             launcher.color_scheme = self.config.launcher_color_scheme();
             launcher.border_color = Some(self.config.launcher_border_color());
-            if launcher.window_id != 0 {
+            if launcher.visible && launcher.window_id != 0 {
                 let font_name = self.config.launcher_font();
                 let screen = &self.context.connection.setup().roots[self.context.screen_num];
                 if let Ok(new_renderer) = crate::render::Renderer::new(
@@ -324,9 +324,9 @@ impl WindowManager {
                     }
                     launcher.attach_renderer(new_renderer);
                 }
-                if launcher.visible {
-                    let _ = launcher.render(&self.context.connection);
-                }
+                let _ = launcher.render(&self.context.connection);
+            } else if !launcher.visible && launcher.window_id != 0 {
+                let _ = launcher.destroy(&self.context.connection);
             }
         }
 

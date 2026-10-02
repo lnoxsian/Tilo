@@ -9,7 +9,7 @@ use crate::statusbar::{StatusbarError, TiloError};
 /// Scans a single binary directory for executable files.
 pub fn scan_single_bin_dir(dir: &std::path::Path) -> (Vec<String>, HashMap<String, String>) {
     let mut items = Vec::new();
-    let mut commands = HashMap::new();
+    let commands = HashMap::new();
     if let Ok(entries) = std::fs::read_dir(dir) {
         for entry in entries.flatten() {
             let file_path = entry.path();
@@ -19,7 +19,6 @@ pub fn scan_single_bin_dir(dir: &std::path::Path) -> (Vec<String>, HashMap<Strin
                 && let Some(file_name) = file_path.file_name().and_then(|n| n.to_str())
             {
                 let name_str = file_name.to_string();
-                commands.insert(name_str.clone(), name_str.clone());
                 items.push(name_str);
             }
         }
@@ -299,11 +298,10 @@ pub fn scan_desktop_dirs(dirs: &[PathBuf]) -> (Vec<String>, HashMap<String, Stri
 /// Scans `$PATH` executables.
 pub fn scan_all_executables(path_var: &str) -> (Vec<String>, HashMap<String, String>) {
     let mut all_names = HashSet::new();
-    let mut app_commands = HashMap::new();
+    let app_commands = HashMap::new();
 
     if let Ok(path_execs) = scan_path_from(path_var) {
         for exe in path_execs {
-            app_commands.insert(exe.clone(), exe.clone());
             all_names.insert(exe);
         }
     }

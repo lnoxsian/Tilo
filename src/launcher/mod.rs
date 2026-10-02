@@ -513,6 +513,9 @@ impl Launcher {
 
     /// Destroys the X11 window associated with the launcher.
     pub fn destroy<C: Connection>(&mut self, conn: &C) -> Result<(), X11Error> {
+        if let Some(renderer) = self.renderer.take() {
+            let _ = renderer.destroy(conn);
+        }
         if self.window_id != 0 {
             let _ = conn.unmap_window(self.window_id);
             let _ = conn.destroy_window(self.window_id);

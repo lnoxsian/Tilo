@@ -49,10 +49,14 @@ fn starts_with_ignore_case(haystack: &str, needle: &str) -> bool {
     if needle.len() > haystack.len() {
         return false;
     }
-    haystack
-        .chars()
-        .zip(needle.chars())
-        .all(|(h, n)| h.eq_ignore_ascii_case(&n))
+    if needle.is_ascii() && haystack.is_ascii() {
+        haystack.as_bytes()[..needle.len()].eq_ignore_ascii_case(needle.as_bytes())
+    } else {
+        haystack
+            .chars()
+            .zip(needle.chars())
+            .all(|(h, n)| h.eq_ignore_ascii_case(&n))
+    }
 }
 
 #[inline]
@@ -60,21 +64,34 @@ fn find_ignore_case(haystack: &str, needle: &str) -> Option<usize> {
     if needle.is_empty() {
         return Some(0);
     }
-    let needle_chars: Vec<char> = needle.chars().collect();
-    let haystack_chars: Vec<char> = haystack.chars().collect();
-    if needle_chars.len() > haystack_chars.len() {
-        return None;
-    }
-    for i in 0..=haystack_chars.len() - needle_chars.len() {
-        if haystack_chars[i..i + needle_chars.len()]
-            .iter()
-            .zip(needle_chars.iter())
-            .all(|(a, b)| a.eq_ignore_ascii_case(b))
-        {
-            return Some(i);
+    if needle.is_ascii() && haystack.is_ascii() {
+        let n_bytes = needle.as_bytes();
+        let h_bytes = haystack.as_bytes();
+        if n_bytes.len() > h_bytes.len() {
+            return None;
         }
+        for i in 0..=(h_bytes.len() - n_bytes.len()) {
+            if h_bytes[i..i + n_bytes.len()].eq_ignore_ascii_case(n_bytes) {
+                return Some(i);
+            }
+        }
+        None
+    } else {
+        let n_len = needle.chars().count();
+        let h_len = haystack.chars().count();
+        if n_len > h_len {
+            return None;
+        }
+        for (char_idx, (byte_idx, _)) in haystack.char_indices().enumerate() {
+            let sub = &haystack[byte_idx..];
+            if sub.chars().zip(needle.chars()).all(|(a, b)| a.eq_ignore_ascii_case(&b))
+                && sub.chars().count() >= n_len
+            {
+                return Some(char_idx);
+            }
+        }
+        None
     }
-    None
 }
 
 fn score_item(item: &str, query: &str) -> Option<i32> {
@@ -118,7 +135,7 @@ pub fn filter_executables(cache: &[String], query: &str, max_results: usize) -> 
     let binary_query = trimmed.split_whitespace().next().unwrap_or("").trim();
     let has_args = binary_query.len() < trimmed.len();
 
-    let mut scored: Vec<(&String, i32)> = Vec::new();
+    let mut scored: Vec<(&String, i32)> = Vec::with_capacity(cache.len().min(128));
 
     for item in cache {
         let full_score = score_item(item, trimmed);
@@ -139,10 +156,19 @@ pub fn filter_executables(cache: &[String], query: &str, max_results: usize) -> 
         }
     }
 
+    if scored.len() > max_results {
+        scored.select_nth_unstable_by(max_results, |a, b| {
+            b.1.cmp(&a.1)
+                .then_with(|| a.0.len().cmp(&b.0.len()))
+                .then_with(|| a.0.cmp(b.0))
+        });
+        scored.truncate(max_results);
+    }
+
     scored.sort_by(|a, b| {
         b.1.cmp(&a.1)
             .then_with(|| a.0.len().cmp(&b.0.len()))
             .then_with(|| a.0.cmp(b.0))
     });
-    scored.into_iter().take(max_results).map(|(s, _)| s.clone()).collect()
+    scored.into_iter().map(|(s, _)| s.clone()).collect()
 }

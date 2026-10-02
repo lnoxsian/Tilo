@@ -269,21 +269,20 @@ impl CpuModule {
     pub fn parse_cpu_times(content: &str) -> Option<(u64, u64)> {
         for line in content.lines() {
             if line.starts_with("cpu ") {
-                let parts: Vec<&str> = line.split_whitespace().collect();
-                if parts.len() >= 5 {
-                    let user = parts[1].parse::<u64>().ok()?;
-                    let nice = parts[2].parse::<u64>().ok()?;
-                    let system = parts[3].parse::<u64>().ok()?;
-                    let idle = parts[4].parse::<u64>().ok()?;
-                    let iowait = parts.get(5).and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
-                    let irq = parts.get(6).and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
-                    let softirq = parts.get(7).and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
-                    let steal = parts.get(8).and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
+                let mut parts = line.split_whitespace();
+                let _cpu = parts.next()?;
+                let user = parts.next()?.parse::<u64>().ok()?;
+                let nice = parts.next()?.parse::<u64>().ok()?;
+                let system = parts.next()?.parse::<u64>().ok()?;
+                let idle = parts.next()?.parse::<u64>().ok()?;
+                let iowait = parts.next().and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
+                let irq = parts.next().and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
+                let softirq = parts.next().and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
+                let steal = parts.next().and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
 
-                    let idle_time = idle + iowait;
-                    let total_time = user + nice + system + idle + iowait + irq + softirq + steal;
-                    return Some((total_time, idle_time));
-                }
+                let idle_time = idle + iowait;
+                let total_time = user + nice + system + idle + iowait + irq + softirq + steal;
+                return Some((total_time, idle_time));
             }
         }
         None

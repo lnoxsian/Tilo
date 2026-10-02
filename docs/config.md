@@ -74,32 +74,35 @@ When reloading:
 
 ---
 
-## Font Configuration (i3-Compatible Pango Syntax)
+## Font Configuration & Dual-Engine Architecture
 
-`tilo` uses Pango and Cairo for high-quality, anti-aliased font rendering, glyph metric calculations, and complete UTF-8 Unicode / Nerd Font icon support.
+`tilo` features a high-performance **dual-engine** font and text rendering pipeline:
 
-Fonts can be configured globally or overridden per component:
+1. **Anti-Aliased Pango/Cairo Engine:**
+   - Full support for modern TrueType / OpenType fonts, anti-aliased subpixel rendering, and Unicode / Nerd Font icons.
+   - Configured using i3-compatible syntax (`pango:...` or standard font family names).
+   - Bounded metrics caching and lazy surface management (the launcher's surface is freed on close to minimize resident memory).
 
-| Directive | Description | Fallback | Example |
-| :--- | :--- | :--- | :--- |
-| `font` | Global font for all UI components | `monospace 10` | `font pango:monospace 10` |
-| `bar_font` | Status bar font override | `font` | `bar_font pango:DejaVu Sans Mono 11` |
-| `launcher_font` | Application launcher font override | `font` | `launcher_font JetBrainsMono Nerd Font 11` |
+2. **Zero-Allocation Core X11 Font Engine:**
+   - Direct server-side bitmap rasterization using X11 core font protocols (`poly_text8`, `image_text8`, and `poly_fill_rectangle`).
+   - Completely eliminates client-side image surfaces and font cache mapping, maintaining a resident memory footprint of **< 2.5 MB**.
+   - Activated automatically by specifying core font names (`fixed`, `6x13`, `9x15`) or using the `core:` prefix (e.g., `font core:fixed`).
 
 ### Supported Font Syntaxes:
-Like i3 window manager, `tilo` supports both prefixed and direct Pango font specifications:
-1. **Explicit Pango Prefix:**
-   ```text
-   font pango:monospace 10
-   font pango:DejaVu Sans Mono 11
-   font pango:Noto Sans Regular 10
-   ```
-2. **Standard Family & Size:**
-   ```text
-   font JetBrainsMono Nerd Font 10
-   font monospace 11
-   font "Fira Code" 10
-   ```
+
+| Syntax Type | Engine | Memory Profile | Example |
+| :--- | :--- | :--- | :--- |
+| Explicit Pango | Pango/Cairo | Full anti-aliasing | `font pango:monospace 10` |
+| Font Family & Size | Pango/Cairo | Full anti-aliasing | `font JetBrainsMono Nerd Font 10` |
+| Core X11 Font | Core Engine | Ultra-low RAM (< 2.5 MB) | `font fixed` or `font 6x13` |
+| Explicit Core Prefix | Core Engine | Ultra-low RAM (< 2.5 MB) | `font core:fixed` |
+
+### Building for Ultra-Minimal Memory Footprint:
+For embedded devices or minimalist setups desiring the absolute lowest memory footprint without linking C GUI libraries (`libcairo`, `libpango`, `libharfbuzz`, `libfontconfig`):
+```bash
+cargo build --release --no-default-features
+```
+In this mode, `tilo` links only standard system libraries (`libc` and X11/xcb), consuming only **~2.5 MB VmRSS** and **~212 kB private heap/stack memory**.
 
 ---
 

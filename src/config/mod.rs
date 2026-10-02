@@ -1297,12 +1297,11 @@ pub fn create_default_config_at_path(path: impl AsRef<Path>) -> Result<(), std::
 /// `Ok(None)` if the configuration file already existed or the default path could not be resolved,
 /// or `Err(e)` if writing the default configuration failed.
 pub fn create_default_config_if_missing() -> Result<Option<PathBuf>, std::io::Error> {
-    if let Some(path) = default_config_path() {
-        if !path.exists() {
+    if let Some(path) = default_config_path()
+        && !path.exists() {
             create_default_config_at_path(&path)?;
             return Ok(Some(path));
         }
-    }
     Ok(None)
 }
 

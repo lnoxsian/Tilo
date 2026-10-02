@@ -216,7 +216,7 @@ impl WindowManager {
                 launcher.cursor_position = 0;
                 launcher.selected_index = 0;
                 let _ = self.context.connection.ungrab_keyboard(x11rb::CURRENT_TIME);
-                let _ = self.context.connection.unmap_window(launcher.window_id);
+                let _ = launcher.destroy(&self.context.connection);
                 self.context.flush()?;
 
                 // Restore focus to active client window or clear focus

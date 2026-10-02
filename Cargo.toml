@@ -3,10 +3,14 @@ name = "tilo"
 version = "0.2.1"
 edition = "2024"
 
+[features]
+default = ["pango"]
+pango = ["dep:cairo-rs", "dep:pangocairo"]
+
 [dependencies]
-cairo-rs = "0.22"
+cairo-rs = { version = "0.22", optional = true }
 libc = "0.2"
-pangocairo = "0.22"
+pangocairo = { version = "0.22", optional = true }
 thiserror = "2.0.21"
 x11rb = { version = "0.14.0", features = ["randr", "cursor", "resource_manager"] }
 
