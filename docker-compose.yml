@@ -1,0 +1,14 @@
+services:
+  build:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: builder
+    volumes:
+      - ./dist:/export
+    command: >
+      sh -c "mkdir -p /export &&
+             cp /app/target/release/tilo /export/tilo &&
+             chmod +x /export/tilo &&
+             echo '==> Successfully exported release binary to dist/tilo' &&
+             ls -lh /export/tilo"

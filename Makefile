@@ -9,7 +9,7 @@ CARGO ?= cargo
 TARGET_DIR := target
 SCRIPTS_DIR := scripts
 
-.PHONY: all debug release build test test-xephyr test-xephyr-release test-xephyr-layout test-layout test-layouts clean install uninstall version version-check bump-patch bump-minor bump-major set-version help
+.PHONY: all debug release build test test-xephyr test-xephyr-release test-xephyr-layout test-layout test-layouts docker-build docker-compose clean install uninstall version version-check bump-patch bump-minor bump-major set-version help
 
 # Default target: build debug binary
 all: debug
@@ -25,6 +25,23 @@ release:
 	$(CARGO) build --release
 	@echo "Release binary built at $(TARGET_DIR)/release/$(NAME)"
 	@ls -lh $(TARGET_DIR)/release/$(NAME)
+
+# Build and export release binary using Docker BuildKit into dist/tilo
+docker-build:
+	@echo "==> Building and exporting $(NAME) release binary via Docker BuildKit..."
+	@mkdir -p dist
+	docker build --target export --output type=local,dest=dist .
+	@echo "Release binary exported to dist/$(NAME)"
+	@ls -lh dist/$(NAME)
+
+# Build and export release binary using Docker Compose into dist/tilo
+docker-compose:
+	@echo "==> Building and exporting $(NAME) release binary via Docker Compose..."
+	@mkdir -p dist
+	docker compose up --build
+	@docker compose down >/dev/null 2>&1 || true
+	@echo "Release binary exported to dist/$(NAME)"
+	@ls -lh dist/$(NAME)
 
 # Alias for debug
 build: debug
@@ -62,6 +79,7 @@ test-layouts:
 clean:
 	@echo "==> Cleaning build artifacts..."
 	$(CARGO) clean
+	rm -rf dist
 
 # Install release binary
 install: release
@@ -106,11 +124,13 @@ help:
 	@echo "Tilo Makefile targets:"
 	@echo "  make              - Build debug executable (target/debug/tilo)"
 	@echo "  make release      - Build optimized release executable (target/release/tilo)"
+	@echo "  make docker-build - Build and export release binary via Docker BuildKit (dist/tilo)"
+	@echo "  make docker-compose - Build and export release binary via Docker Compose (dist/tilo)"
 	@echo "  make test         - Run cargo unit and integration tests"
 	@echo "  make test-xephyr  - Run debug build inside a nested Xephyr X11 display"
 	@echo "  make test-xephyr-layout - Run tilo in Xephyr with demo windows to visually test tiling"
 	@echo "  make test-layout  - Alias for test-xephyr-layout"
-	@echo "  make clean        - Remove target/ directory"
+	@echo "  make clean        - Remove target/ and dist/ directories"
 	@echo "  make install      - Install release binary to \$$PREFIX/bin (default: /usr/local/bin)"
 	@echo "  make uninstall    - Remove binary from \$$PREFIX/bin"
 	@echo "  make version      - Print current version"

@@ -33,6 +33,7 @@ C_GRAY=$'\033[90m'
 SCREEN_PRESET="720p"
 SCREEN_SIZE="1280x720"
 BUILD_MODE="debug"
+USE_DIST=0
 DEMO_MODE=""
 NON_INTERACTIVE=0
 AUTOMATED_TEST=0
@@ -282,6 +283,7 @@ ${C_YELLOW}Theme & Configuration Options:${C_RESET}
   -c, --config <file>      Use custom configuration file for the Xephyr session
 
 ${C_YELLOW}General Options:${C_RESET}
+  --dist                   Use pre-built release binary from dist/ (dist/tilo)
   --release                Build and run tilo in release mode (default: debug)
   --non-interactive        Disable interactive CLI prompt (runs tilo until killed)
   --automated-tests        Run non-interactive cargo integration test suite
@@ -359,6 +361,10 @@ while [[ $# -gt 0 ]]; do
                 exit 1
             fi
             ;;
+        --dist)
+            USE_DIST=1
+            shift
+            ;;
         --release)
             BUILD_MODE="release"
             shift
@@ -418,14 +424,52 @@ if [[ -z "${XEPHYR_DISPLAY}" ]]; then
     exit 1
 fi
 
-# Build tilo before launching Xephyr
-echo -e "${C_CYAN}--> Building tilo (${BUILD_MODE} mode)...${C_RESET}"
-if [[ "${BUILD_MODE}" == "release" ]]; then
-    (cd "${ROOT_DIR}" && cargo build --release)
-    TILO_BIN="${ROOT_DIR}/target/release/tilo"
+# Resolve or build tilo binary
+if [[ ${USE_DIST} -eq 1 ]]; then
+    if [[ -x "${ROOT_DIR}/dist/tilo" ]]; then
+        echo -e "${C_CYAN}--> Using exported release binary from dist/ (${ROOT_DIR}/dist/tilo)...${C_RESET}"
+        TILO_BIN="${ROOT_DIR}/dist/tilo"
+    else
+        echo -e "${C_RED}Error: --dist requested, but '${ROOT_DIR}/dist/tilo' is not available or executable.${C_RESET}" >&2
+        echo -e "Build and export it first with '${C_CYAN}make docker-build${C_RESET}' or '${C_CYAN}make docker-compose${C_RESET}'." >&2
+        exit 1
+    fi
 else
-    (cd "${ROOT_DIR}" && cargo build)
-    TILO_BIN="${ROOT_DIR}/target/debug/tilo"
+    # Build tilo before launching Xephyr if cargo is available
+    if command -v cargo >/dev/null 2>&1; then
+        echo -e "${C_CYAN}--> Building tilo (${BUILD_MODE} mode)...${C_RESET}"
+        if [[ "${BUILD_MODE}" == "release" ]]; then
+            (cd "${ROOT_DIR}" && cargo build --release) || true
+            TILO_BIN="${ROOT_DIR}/target/release/tilo"
+        else
+            (cd "${ROOT_DIR}" && cargo build) || true
+            TILO_BIN="${ROOT_DIR}/target/debug/tilo"
+        fi
+    else
+        if [[ "${BUILD_MODE}" == "release" ]]; then
+            TILO_BIN="${ROOT_DIR}/target/release/tilo"
+        else
+            TILO_BIN="${ROOT_DIR}/target/debug/tilo"
+        fi
+    fi
+
+    # Fallback to dist/ if target binary is not available or executable
+    if [[ ! -x "${TILO_BIN}" ]]; then
+        if [[ -x "${ROOT_DIR}/dist/tilo" ]]; then
+            echo -e "${C_YELLOW}--> Target binary '${TILO_BIN}' not found. Using pre-built binary from dist/ (${ROOT_DIR}/dist/tilo)...${C_RESET}"
+            TILO_BIN="${ROOT_DIR}/dist/tilo"
+        elif [[ -x "${ROOT_DIR}/target/release/tilo" ]]; then
+            echo -e "${C_YELLOW}--> Falling back to available release binary (${ROOT_DIR}/target/release/tilo)...${C_RESET}"
+            TILO_BIN="${ROOT_DIR}/target/release/tilo"
+        elif [[ -x "${ROOT_DIR}/target/debug/tilo" ]]; then
+            echo -e "${C_YELLOW}--> Falling back to available debug binary (${ROOT_DIR}/target/debug/tilo)...${C_RESET}"
+            TILO_BIN="${ROOT_DIR}/target/debug/tilo"
+        else
+            echo -e "${C_RED}Error: Neither '${TILO_BIN}' nor '${ROOT_DIR}/dist/tilo' is available or executable.${C_RESET}" >&2
+            echo -e "Please build with '${C_CYAN}cargo build${C_RESET}', '${C_CYAN}make docker-build${C_RESET}', or run '${C_CYAN}make docker-compose${C_RESET}'." >&2
+            exit 1
+        fi
+    fi
 fi
 
 # Create dedicated Xephyr session configuration directory
