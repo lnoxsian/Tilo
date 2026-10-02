@@ -33,6 +33,8 @@ C_GRAY=$'\033[90m'
 SCREEN_PRESET="720p"
 SCREEN_SIZE="1280x720"
 BUILD_MODE="debug"
+NO_BUILD=0
+FORCE_BUILD=0
 USE_DIST=0
 DEMO_MODE=""
 NON_INTERACTIVE=0
@@ -285,6 +287,9 @@ ${C_YELLOW}Theme & Configuration Options:${C_RESET}
 ${C_YELLOW}General Options:${C_RESET}
   --dist                   Use pre-built release binary from dist/ (dist/tilo)
   --release                Build and run tilo in release mode (default: debug)
+  --debug                  Run tilo in debug mode (default)
+  --no-build               Skip checking or running cargo build (uses existing binary)
+  --build                  Force rebuilding tilo before launch
   --non-interactive        Disable interactive CLI prompt (runs tilo until killed)
   --automated-tests        Run non-interactive cargo integration test suite
   -h, --help               Display this help message
@@ -373,6 +378,14 @@ while [[ $# -gt 0 ]]; do
             BUILD_MODE="debug"
             shift
             ;;
+        --no-build|--fast)
+            NO_BUILD=1
+            shift
+            ;;
+        --build|--force-build)
+            FORCE_BUILD=1
+            shift
+            ;;
         --non-interactive|--batch)
             NON_INTERACTIVE=1
             shift
@@ -435,21 +448,33 @@ if [[ ${USE_DIST} -eq 1 ]]; then
         exit 1
     fi
 else
-    # Build tilo before launching Xephyr if cargo is available
-    if command -v cargo >/dev/null 2>&1; then
+    if [[ "${BUILD_MODE}" == "release" ]]; then
+        TILO_BIN="${ROOT_DIR}/target/release/tilo"
+    else
+        TILO_BIN="${ROOT_DIR}/target/debug/tilo"
+    fi
+
+    # Determine if cargo build is needed:
+    # 1. Always build if FORCE_BUILD=1
+    # 2. Never build if NO_BUILD=1
+    # 3. Otherwise build only if binary does not exist or source files are newer
+    NEED_BUILD=0
+    if [[ ${FORCE_BUILD} -eq 1 ]]; then
+        NEED_BUILD=1
+    elif [[ ${NO_BUILD} -eq 0 ]] && command -v cargo >/dev/null 2>&1; then
+        if [[ ! -x "${TILO_BIN}" ]]; then
+            NEED_BUILD=1
+        elif find "${ROOT_DIR}/src" "${ROOT_DIR}/Cargo.toml" -type f -newer "${TILO_BIN}" 2>/dev/null | grep -q .; then
+            NEED_BUILD=1
+        fi
+    fi
+
+    if [[ ${NEED_BUILD} -eq 1 ]]; then
         echo -e "${C_CYAN}--> Building tilo (${BUILD_MODE} mode)...${C_RESET}"
         if [[ "${BUILD_MODE}" == "release" ]]; then
             (cd "${ROOT_DIR}" && cargo build --release) || true
-            TILO_BIN="${ROOT_DIR}/target/release/tilo"
         else
             (cd "${ROOT_DIR}" && cargo build) || true
-            TILO_BIN="${ROOT_DIR}/target/debug/tilo"
-        fi
-    else
-        if [[ "${BUILD_MODE}" == "release" ]]; then
-            TILO_BIN="${ROOT_DIR}/target/release/tilo"
-        else
-            TILO_BIN="${ROOT_DIR}/target/debug/tilo"
         fi
     fi
 
@@ -521,14 +546,14 @@ echo -e "${C_GREEN}--> Launching Xephyr on display ${XEPHYR_DISPLAY} (${SCREEN_S
     -noreset &
 XEPHYR_PID=$!
 
-# Wait for Xephyr display socket to become ready
+# Wait for Xephyr display socket to become ready (fast poll: 10ms intervals)
 READY=0
-for _ in {1..60}; do
+for _ in {1..100}; do
     if [[ -S "/tmp/.X11-unix/X${XEPHYR_DISPLAY#:}" ]] || [[ -e "/tmp/.X11-unix/X${XEPHYR_DISPLAY#:}" ]]; then
         READY=1
         break
     fi
-    sleep 0.05
+    sleep 0.01
 done
 
 if [[ ${READY} -eq 0 ]]; then
@@ -539,7 +564,21 @@ fi
 echo -e "${C_GREEN}--> Launching tilo window manager on ${XEPHYR_DISPLAY} (Layout: ${ACTIVE_LAYOUT}, Theme: ${THEME_NAME})...${C_RESET}"
 XDG_CONFIG_HOME="${SESSION_CONFIG_DIR}" DISPLAY="${XEPHYR_DISPLAY}" "${TILO_BIN}" &
 TILO_PID=$!
-sleep 0.4
+
+# Wait for tilo window manager to initialize (EWMH check or process readiness)
+for _ in {1..50}; do
+    if ! kill -0 "${TILO_PID}" 2>/dev/null; then
+        break
+    fi
+    if command -v xprop >/dev/null 2>&1; then
+        if xprop -display "${XEPHYR_DISPLAY}" -root _NET_SUPPORTING_WM_CHECK 2>/dev/null | grep -q "window id"; then
+            break
+        fi
+    else
+        break
+    fi
+    sleep 0.01
+done
 
 # Helper function to launch an app into the Xephyr session
 launch_client() {

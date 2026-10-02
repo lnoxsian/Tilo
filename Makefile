@@ -54,18 +54,18 @@ test:
 # Run tilo inside a nested Xephyr X11 server for visual testing
 test-xephyr: debug
 	@echo "==> Starting nested Xephyr X11 test session..."
-	$(SCRIPTS_DIR)/run-xephyr.sh
+	$(SCRIPTS_DIR)/run-xephyr.sh --no-build
 
 # Run tilo release build inside nested Xephyr
 test-xephyr-release: release
 	@echo "==> Starting nested Xephyr X11 test session (release)..."
-	$(SCRIPTS_DIR)/run-xephyr.sh --release
+	$(SCRIPTS_DIR)/run-xephyr.sh --release --no-build
 
 # Run tilo inside Xephyr with demo windows to test implemented layouts visually
 # Usage: make test-layout [LAYOUT=single|master|stack|floating|all]
 test-xephyr-layout: debug
 	@echo "==> Starting Xephyr layout demo..."
-	$(SCRIPTS_DIR)/run-xephyr.sh --test-layout $(LAYOUT)
+	$(SCRIPTS_DIR)/run-xephyr.sh --no-build --test-layout $(LAYOUT)
 
 # Alias for test-xephyr-layout
 test-layout: test-xephyr-layout

@@ -201,7 +201,7 @@ impl Renderer {
         let is_core = is_core_font_spec(font_name);
         let clean_name = clean_core_font_name(font_name);
 
-        let (font_id, core_ascent, core_descent, core_width) =
+        let (font_id, core_ascent, core_descent, core_width) = if is_core {
             if let Ok(res) = Self::try_open_font(conn, clean_name) {
                 res
             } else {
@@ -213,7 +213,10 @@ impl Renderer {
                     }
                 }
                 loaded.unwrap_or((0, 12, 4, 8))
-            };
+            }
+        } else {
+            (0, 12, 4, 8)
+        };
 
         let gc = conn.generate_id()?;
         let mut gc_aux = CreateGCAux::new().graphics_exposures(0);
