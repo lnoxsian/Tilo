@@ -75,7 +75,7 @@ fn create_client_window(conn: &impl Connection, root: Window, x: i16, y: i16, w:
     )
     .unwrap();
     conn.map_window(win).unwrap();
-    conn.flush().unwrap();
+    conn.sync().unwrap();
     win
 }
 

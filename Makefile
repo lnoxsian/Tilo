@@ -9,7 +9,7 @@ CARGO ?= cargo
 TARGET_DIR := target
 SCRIPTS_DIR := scripts
 
-.PHONY: all debug release build test test-xephyr test-xephyr-release test-xephyr-layout test-layout test-layouts docker-build docker-compose clean install uninstall version version-check bump-patch bump-minor bump-major set-version help
+.PHONY: all debug release build test test-xephyr test-xephyr-release test-xephyr-layout test-layout test-layouts docker-build docker-compose install-deps clean install uninstall version version-check bump-patch bump-minor bump-major set-version help
 
 # Default target: build debug binary
 all: debug
@@ -75,6 +75,10 @@ test-layouts:
 	@echo "==> Running automated layout integration tests..."
 	$(SCRIPTS_DIR)/run-xephyr.sh --automated-tests
 
+# Install build and runtime dependencies (C libraries, Xephyr, and Rust)
+install-deps:
+	@$(SCRIPTS_DIR)/install_depnds.sh
+
 # Clean build artifacts
 clean:
 	@echo "==> Cleaning build artifacts..."
@@ -130,6 +134,7 @@ help:
 	@echo "  make test-xephyr  - Run debug build inside a nested Xephyr X11 display"
 	@echo "  make test-xephyr-layout - Run tilo in Xephyr with demo windows to visually test tiling"
 	@echo "  make test-layout  - Alias for test-xephyr-layout"
+	@echo "  make install-deps - Install system dependencies and Rust toolchain"
 	@echo "  make clean        - Remove target/ and dist/ directories"
 	@echo "  make install      - Install release binary to \$$PREFIX/bin (default: /usr/local/bin)"
 	@echo "  make uninstall    - Remove binary from \$$PREFIX/bin"
