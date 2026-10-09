@@ -30,7 +30,7 @@ INSTALL_PROGRAM ?= $(INSTALL) -m 755
 INSTALL_DATA ?= $(INSTALL) -m 644
 INSTALL_DIR ?= $(INSTALL) -d -m 755
 
-.PHONY: all debug release build test test-xephyr test-xephyr-release test-xephyr-layout test-layout test-layouts docker-build docker-compose install-deps clean install install-bin install-xsession install-desktop install-icons install-docs validate-desktop uninstall version version-check bump-patch bump-minor bump-major set-version help
+.PHONY: all debug release build test test-xephyr test-xephyr-release test-xephyr-layout test-layout test-layouts docker-build docker-compose install-deps clean install install-bin install-xsession install-desktop install-icons install-docs validate-desktop uninstall version version-check bump-patch bump-minor bump-major set-version help pkg pkg-deb pkg-arch pkg-rpm
 
 # Default target: build debug binary
 all: debug
@@ -63,6 +63,24 @@ docker-compose:
 	@docker compose down >/dev/null 2>&1 || true
 	@echo "Release binary exported to dist/$(NAME)"
 	@ls -lh dist/$(NAME)
+
+# Distribution packaging targets
+pkg: pkg-deb pkg-arch pkg-rpm
+
+# Build Debian / Ubuntu package (.deb)
+pkg-deb:
+	@echo "==> Building Debian package (.deb)..."
+	@$(SCRIPTS_DIR)/packaging/debian/pkg-deb.sh
+
+# Build Arch Linux pacman package (.pkg.tar.zst)
+pkg-arch:
+	@echo "==> Building Arch Linux package (.pkg.tar.zst)..."
+	@$(SCRIPTS_DIR)/packaging/arch/pkg-tzg.sh
+
+# Build Fedora / RHEL package (.rpm)
+pkg-rpm:
+	@echo "==> Building Fedora / RHEL package (.rpm)..."
+	@$(SCRIPTS_DIR)/packaging/fedora/pkg-rpm.sh
 
 # Alias for debug
 build: debug
@@ -215,6 +233,10 @@ help:
 	@echo "  make install-docs     - Install documentation and license to \$$DOCDIR"
 	@echo "  make validate-desktop - Validate assets/tilo.desktop with desktop-file-validate"
 	@echo "  make uninstall        - Remove all installed components"
+	@echo "  make pkg              - Build packages for Debian, Arch, and Fedora"
+	@echo "  make pkg-deb          - Build Debian package (dist/tilo_<ver>_<arch>.deb)"
+	@echo "  make pkg-arch         - Build Arch Linux package (dist/tilo-<ver>-<rel>-<arch>.pkg.tar.zst)"
+	@echo "  make pkg-rpm          - Build Fedora RPM package (dist/tilo-<ver>-<rel>.<arch>.rpm)"
 	@echo "  make version          - Print current version"
 	@echo "  make version-check    - Verify VERSION and Cargo.toml are synchronized"
 	@echo "  make bump-patch       - Increment patch version"

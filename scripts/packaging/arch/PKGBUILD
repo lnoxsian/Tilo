@@ -1,0 +1,49 @@
+# Maintainer: Tilo Developers <dev@tilo.org>
+pkgname=tilo
+pkgver=0.2.5
+pkgrel=1
+pkgdesc="Minimal Rust X11 Tiling Window Manager"
+arch=('x86_64' 'aarch64')
+url="https://github.com/lnoxsian/tilo"
+license=('MIT')
+depends=('libx11' 'libxrandr' 'libxcb' 'xcb-util')
+makedepends=('cargo' 'make')
+optdepends=(
+    'ttf-font: TrueType/OpenType font rendering'
+    'xorg-server-xephyr: Isolated nested X11 testing'
+)
+provides=('tilo' 'x-window-manager')
+conflicts=('tilo')
+
+build() {
+    if [ -f "$startdir/../../../Cargo.toml" ]; then
+        cd "$startdir/../../.."
+    elif [ -d "$srcdir/$pkgname-$pkgver" ]; then
+        cd "$srcdir/$pkgname-$pkgver"
+    elif [ -d "$srcdir/$pkgname" ]; then
+        cd "$srcdir/$pkgname"
+    fi
+    make release
+}
+
+check() {
+    if [ -f "$startdir/../../../Cargo.toml" ]; then
+        cd "$startdir/../../.."
+    elif [ -d "$srcdir/$pkgname-$pkgver" ]; then
+        cd "$srcdir/$pkgname-$pkgver"
+    elif [ -d "$srcdir/$pkgname" ]; then
+        cd "$srcdir/$pkgname"
+    fi
+    make test
+}
+
+package() {
+    if [ -f "$startdir/../../../Cargo.toml" ]; then
+        cd "$startdir/../../.."
+    elif [ -d "$srcdir/$pkgname-$pkgver" ]; then
+        cd "$srcdir/$pkgname-$pkgver"
+    elif [ -d "$srcdir/$pkgname" ]; then
+        cd "$srcdir/$pkgname"
+    fi
+    make install DESTDIR="$pkgdir" PREFIX=/usr
+}
