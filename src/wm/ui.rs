@@ -6,7 +6,7 @@ use crate::layout::{LayoutType, Rect};
 use crate::x11::X11Error;
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::{
-    ConnectionExt, InputFocus, KeyPressEvent,
+    ConfigureWindowAux, ConnectionExt, InputFocus, KeyPressEvent, StackMode,
 };
 
 impl WindowManager {
@@ -233,6 +233,19 @@ impl WindowManager {
                     libc::malloc_trim(0);
                 }
             }
+        Ok(())
+    }
+
+    /// Ensures the launcher overlay maintains top priority above all open windows.
+    pub fn ensure_launcher_on_top(&self) -> Result<(), X11Error> {
+        if let Some(ref launcher) = self.launcher
+            && launcher.visible
+            && launcher.window_id != 0
+        {
+            let aux = ConfigureWindowAux::new().stack_mode(StackMode::ABOVE);
+            let _ = self.context.connection.configure_window(launcher.window_id, &aux);
+            let _ = self.context.flush();
+        }
         Ok(())
     }
 

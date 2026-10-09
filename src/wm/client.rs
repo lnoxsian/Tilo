@@ -895,10 +895,11 @@ impl WindowManager {
         Ok(())
     }
 
-    /// Raises a window to the top of the stack.
+    /// Raises a window to the top of the stack, keeping the launcher overlay above it if active.
     pub fn raise_window(&self, window: Window) -> Result<(), X11Error> {
         let aux = ConfigureWindowAux::new().stack_mode(StackMode::ABOVE);
         self.context.connection.configure_window(window, &aux)?;
+        let _ = self.ensure_launcher_on_top();
         self.context.flush()?;
         Ok(())
     }

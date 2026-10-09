@@ -93,8 +93,13 @@ make test-xephyr  # Run debug build inside a nested Xephyr display
 make test-xephyr-release  # Run release build inside Xephyr
 make test-layouts # Run automated Xephyr layout integration tests
 make clean        # Remove the target/ directory
-make install      # Install release binary to $PREFIX/bin (default /usr/local/bin)
-make uninstall    # Remove binary from $PREFIX/bin
+make install      # Install all components (binary, xsession, icons, docs)
+make install-bin  # Install release binary only
+make install-xsession # Install XSession desktop entry only
+make install-icons    # Install application icons
+make install-docs     # Install documentation and license
+make validate-desktop # Validate assets/tilo.desktop using desktop-file-validate
+make uninstall    # Remove all installed components
 make version      # Print current version
 make version-check # Verify VERSION and Cargo.toml are synchronized
 make bump-patch   # Increment patch version (x.y.Z → x.y.Z+1)
@@ -104,13 +109,27 @@ make set-version V=x.y.z  # Set an explicit version
 make help         # Show all targets
 ```
 
-### Install Prefix
+### Install Prefix and Path Customization
+
+Standard GNU / FHS variables are supported:
 
 ```bash
-make install PREFIX=/usr           # installs to /usr/bin/tilo
-make install PREFIX=~/.local       # installs to ~/.local/bin/tilo
-make install DESTDIR=/tmp/staging  # for package maintainers
+make install PREFIX=/usr           # installs to /usr/bin, /usr/share/xsessions, etc.
+make install PREFIX=~/.local       # installs to user home directory (~/.local/bin, etc.)
+make install DESTDIR=/tmp/staging PREFIX=/usr  # staged root for distribution package maintainers
+make install BINDIR=/custom/bin    # override binary directory individually
 ```
+
+Supported path variables:
+- `PREFIX` (default: `/usr/local`)
+- `DESTDIR` (default: empty)
+- `BINDIR` (default: `$(PREFIX)/bin`)
+- `DATADIR` (default: `$(PREFIX)/share`)
+- `XSESSIONDIR` (default: `$(DATADIR)/xsessions`)
+- `APPLICATIONSDIR` (default: `$(DATADIR)/applications`)
+- `ICONDIR` (default: `$(DATADIR)/icons/hicolor`)
+- `PIXMAPDIR` (default: `$(DATADIR)/pixmaps`)
+- `DOCDIR` (default: `$(DATADIR)/doc/tilo`)
 
 ---
 
@@ -126,14 +145,19 @@ sudo install -m 755 target/release/tilo /usr/local/bin/tilo
 
 ### Launching from a Display Manager
 
-Add an entry in `/usr/share/xsessions/tilo.desktop`:
+`make install` automatically installs the XSession file to `/usr/share/xsessions/tilo.desktop` (from `assets/tilo.desktop`):
 
 ```ini
 [Desktop Entry]
-Name=tilo
-Comment=Minimal X11 tiling window manager
+Name=Tilo
+Comment=Minimal Rust X11 Tiling Window Manager
 Exec=tilo
-Type=XSession
+TryExec=tilo
+Icon=tilo
+Type=Application
+Categories=System;
+Keywords=wm;tiling;windowmanager;window;manager;x11;
+X-LightDM-DesktopName=tilo
 ```
 
 ### Launching from ~/.xinitrc

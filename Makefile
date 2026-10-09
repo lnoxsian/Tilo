@@ -3,13 +3,34 @@
 
 NAME := tilo
 VERSION := $(shell tr -d '[:space:]' < VERSION)
-PREFIX ?= /usr/local
-BINDIR ?= $(PREFIX)/bin
 CARGO ?= cargo
 TARGET_DIR := target
 SCRIPTS_DIR := scripts
+ASSETS_DIR := assets
 
-.PHONY: all debug release build test test-xephyr test-xephyr-release test-xephyr-layout test-layout test-layouts docker-build docker-compose install-deps clean install uninstall version version-check bump-patch bump-minor bump-major set-version help
+# Packaging and installation paths (GNU / FHS conventions)
+DESTDIR ?=
+PREFIX ?= /usr/local
+EXEC_PREFIX ?= $(PREFIX)
+BINDIR ?= $(EXEC_PREFIX)/bin
+DATAROOTDIR ?= $(PREFIX)/share
+DATADIR ?= $(DATAROOTDIR)
+SYSCONFDIR ?= /etc
+XSESSIONDIR ?= $(DATADIR)/xsessions
+APPLICATIONSDIR ?= $(DATADIR)/applications
+ICONDIR ?= $(DATADIR)/icons/hicolor
+PIXMAPDIR ?= $(DATADIR)/pixmaps
+DOCDIR ?= $(DATADIR)/doc/$(NAME)
+MANDIR ?= $(DATAROOTDIR)/man
+MAN1DIR ?= $(MANDIR)/man1
+
+# Install utilities
+INSTALL ?= install
+INSTALL_PROGRAM ?= $(INSTALL) -m 755
+INSTALL_DATA ?= $(INSTALL) -m 644
+INSTALL_DIR ?= $(INSTALL) -d -m 755
+
+.PHONY: all debug release build test test-xephyr test-xephyr-release test-xephyr-layout test-layout test-layouts docker-build docker-compose install-deps clean install install-bin install-xsession install-desktop install-icons install-docs validate-desktop uninstall version version-check bump-patch bump-minor bump-major set-version help
 
 # Default target: build debug binary
 all: debug
@@ -85,16 +106,66 @@ clean:
 	$(CARGO) clean
 	rm -rf dist
 
-# Install release binary
-install: release
-	@echo "==> Installing $(NAME) to $(DESTDIR)$(BINDIR)..."
-	install -d $(DESTDIR)$(BINDIR)
-	install -m 755 $(TARGET_DIR)/release/$(NAME) $(DESTDIR)$(BINDIR)/$(NAME)
+# Install all components (binary, xsession desktop entry, icons, documentation)
+install: install-bin install-xsession install-icons install-docs
+	@echo "==> $(NAME) v$(VERSION) successfully installed to $(DESTDIR)$(PREFIX)"
 
-# Uninstall binary
+# Install release binary only
+install-bin: release
+	@echo "==> Installing binary to $(DESTDIR)$(BINDIR)..."
+	$(INSTALL_DIR) $(DESTDIR)$(BINDIR)
+	$(INSTALL_PROGRAM) $(TARGET_DIR)/release/$(NAME) $(DESTDIR)$(BINDIR)/$(NAME)
+
+# Install XSession desktop entry for display managers (GDM, LightDM, SDDM, Ly, etc.)
+install-xsession:
+	@echo "==> Installing XSession desktop entry to $(DESTDIR)$(XSESSIONDIR)..."
+	$(INSTALL_DIR) $(DESTDIR)$(XSESSIONDIR)
+	$(INSTALL_DATA) $(ASSETS_DIR)/$(NAME).desktop $(DESTDIR)$(XSESSIONDIR)/$(NAME).desktop
+
+# Install application desktop entry (optional/convenience)
+install-desktop:
+	@echo "==> Installing Application desktop entry to $(DESTDIR)$(APPLICATIONSDIR)..."
+	$(INSTALL_DIR) $(DESTDIR)$(APPLICATIONSDIR)
+	$(INSTALL_DATA) $(ASSETS_DIR)/$(NAME).desktop $(DESTDIR)$(APPLICATIONSDIR)/$(NAME).desktop
+
+# Install icons (scalable SVG and standard pixmaps)
+install-icons:
+	@echo "==> Installing icons to $(DESTDIR)$(ICONDIR) and $(DESTDIR)$(PIXMAPDIR)..."
+	$(INSTALL_DIR) $(DESTDIR)$(ICONDIR)/scalable/apps
+	$(INSTALL_DATA) $(ASSETS_DIR)/svg/tilo_logo.svg $(DESTDIR)$(ICONDIR)/scalable/apps/$(NAME).svg
+	$(INSTALL_DIR) $(DESTDIR)$(PIXMAPDIR)
+	$(INSTALL_DATA) $(ASSETS_DIR)/svg/tilo_logo.svg $(DESTDIR)$(PIXMAPDIR)/$(NAME).svg
+	@if [ -f "$(ASSETS_DIR)/png/tilo_dark_transparent.png" ]; then \
+		$(INSTALL_DATA) $(ASSETS_DIR)/png/tilo_dark_transparent.png $(DESTDIR)$(PIXMAPDIR)/$(NAME).png; \
+	fi
+
+# Install documentation and license
+install-docs:
+	@echo "==> Installing documentation to $(DESTDIR)$(DOCDIR)..."
+	$(INSTALL_DIR) $(DESTDIR)$(DOCDIR)
+	@if [ -f LICENSE ]; then $(INSTALL_DATA) LICENSE $(DESTDIR)$(DOCDIR)/; fi
+	@if [ -f README.md ]; then $(INSTALL_DATA) README.md $(DESTDIR)$(DOCDIR)/; fi
+
+# Validate desktop file syntax
+validate-desktop:
+	@echo "==> Validating $(ASSETS_DIR)/$(NAME).desktop..."
+	@if command -v desktop-file-validate >/dev/null 2>&1; then \
+		desktop-file-validate $(ASSETS_DIR)/$(NAME).desktop && echo "Desktop file is valid."; \
+	else \
+		echo "desktop-file-validate not found, skipping validation."; \
+	fi
+
+# Uninstall all installed files
 uninstall:
-	@echo "==> Removing $(NAME) from $(DESTDIR)$(BINDIR)..."
+	@echo "==> Removing $(NAME) from $(DESTDIR)$(PREFIX)..."
 	rm -f $(DESTDIR)$(BINDIR)/$(NAME)
+	rm -f $(DESTDIR)$(XSESSIONDIR)/$(NAME).desktop
+	rm -f $(DESTDIR)$(APPLICATIONSDIR)/$(NAME).desktop
+	rm -f $(DESTDIR)$(ICONDIR)/scalable/apps/$(NAME).svg
+	rm -f $(DESTDIR)$(PIXMAPDIR)/$(NAME).svg
+	rm -f $(DESTDIR)$(PIXMAPDIR)/$(NAME).png
+	rm -rf $(DESTDIR)$(DOCDIR)
+	@echo "==> Uninstall complete."
 
 # Display current version
 version:
@@ -126,21 +197,39 @@ endif
 # Show help
 help:
 	@echo "Tilo Makefile targets:"
-	@echo "  make              - Build debug executable (target/debug/tilo)"
-	@echo "  make release      - Build optimized release executable (target/release/tilo)"
-	@echo "  make docker-build - Build and export release binary via Docker BuildKit (dist/tilo)"
-	@echo "  make docker-compose - Build and export release binary via Docker Compose (dist/tilo)"
-	@echo "  make test         - Run cargo unit and integration tests"
-	@echo "  make test-xephyr  - Run debug build inside a nested Xephyr X11 display"
+	@echo "  make                  - Build debug executable (target/debug/tilo)"
+	@echo "  make release          - Build optimized release executable (target/release/tilo)"
+	@echo "  make docker-build     - Build and export release binary via Docker BuildKit (dist/tilo)"
+	@echo "  make docker-compose   - Build and export release binary via Docker Compose (dist/tilo)"
+	@echo "  make test             - Run cargo unit and integration tests"
+	@echo "  make test-xephyr      - Run debug build inside a nested Xephyr X11 display"
 	@echo "  make test-xephyr-layout - Run tilo in Xephyr with demo windows to visually test tiling"
-	@echo "  make test-layout  - Alias for test-xephyr-layout"
-	@echo "  make install-deps - Install system dependencies and Rust toolchain"
-	@echo "  make clean        - Remove target/ and dist/ directories"
-	@echo "  make install      - Install release binary to \$$PREFIX/bin (default: /usr/local/bin)"
-	@echo "  make uninstall    - Remove binary from \$$PREFIX/bin"
-	@echo "  make version      - Print current version"
-	@echo "  make version-check- Verify VERSION and Cargo.toml are synchronized"
-	@echo "  make bump-patch   - Increment patch version"
-	@echo "  make bump-minor   - Increment minor version"
-	@echo "  make bump-major   - Increment major version"
+	@echo "  make test-layout      - Alias for test-xephyr-layout"
+	@echo "  make install-deps     - Install system dependencies and Rust toolchain"
+	@echo "  make clean            - Remove target/ and dist/ directories"
+	@echo "  make install          - Install all components (binary, xsession, icons, docs)"
+	@echo "  make install-bin      - Install release binary to \$$BINDIR"
+	@echo "  make install-xsession - Install xsession desktop entry to \$$XSESSIONDIR"
+	@echo "  make install-desktop  - Install desktop entry to \$$APPLICATIONSDIR"
+	@echo "  make install-icons    - Install application icons"
+	@echo "  make install-docs     - Install documentation and license to \$$DOCDIR"
+	@echo "  make validate-desktop - Validate assets/tilo.desktop with desktop-file-validate"
+	@echo "  make uninstall        - Remove all installed components"
+	@echo "  make version          - Print current version"
+	@echo "  make version-check    - Verify VERSION and Cargo.toml are synchronized"
+	@echo "  make bump-patch       - Increment patch version"
+	@echo "  make bump-minor       - Increment minor version"
+	@echo "  make bump-major       - Increment major version"
 	@echo "  make set-version V=x.y.z - Set an explicit version"
+	@echo ""
+	@echo "Installation path variables (override with VAR=...):"
+	@echo "  PREFIX          (default: /usr/local, use /usr for distribution packaging)"
+	@echo "  DESTDIR         (default: empty, staging directory for package builders)"
+	@echo "  BINDIR          (default: \$$PREFIX/bin)"
+	@echo "  DATADIR         (default: \$$PREFIX/share)"
+	@echo "  XSESSIONDIR     (default: \$$DATADIR/xsessions)"
+	@echo "  APPLICATIONSDIR (default: \$$DATADIR/applications)"
+	@echo "  ICONDIR         (default: \$$DATADIR/icons/hicolor)"
+	@echo "  PIXMAPDIR       (default: \$$DATADIR/pixmaps)"
+	@echo "  DOCDIR          (default: \$$DATADIR/doc/tilo)"
+	@echo "  MANDIR          (default: \$$DATADIR/man)"

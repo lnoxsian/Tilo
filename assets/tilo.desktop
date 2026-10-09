@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=Tilo
+Comment=Minimal Rust X11 Tiling Window Manager
+Exec=tilo
+TryExec=tilo
+Icon=tilo
+Type=Application
+Categories=System;
+Keywords=wm;tiling;windowmanager;window;manager;x11;
+X-LightDM-DesktopName=tilo
