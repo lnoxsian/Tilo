@@ -42,10 +42,11 @@ cp "${SCRIPT_DIR}/tilo.spec" "${RPM_TOPDIR}/SPECS/tilo.spec"
 TARBALL_NAME="tilo-${VERSION}.tar.gz"
 echo "==> Creating source archive ${TARBALL_NAME} in SOURCES/..."
 
-if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    # Archive git tree with version prefix
+if git rev-parse --is-inside-work-tree >/dev/null 2>&1 && git diff --quiet HEAD 2>/dev/null && [ -z "$(git status --porcelain 2>/dev/null)" ]; then
+    # Archive clean git tree with version prefix
     git archive --format=tar.gz --prefix="tilo-${VERSION}/" HEAD > "${RPM_TOPDIR}/SOURCES/${TARBALL_NAME}"
 else
+    # Include working directory files (uncommitted / untracked assets)
     tar --exclude='./target' --exclude='./dist' --exclude='./.git' \
         --transform="s,^\.,tilo-${VERSION}," -czf "${RPM_TOPDIR}/SOURCES/${TARBALL_NAME}" .
 fi

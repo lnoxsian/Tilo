@@ -42,7 +42,12 @@ make test
 %doc README.md
 %{_bindir}/tilo
 %{_datadir}/xsessions/tilo.desktop
-%{_datadir}/icons/hicolor/scalable/apps/tilo.svg
+%dir %{_datadir}/slick-greeter
+%dir %{_datadir}/slick-greeter/badges
+%{_datadir}/slick-greeter/badges/tilo.svg
+%{_datadir}/icons/hicolor/scalable/apps/tilo*.svg
+%dir %{_datadir}/icons/hicolor/scalable/badges
+%{_datadir}/icons/hicolor/scalable/badges/tilo*.svg
 %{_datadir}/pixmaps/tilo.svg
 %{_datadir}/pixmaps/tilo.png
 %dir %{_datadir}/doc/tilo

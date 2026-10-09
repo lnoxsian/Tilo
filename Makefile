@@ -20,6 +20,7 @@ XSESSIONDIR ?= $(DATADIR)/xsessions
 APPLICATIONSDIR ?= $(DATADIR)/applications
 ICONDIR ?= $(DATADIR)/icons/hicolor
 PIXMAPDIR ?= $(DATADIR)/pixmaps
+SLICKGREETERDIR ?= $(DATADIR)/slick-greeter/badges
 DOCDIR ?= $(DATADIR)/doc/$(NAME)
 MANDIR ?= $(DATAROOTDIR)/man
 MAN1DIR ?= $(MANDIR)/man1
@@ -146,13 +147,21 @@ install-desktop:
 	$(INSTALL_DIR) $(DESTDIR)$(APPLICATIONSDIR)
 	$(INSTALL_DATA) $(ASSETS_DIR)/$(NAME).desktop $(DESTDIR)$(APPLICATIONSDIR)/$(NAME).desktop
 
-# Install icons (scalable SVG and standard pixmaps)
+# Install icons and session badges (scalable SVG, greeter badges, and standard pixmaps)
 install-icons:
-	@echo "==> Installing icons to $(DESTDIR)$(ICONDIR) and $(DESTDIR)$(PIXMAPDIR)..."
+	@echo "==> Installing icons and badges to $(DESTDIR)$(ICONDIR), $(DESTDIR)$(SLICKGREETERDIR), and $(DESTDIR)$(PIXMAPDIR)..."
 	$(INSTALL_DIR) $(DESTDIR)$(ICONDIR)/scalable/apps
-	$(INSTALL_DATA) $(ASSETS_DIR)/svg/tilo_logo.svg $(DESTDIR)$(ICONDIR)/scalable/apps/$(NAME).svg
+	$(INSTALL_DATA) $(ASSETS_DIR)/svg/$(NAME).svg $(DESTDIR)$(ICONDIR)/scalable/apps/$(NAME).svg
+	$(INSTALL_DATA) $(ASSETS_DIR)/svg/$(NAME).svg $(DESTDIR)$(ICONDIR)/scalable/apps/$(NAME)-badge-symbolic.svg
+	$(INSTALL_DATA) $(ASSETS_DIR)/svg/$(NAME).svg $(DESTDIR)$(ICONDIR)/scalable/apps/$(NAME)_badge-symbolic.svg
+	$(INSTALL_DATA) $(ASSETS_DIR)/svg/$(NAME).svg $(DESTDIR)$(ICONDIR)/scalable/apps/$(NAME)-symbolic.svg
+	$(INSTALL_DIR) $(DESTDIR)$(ICONDIR)/scalable/badges
+	$(INSTALL_DATA) $(ASSETS_DIR)/svg/$(NAME).svg $(DESTDIR)$(ICONDIR)/scalable/badges/$(NAME).svg
+	$(INSTALL_DATA) $(ASSETS_DIR)/svg/$(NAME).svg $(DESTDIR)$(ICONDIR)/scalable/badges/$(NAME)-symbolic.svg
+	$(INSTALL_DIR) $(DESTDIR)$(SLICKGREETERDIR)
+	$(INSTALL_DATA) $(ASSETS_DIR)/svg/$(NAME).svg $(DESTDIR)$(SLICKGREETERDIR)/$(NAME).svg
 	$(INSTALL_DIR) $(DESTDIR)$(PIXMAPDIR)
-	$(INSTALL_DATA) $(ASSETS_DIR)/svg/tilo_logo.svg $(DESTDIR)$(PIXMAPDIR)/$(NAME).svg
+	$(INSTALL_DATA) $(ASSETS_DIR)/svg/$(NAME).svg $(DESTDIR)$(PIXMAPDIR)/$(NAME).svg
 	@if [ -f "$(ASSETS_DIR)/png/tilo_dark_transparent.png" ]; then \
 		$(INSTALL_DATA) $(ASSETS_DIR)/png/tilo_dark_transparent.png $(DESTDIR)$(PIXMAPDIR)/$(NAME).png; \
 	fi
@@ -179,7 +188,13 @@ uninstall:
 	rm -f $(DESTDIR)$(BINDIR)/$(NAME)
 	rm -f $(DESTDIR)$(XSESSIONDIR)/$(NAME).desktop
 	rm -f $(DESTDIR)$(APPLICATIONSDIR)/$(NAME).desktop
+	rm -f $(DESTDIR)$(SLICKGREETERDIR)/$(NAME).svg
 	rm -f $(DESTDIR)$(ICONDIR)/scalable/apps/$(NAME).svg
+	rm -f $(DESTDIR)$(ICONDIR)/scalable/apps/$(NAME)-badge-symbolic.svg
+	rm -f $(DESTDIR)$(ICONDIR)/scalable/apps/$(NAME)_badge-symbolic.svg
+	rm -f $(DESTDIR)$(ICONDIR)/scalable/apps/$(NAME)-symbolic.svg
+	rm -f $(DESTDIR)$(ICONDIR)/scalable/badges/$(NAME).svg
+	rm -f $(DESTDIR)$(ICONDIR)/scalable/badges/$(NAME)-symbolic.svg
 	rm -f $(DESTDIR)$(PIXMAPDIR)/$(NAME).svg
 	rm -f $(DESTDIR)$(PIXMAPDIR)/$(NAME).png
 	rm -rf $(DESTDIR)$(DOCDIR)
@@ -253,5 +268,6 @@ help:
 	@echo "  APPLICATIONSDIR (default: \$$DATADIR/applications)"
 	@echo "  ICONDIR         (default: \$$DATADIR/icons/hicolor)"
 	@echo "  PIXMAPDIR       (default: \$$DATADIR/pixmaps)"
+	@echo "  SLICKGREETERDIR (default: \$$DATADIR/slick-greeter/badges)"
 	@echo "  DOCDIR          (default: \$$DATADIR/doc/tilo)"
 	@echo "  MANDIR          (default: \$$DATADIR/man)"
