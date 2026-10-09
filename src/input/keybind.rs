@@ -40,6 +40,15 @@ pub const XK_END: Keysym = 0xff57;
 pub const XK_NUM_LOCK: Keysym = 0xff7f;
 
 pub const XK_F5: Keysym = 0xffc2;
+pub const XK_F10: Keysym = 0xffc7;
+pub const XK_F11: Keysym = 0xffc8;
+pub const XK_F12: Keysym = 0xffc9;
+
+// Multimedia Keysym Constants (XF86Audio*)
+pub const XF86_AUDIO_LOWER_VOLUME: Keysym = 0x1008_ff11;
+pub const XF86_AUDIO_MUTE:         Keysym = 0x1008_ff12;
+pub const XF86_AUDIO_RAISE_VOLUME: Keysym = 0x1008_ff13;
+pub const XF86_AUDIO_MIC_MUTE:     Keysym = 0x1008_ffb2;
 
 pub const XK_A: Keysym = 0x0061;
 pub const XK_B: Keysym = 0x0062;
@@ -138,6 +147,12 @@ pub enum Action {
     MoveTabRight,
     /// Directly select a tab by its 1-based index.
     SelectTab(usize),
+    /// Increase audio volume by the specified percentage step.
+    VolumeUp(u8),
+    /// Decrease audio volume by the specified percentage step.
+    VolumeDown(u8),
+    /// Toggle audio output mute state.
+    VolumeToggleMute,
 }
 
 /// Represents a single keybinding configuration.
@@ -206,7 +221,21 @@ pub fn parse_keysym(name: &str) -> Option<Keysym> {
         "grave" | "`" => Some(XK_GRAVE),
         "asciitilde" | "~" | "tilde" => Some(XK_ASCIITILDE),
         "Num_Lock" | "NumLock" => Some(XK_NUM_LOCK),
-        "F5" | "f5" => Some(XK_F5),
+        s if s.len() > 1 && (s.starts_with('F') || s.starts_with('f')) => {
+            if let Ok(num) = s[1..].parse::<u32>() {
+                if (1..=12).contains(&num) {
+                    Some(0xffbe + (num - 1))
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        }
+        "XF86AudioRaiseVolume" | "AudioRaiseVolume" | "VolumeUp" => Some(XF86_AUDIO_RAISE_VOLUME),
+        "XF86AudioLowerVolume" | "AudioLowerVolume" | "VolumeDown" => Some(XF86_AUDIO_LOWER_VOLUME),
+        "XF86AudioMute" | "AudioMute" | "VolumeMute" => Some(XF86_AUDIO_MUTE),
+        "XF86AudioMicMute" | "AudioMicMute" => Some(XF86_AUDIO_MIC_MUTE),
         s if s.len() == 1 => {
             if let Some(c) = s.chars().next() {
                 if c.is_ascii() {
@@ -328,6 +357,13 @@ pub fn default_keybindings() -> Vec<KeyBind> {
         KeyBind::new(MOD_SUPER, XK_B, Action::PreselectSplit(crate::layout::SplitType::Horizontal)),
         // WM Controls
         KeyBind::new(MOD_SUPER | MOD_SHIFT, XK_R, Action::Reload),
+        // Audio & Media Keys
+        KeyBind::new(0, XF86_AUDIO_RAISE_VOLUME, Action::VolumeUp(5)),
+        KeyBind::new(0, XF86_AUDIO_LOWER_VOLUME, Action::VolumeDown(5)),
+        KeyBind::new(0, XF86_AUDIO_MUTE, Action::VolumeToggleMute),
+        KeyBind::new(MOD_SUPER, XK_F12, Action::VolumeUp(5)),
+        KeyBind::new(MOD_SUPER, XK_F11, Action::VolumeDown(5)),
+        KeyBind::new(MOD_SUPER, XK_F10, Action::VolumeToggleMute),
     ]
 }
 
@@ -353,6 +389,9 @@ mod tests {
         assert_eq!(parse_keysym("1"), Some(XK_1));
         assert_eq!(parse_keysym("Space"), Some(XK_SPACE));
         assert_eq!(parse_keysym("F5"), Some(XK_F5));
+        assert_eq!(parse_keysym("XF86AudioRaiseVolume"), Some(XF86_AUDIO_RAISE_VOLUME));
+        assert_eq!(parse_keysym("VolumeDown"), Some(XF86_AUDIO_LOWER_VOLUME));
+        assert_eq!(parse_keysym("VolumeMute"), Some(XF86_AUDIO_MUTE));
         assert_eq!(parse_keysym("NonExistentKey"), None);
     }
 
@@ -367,6 +406,11 @@ mod tests {
         assert_eq!(bind2.modifiers, MOD_SUPER | MOD_SHIFT);
         assert_eq!(bind2.keysym, XK_Q);
         assert_eq!(bind2.action, Action::Close);
+
+        let bind_vol = parse_keybind("XF86AudioRaiseVolume", Action::VolumeUp(5)).unwrap();
+        assert_eq!(bind_vol.modifiers, 0);
+        assert_eq!(bind_vol.keysym, XF86_AUDIO_RAISE_VOLUME);
+        assert_eq!(bind_vol.action, Action::VolumeUp(5));
     }
 
     #[test]
@@ -378,5 +422,11 @@ mod tests {
         assert!(binds.iter().any(|b| b.modifiers == MOD_SUPER && b.keysym == XK_R && b.action == Action::RotateMaster));
         assert!(binds.iter().any(|b| b.modifiers == MOD_SUPER | MOD_SHIFT && b.keysym == XK_R && b.action == Action::Reload));
         assert!(binds.iter().any(|b| b.modifiers == MOD_SUPER && b.keysym == XK_SPACE && b.action == Action::CycleLayout));
+        assert!(binds.iter().any(|b| b.modifiers == 0 && b.keysym == XF86_AUDIO_RAISE_VOLUME && b.action == Action::VolumeUp(5)));
+        assert!(binds.iter().any(|b| b.modifiers == 0 && b.keysym == XF86_AUDIO_LOWER_VOLUME && b.action == Action::VolumeDown(5)));
+        assert!(binds.iter().any(|b| b.modifiers == 0 && b.keysym == XF86_AUDIO_MUTE && b.action == Action::VolumeToggleMute));
+        assert!(binds.iter().any(|b| b.modifiers == MOD_SUPER && b.keysym == XK_F12 && b.action == Action::VolumeUp(5)));
+        assert!(binds.iter().any(|b| b.modifiers == MOD_SUPER && b.keysym == XK_F11 && b.action == Action::VolumeDown(5)));
+        assert!(binds.iter().any(|b| b.modifiers == MOD_SUPER && b.keysym == XK_F10 && b.action == Action::VolumeToggleMute));
     }
 }

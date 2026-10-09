@@ -1,5 +1,6 @@
 //! tilo - Minimal Rust X11 Tiling Window Manager
 
+pub mod audio;
 pub mod autostart;
 pub mod bar;
 pub mod client;
@@ -13,6 +14,7 @@ pub mod wm;
 pub mod workspace;
 pub mod x11;
 
+pub use audio::{get_volume, adjust_volume, toggle_mute, VolumeState, AudioBackend};
 pub use bar as statusbar;
 pub use workspace::focus;
 pub use input::keybind;

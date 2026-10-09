@@ -438,6 +438,61 @@ impl WindowManager {
             Action::SelectTab(index) => {
                 self.select_tab(index)?;
             }
+            Action::VolumeUp(step) => {
+                let current_state = self.statusbar.as_ref().and_then(|b| b.volume_state());
+                if let Some(mut state) = current_state {
+                    state.volume = (state.volume as u16 + step as u16).min(150) as u8;
+                    state.muted = false;
+                    if let Some(ref mut bar) = self.statusbar {
+                        bar.sync_volume(Some(state));
+                    }
+                    let _ = self.render_statusbar();
+                    let _ = self.context.flush();
+                }
+                crate::audio::adjust_volume(step as i8);
+                let new_vol = crate::audio::get_volume();
+                if let Some(ref mut bar) = self.statusbar {
+                    bar.sync_volume(new_vol);
+                }
+                let _ = self.render_statusbar();
+                let _ = self.context.flush();
+            }
+            Action::VolumeDown(step) => {
+                let current_state = self.statusbar.as_ref().and_then(|b| b.volume_state());
+                if let Some(mut state) = current_state {
+                    state.volume = state.volume.saturating_sub(step);
+                    if let Some(ref mut bar) = self.statusbar {
+                        bar.sync_volume(Some(state));
+                    }
+                    let _ = self.render_statusbar();
+                    let _ = self.context.flush();
+                }
+                crate::audio::adjust_volume(-(step as i8));
+                let new_vol = crate::audio::get_volume();
+                if let Some(ref mut bar) = self.statusbar {
+                    bar.sync_volume(new_vol);
+                }
+                let _ = self.render_statusbar();
+                let _ = self.context.flush();
+            }
+            Action::VolumeToggleMute => {
+                let current_state = self.statusbar.as_ref().and_then(|b| b.volume_state());
+                if let Some(mut state) = current_state {
+                    state.muted = !state.muted;
+                    if let Some(ref mut bar) = self.statusbar {
+                        bar.sync_volume(Some(state));
+                    }
+                    let _ = self.render_statusbar();
+                    let _ = self.context.flush();
+                }
+                crate::audio::toggle_mute();
+                let new_vol = crate::audio::get_volume();
+                if let Some(ref mut bar) = self.statusbar {
+                    bar.sync_volume(new_vol);
+                }
+                let _ = self.render_statusbar();
+                let _ = self.context.flush();
+            }
         }
         Ok(())
     }

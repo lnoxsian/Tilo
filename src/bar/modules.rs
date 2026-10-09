@@ -34,6 +34,11 @@ pub trait StatusModule: std::fmt::Debug + Send {
         None
     }
 
+    /// Returns a reference to Any for downcasting if supported.
+    fn as_any(&self) -> Option<&dyn std::any::Any> {
+        None
+    }
+
     /// Returns a mutable reference to Any for downcasting if supported.
     fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> {
         None
@@ -622,3 +627,105 @@ impl StatusModule for ClockModule {
         self.last_updated
     }
 }
+
+/// Volume status module displaying the current output audio level (e.g. `VOL 65%` or `VOL MUTE`).
+#[derive(Debug, Clone)]
+pub struct VolumeModule {
+    pub cached_text: String,
+    pub cached_state: Option<crate::audio::VolumeState>,
+    pub last_updated: Option<Instant>,
+    pub update_interval_ms: u64,
+}
+
+impl VolumeModule {
+    pub fn new() -> Self {
+        Self::with_interval(2000)
+    }
+
+    pub fn with_interval(update_interval_ms: u64) -> Self {
+        let mut s = Self {
+            cached_text: String::new(),
+            cached_state: None,
+            last_updated: None,
+            update_interval_ms,
+        };
+        let _ = s.update();
+        s
+    }
+
+    /// Returns the currently cached volume state if known.
+    pub fn state(&self) -> Option<crate::audio::VolumeState> {
+        self.cached_state
+    }
+
+    /// Explicitly updates the volume state and updates cached text.
+    pub fn set_state(&mut self, state: Option<crate::audio::VolumeState>) -> ModuleUpdate {
+        self.last_updated = Some(Instant::now());
+        if self.cached_state == state {
+            return ModuleUpdate::Unchanged;
+        }
+        self.cached_state = state;
+        let new_text = Self::format_state(state);
+        self.cached_text = new_text.clone();
+        ModuleUpdate::Changed(new_text)
+    }
+
+    pub fn format_state(state: Option<crate::audio::VolumeState>) -> String {
+        match state {
+            Some(s) if s.muted => {
+                if s.volume > 0 {
+                    format!("VOL {}% [MUTE]", s.volume)
+                } else {
+                    "VOL MUTE".to_string()
+                }
+            }
+            Some(s) => format!("VOL {}%", s.volume),
+            None => "VOL N/A".to_string(),
+        }
+    }
+}
+
+impl Default for VolumeModule {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl StatusModule for VolumeModule {
+    fn name(&self) -> &'static str {
+        "volume"
+    }
+
+    fn update_interval(&self) -> u64 {
+        self.update_interval_ms
+    }
+
+    fn update(&mut self) -> Result<ModuleUpdate, StatusbarError> {
+        self.last_updated = Some(Instant::now());
+        let current_state = crate::audio::get_volume();
+        if self.cached_state == current_state {
+            return Ok(ModuleUpdate::Unchanged);
+        }
+        self.cached_state = current_state;
+        let new_text = Self::format_state(current_state);
+        self.cached_text = new_text.clone();
+        Ok(ModuleUpdate::Changed(new_text))
+    }
+
+    fn current_text(&self) -> &str {
+        &self.cached_text
+    }
+
+    fn last_updated(&self) -> Option<Instant> {
+        self.last_updated
+    }
+
+    fn as_any(&self) -> Option<&dyn std::any::Any> {
+        Some(self)
+    }
+
+    fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> {
+        Some(self)
+    }
+}
+

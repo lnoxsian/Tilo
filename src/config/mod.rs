@@ -1078,6 +1078,23 @@ fn parse_action(tokens: &[&Token], line: usize, config: &Config) -> Result<Actio
             let idx = token_to_u32(tokens[1], line, "select_tab")?;
             Ok(Action::SelectTab(idx as usize))
         }
+        "volume_up" | "vol_up" => {
+            let step = if tokens.len() >= 2 {
+                token_to_u32(tokens[1], line, "volume_up")? as u8
+            } else {
+                5
+            };
+            Ok(Action::VolumeUp(step))
+        }
+        "volume_down" | "vol_down" => {
+            let step = if tokens.len() >= 2 {
+                token_to_u32(tokens[1], line, "volume_down")? as u8
+            } else {
+                5
+            };
+            Ok(Action::VolumeDown(step))
+        }
+        "volume_mute" | "vol_mute" | "toggle_mute" => Ok(Action::VolumeToggleMute),
         unknown => Err(ConfigError::InvalidValue {
             line,
             value: unknown.to_string(),
@@ -1280,6 +1297,14 @@ bind $mod+b                 split horizontal
 
 # Window Manager Controls
 bind $mod+Shift+r           reload
+
+# Audio & Media Controls
+bind XF86AudioRaiseVolume   volume_up 5
+bind XF86AudioLowerVolume   volume_down 5
+bind XF86AudioMute          volume_mute
+bind $mod+F12               volume_up 5
+bind $mod+F11               volume_down 5
+bind $mod+F10               volume_mute
 "#;
 
 /// Resolves the default configuration file path (`~/.config/tilo/config`).
@@ -1676,5 +1701,36 @@ bind $mod+1 select_tab 1
 
         let parsed_pipe = parse(&tokenize("statusbar_separator \"|\"").unwrap()).expect("Should parse pipe separator");
         assert_eq!(parsed_pipe.bar_separator(), "|");
+    }
+
+    #[test]
+    fn test_parse_volume_bindings() {
+        let input = r#"
+bind XF86AudioRaiseVolume volume_up
+bind XF86AudioLowerVolume volume_down 10
+bind XF86AudioMute volume_mute
+bind $mod+F12 vol_up 2
+bind $mod+F11 vol_down 2
+bind $mod+F10 vol_mute
+"#;
+        let tokens = tokenize(input).unwrap();
+        let config = parse(&tokens).unwrap();
+
+        assert_eq!(config.bindings.len(), 6);
+        assert_eq!(config.bindings[0].action, Action::VolumeUp(5));
+        assert_eq!(config.bindings[0].keysym, crate::keybind::XF86_AUDIO_RAISE_VOLUME);
+        assert_eq!(config.bindings[0].modifiers, 0);
+
+        assert_eq!(config.bindings[1].action, Action::VolumeDown(10));
+        assert_eq!(config.bindings[1].keysym, crate::keybind::XF86_AUDIO_LOWER_VOLUME);
+        assert_eq!(config.bindings[1].modifiers, 0);
+
+        assert_eq!(config.bindings[2].action, Action::VolumeToggleMute);
+        assert_eq!(config.bindings[2].keysym, crate::keybind::XF86_AUDIO_MUTE);
+        assert_eq!(config.bindings[2].modifiers, 0);
+
+        assert_eq!(config.bindings[3].action, Action::VolumeUp(2));
+        assert_eq!(config.bindings[4].action, Action::VolumeDown(2));
+        assert_eq!(config.bindings[5].action, Action::VolumeToggleMute);
     }
 }

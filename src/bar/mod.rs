@@ -172,7 +172,7 @@ impl Statusbar {
     }
 
     /// Creates a default `Statusbar` equipped with standard modules:
-    /// Workspace, Layout, Window Title, IP, RAM, CPU, Battery, and Clock.
+    /// Workspace, Layout, Window Title, IP, RAM, CPU, Battery, Volume, and Clock.
     pub fn default_with_window(window_id: u32, rect: Rect) -> Self {
         let modules: Vec<Box<dyn StatusModule>> = vec![
             Box::new(WorkspaceModule::new()),
@@ -182,6 +182,7 @@ impl Statusbar {
             Box::new(RamModule::new()),
             Box::new(CpuModule::new()),
             Box::new(BatteryModule::new()),
+            Box::new(VolumeModule::new()),
             Box::new(ClockModule::new()),
         ];
         Self::new(window_id, rect, modules, ColorScheme::default())
@@ -266,6 +267,25 @@ impl Statusbar {
                 title_mod.set_title(title);
             }
         }
+    }
+
+    /// Updates the volume module text and cache immediately if present.
+    pub fn sync_volume(&mut self, state: Option<crate::audio::VolumeState>) {
+        for m in &mut self.modules {
+            if let Some(vol_mod) = m.as_any_mut().and_then(|a| a.downcast_mut::<VolumeModule>()) {
+                vol_mod.set_state(state);
+            }
+        }
+    }
+
+    /// Returns the cached volume state from the volume module, if present.
+    pub fn volume_state(&self) -> Option<crate::audio::VolumeState> {
+        for m in &self.modules {
+            if let Some(vol_mod) = m.as_any().and_then(|a| a.downcast_ref::<VolumeModule>()) {
+                return vol_mod.state();
+            }
+        }
+        None
     }
 
     /// Attaches an initialized [`crate::render::Renderer`] to this statusbar.
@@ -667,5 +687,37 @@ Cached:          2000000 kB
         bar.separator = " • ".to_string();
         let custom = bar.full_text();
         assert!(custom.contains(" • "));
+    }
+
+    #[test]
+    fn test_volume_module_lifecycle_and_caching() {
+        let mut vol = VolumeModule::new();
+        assert_eq!(vol.name(), "volume");
+        assert_eq!(vol.update_interval(), 2000);
+
+        // Test explicit state updates
+        let change1 = vol.set_state(Some(crate::audio::VolumeState::new(75, false)));
+        assert_eq!(change1, ModuleUpdate::Changed("VOL 75%".to_string()));
+        assert_eq!(vol.current_text(), "VOL 75%");
+
+        // Unchanged state should return ModuleUpdate::Unchanged
+        let change_same = vol.set_state(Some(crate::audio::VolumeState::new(75, false)));
+        assert_eq!(change_same, ModuleUpdate::Unchanged);
+        assert_eq!(vol.current_text(), "VOL 75%");
+
+        // Muted state with volume > 0
+        let change_mute = vol.set_state(Some(crate::audio::VolumeState::new(75, true)));
+        assert_eq!(change_mute, ModuleUpdate::Changed("VOL 75% [MUTE]".to_string()));
+        assert_eq!(vol.current_text(), "VOL 75% [MUTE]");
+
+        // Muted state with volume == 0
+        let change_mute_zero = vol.set_state(Some(crate::audio::VolumeState::new(0, true)));
+        assert_eq!(change_mute_zero, ModuleUpdate::Changed("VOL MUTE".to_string()));
+        assert_eq!(vol.current_text(), "VOL MUTE");
+
+        // None state (audio offline/unavailable)
+        let change_none = vol.set_state(None);
+        assert_eq!(change_none, ModuleUpdate::Changed("VOL N/A".to_string()));
+        assert_eq!(vol.current_text(), "VOL N/A");
     }
 }
