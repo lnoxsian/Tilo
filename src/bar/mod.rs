@@ -478,13 +478,13 @@ pub fn create_statusbar_window_with_color(
     conn: &impl Connection,
     screen: &Screen,
     rect: Rect,
-    background_color: u32,
+    _background_color: u32,
 ) -> Result<u32, StatusbarError> {
     let window_id = conn.generate_id()?;
 
     let aux = CreateWindowAux::new()
         .override_redirect(1) // Avoid WM window management interception
-        .background_pixel(background_color)
+        .background_pixmap(x11rb::NONE)
         .event_mask(
             EventMask::EXPOSURE
                 | EventMask::STRUCTURE_NOTIFY

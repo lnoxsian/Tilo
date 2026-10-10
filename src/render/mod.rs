@@ -78,6 +78,8 @@ pub fn format_layout_symbol(layout_symbol: &str) -> std::borrow::Cow<'_, str> {
 pub struct Renderer {
     /// The X11 graphics context used for drawing.
     pub gc: u32,
+    /// Dedicated X11 graphics context used strictly for put_image and copy_area blits.
+    pub blit_gc: u32,
     /// The core loaded font identifier (0 if none).
     pub font_id: u32,
     /// Reusable double-buffer pixmap to prevent flickering.
@@ -220,6 +222,12 @@ impl Renderer {
         }
         conn.create_gc(gc, drawable, &gc_aux)?;
 
+        let blit_gc = conn.generate_id()?;
+        let blit_gc_aux = CreateGCAux::new()
+            .graphics_exposures(0)
+            .subwindow_mode(x11rb::protocol::xproto::SubwindowMode::INCLUDE_INFERIORS);
+        conn.create_gc(blit_gc, drawable, &blit_gc_aux)?;
+
         let pixmap = conn.generate_id()?;
         conn.create_pixmap(depth, pixmap, drawable, width, height)?;
         conn.flush()?;
@@ -238,6 +246,7 @@ impl Renderer {
 
         Ok(Self {
             gc,
+            blit_gc,
             font_id,
             pixmap,
             depth,
@@ -413,7 +422,7 @@ impl Renderer {
             return Ok(());
         }
 
-        let aux = ChangeGCAux::new().foreground(color);
+        let aux = ChangeGCAux::new().foreground(color).background(color);
         conn.change_gc(self.gc, &aux)?;
 
         let mut drew_poly = false;
@@ -452,7 +461,7 @@ impl Renderer {
         }
 
         // Core X11 fill path (zero heap allocations)
-        let aux = ChangeGCAux::new().foreground(color);
+        let aux = ChangeGCAux::new().foreground(color).background(color);
         conn.change_gc(self.gc, &aux)?;
         let rect = Rectangle {
             x,
@@ -557,7 +566,7 @@ impl Renderer {
         conn.copy_area(
             self.pixmap,
             window,
-            self.gc,
+            self.blit_gc,
             0,
             0,
             0,
@@ -601,9 +610,10 @@ impl Renderer {
                 let rows_per_chunk = (max_chunk_bytes / row_bytes).max(1).min(height);
 
                 let mut y = 0;
+                let mut chunk_buf = vec![0u8; rows_per_chunk * row_bytes];
                 while y < height {
                     let chunk_rows = (height - y).min(rows_per_chunk);
-                    let mut chunk_buf = vec![0u8; chunk_rows * row_bytes];
+                    let actual_len = chunk_rows * row_bytes;
                     for r in 0..chunk_rows {
                         let row_y = y + r;
                         let src_start = row_y * width;
@@ -620,15 +630,15 @@ impl Renderer {
                     conn.put_image(
                         ImageFormat::Z_PIXMAP,
                         self.pixmap,
-                        self.gc,
+                        self.blit_gc,
                         self.width,
                         chunk_rows as u16,
                         0,
                         y as i16,
                         0,
                         depth,
-                        &chunk_buf,
-                    )?.check()?;
+                        &chunk_buf[..actual_len],
+                    )?;
 
                     y += chunk_rows;
                 }
@@ -640,9 +650,10 @@ impl Renderer {
                 let rows_per_chunk = (max_chunk_bytes / row_bytes).max(1).min(height);
 
                 let mut y = 0;
+                let mut chunk_buf = vec![0u8; rows_per_chunk * row_bytes];
                 while y < height {
                     let chunk_rows = (height - y).min(rows_per_chunk);
-                    let mut chunk_buf = vec![0u8; chunk_rows * row_bytes];
+                    let actual_len = chunk_rows * row_bytes;
                     for r in 0..chunk_rows {
                         let row_y = y + r;
                         let src_start = row_y * width;
@@ -661,15 +672,15 @@ impl Renderer {
                     conn.put_image(
                         ImageFormat::Z_PIXMAP,
                         self.pixmap,
-                        self.gc,
+                        self.blit_gc,
                         self.width,
                         chunk_rows as u16,
                         0,
                         y as i16,
                         0,
                         depth,
-                        &chunk_buf,
-                    )?.check()?;
+                        &chunk_buf[..actual_len],
+                    )?;
 
                     y += chunk_rows;
                 }
@@ -693,7 +704,7 @@ impl Renderer {
                     conn.put_image(
                         ImageFormat::Z_PIXMAP,
                         self.pixmap,
-                        self.gc,
+                        self.blit_gc,
                         self.width,
                         chunk_rows as u16,
                         0,
@@ -701,7 +712,7 @@ impl Renderer {
                         0,
                         depth,
                         byte_slice,
-                    )?.check()?;
+                    )?;
 
                     y += chunk_rows;
                 }
@@ -730,7 +741,7 @@ impl Renderer {
         conn.copy_area(
             self.pixmap,
             window,
-            self.gc,
+            self.blit_gc,
             0,
             0,
             0,
@@ -918,14 +929,17 @@ impl Renderer {
             }
         } else if !active_window_title.is_empty() {
             let reserved_right = (right_width + 24).max(100);
-            let max_chars = ((self.width as i16 - cur_x - reserved_right) / self.char_width as i16).max(10) as usize;
-            let display_title = if active_window_title.chars().count() > max_chars {
-                let truncated: String = active_window_title.chars().take(max_chars.saturating_sub(3)).collect();
-                format!("{}...", truncated)
-            } else {
-                active_window_title.to_string()
-            };
-            do_draw_text(cur_x, baseline, &display_title, color_scheme.fg)?;
+            let available_space = self.width as i16 - cur_x - reserved_right;
+            if available_space > 0 {
+                let max_chars = (available_space / self.char_width.max(1) as i16).max(10) as usize;
+                let display_title = if active_window_title.chars().count() > max_chars {
+                    let truncated: String = active_window_title.chars().take(max_chars.saturating_sub(3)).collect();
+                    format!("{}...", truncated)
+                } else {
+                    active_window_title.to_string()
+                };
+                do_draw_text(cur_x, baseline, &display_title, color_scheme.fg)?;
+            }
         }
 
         // 6. Render right-aligned status modules
@@ -950,6 +964,7 @@ impl Renderer {
     pub fn destroy<C: Connection>(&self, conn: &C) -> Result<(), X11Error> {
         let _ = conn.free_pixmap(self.pixmap);
         let _ = conn.free_gc(self.gc);
+        let _ = conn.free_gc(self.blit_gc);
         if self.font_id > 0 {
             let _ = conn.close_font(self.font_id);
         }

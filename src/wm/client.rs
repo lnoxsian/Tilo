@@ -14,8 +14,8 @@ use crate::rules::{apply_rules as apply_window_rules, RuleAction, WindowRule};
 use crate::x11::X11Error;
 use crate::error::{is_client_disconnect_error, is_connection_lost_error, WmError};
 use x11rb::protocol::xproto::{
-    ButtonIndex, ChangeWindowAttributesAux, ConfigureWindowAux, ConnectionExt, EventMask, InputFocus, MapState,
-    ModMask, StackMode, Window,
+    ButtonIndex, ChangeWindowAttributesAux, ConfigureWindowAux, ConnectionExt, EventMask,
+    InputFocus, MapState, ModMask, StackMode, Window,
 };
 
 impl WindowManager {
@@ -251,10 +251,16 @@ impl WindowManager {
                 let _ = update_net_wm_state_fullscreen(&self.context.connection, window, true, &self.ewmh_atoms);
             }
 
-            // Map, retile, and focus client window on active workspace
+            // Update statusbar occupied workspaces before retiling & focusing
+            if let Some(ref mut bar) = self.statusbar {
+                let occupied = self.workspace_manager.occupied_workspaces();
+                bar.set_workspace(self.current_workspace, &occupied);
+            }
+
+            // Retile active workspace FIRST so the window is positioned before being mapped
+            self.retile()?;
             self.map_client(window)?;
             let _ = self.set_wm_state(window, WmState::Normal);
-            self.retile()?;
             self.focus_client(window)?;
         } else {
             // Target is a background workspace: window remains unmapped until switched to
@@ -270,11 +276,11 @@ impl WindowManager {
                 let _ = update_net_wm_state_fullscreen(&self.context.connection, window, true, &self.ewmh_atoms);
             }
             let _ = self.set_wm_state(window, WmState::Withdrawn);
-        }
 
-        if let Some(ref mut bar) = self.statusbar {
-            let occupied = self.workspace_manager.occupied_workspaces();
-            bar.set_workspace(self.current_workspace, &occupied);
+            if let Some(ref mut bar) = self.statusbar {
+                let occupied = self.workspace_manager.occupied_workspaces();
+                bar.set_workspace(self.current_workspace, &occupied);
+            }
         }
 
         let is_focused = self.focused_window() == Some(window);

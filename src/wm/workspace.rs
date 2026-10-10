@@ -417,6 +417,9 @@ impl WindowManager {
 
         // 8. Update statusbar window title if active
         let title = self.get_window_title(window);
+        if let Some(c) = self.client_state.get_client_mut(window) {
+            c.title = Some(title.clone());
+        }
         if let Some(ref mut bar) = self.statusbar {
             bar.set_title(&title);
         }

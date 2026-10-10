@@ -8,7 +8,6 @@ use crate::icccm::{get_wm_hints, get_wm_normal_hints, WmState};
 use crate::keybind::{Action, MOD_LOCK, MOD_SHIFT};
 use crate::layout::{LayoutType, Rect};
 use crate::x11::X11Error;
-use x11rb::connection::Connection;
 use x11rb::protocol::xproto::{
     Allow, AtomEnum, ButtonPressEvent, ButtonReleaseEvent, ClientMessageEvent,
     ConfigWindow, ConfigureRequestEvent, ConfigureWindowAux, ConnectionExt, EventMask,
@@ -56,12 +55,7 @@ impl WindowManager {
                 self.stats.button_presses += 1;
                 self.handle_button_press(&ev)?;
             }
-            Event::MotionNotify(mut ev) => {
-                // MotionNotify compression: discard older pending motion events
-                // to eliminate mouse drag latency during rapid pointer movement.
-                while let Ok(Some(Event::MotionNotify(next_ev))) = self.context.connection.poll_for_event() {
-                    ev = next_ev;
-                }
+            Event::MotionNotify(ev) => {
                 self.handle_motion_notify(&ev)?;
             }
             Event::ButtonRelease(ev) => {
@@ -80,17 +74,19 @@ impl WindowManager {
                 let _ = self.refresh_monitors();
             }
             Event::Expose(ev) => {
-                if let Some(ref bar) = self.statusbar
-                    && ev.window == bar.window_id {
-                        let _ = self.render_statusbar();
+                if ev.count == 0 {
+                    if let Some(ref bar) = self.statusbar
+                        && ev.window == bar.window_id {
+                            let _ = self.render_statusbar();
+                        }
+                    let is_launcher_expose = self
+                        .launcher
+                        .as_ref()
+                        .map(|l| l.visible && ev.window == l.window_id)
+                        .unwrap_or(false);
+                    if is_launcher_expose {
+                        let _ = self.render_launcher();
                     }
-                let is_launcher_expose = self
-                    .launcher
-                    .as_ref()
-                    .map(|l| l.visible && ev.window == l.window_id)
-                    .unwrap_or(false);
-                if is_launcher_expose {
-                    let _ = self.render_launcher();
                 }
             }
             Event::Error(err) => {
@@ -106,9 +102,9 @@ impl WindowManager {
     /// Handles a request from a client to map (show) its window.
     pub fn handle_map_request(&mut self, window: Window) -> Result<(), X11Error> {
         if self.client_state.contains(window) {
+            self.retile()?;
             self.map_client(window)?;
             let _ = self.set_wm_state(window, WmState::Normal);
-            self.retile()?;
             self.focus_client(window)?;
             return Ok(());
         }
@@ -243,17 +239,23 @@ impl WindowManager {
             let _ = get_wm_normal_hints(&self.context.connection, event.window);
         } else if event.atom == AtomEnum::WM_NAME.into() || event.atom == self.atoms.net_wm_name {
             let title = self.get_window_title(event.window);
-            if let Some(client) = self.client_state.get_client_mut(event.window) {
+            let title_changed = if let Some(client) = self.client_state.get_client_mut(event.window) {
+                let changed = client.title.as_deref() != Some(&title);
                 client.title = Some(title.clone());
-            }
-            if Some(event.window) == self.focused_window()
-                && let Some(ref mut bar) = self.statusbar {
-                    bar.set_title(&title);
-            }
-            if let Some(ws) = self.workspace_manager.find_workspace_for(event.window)
-                && ws == self.current_workspace
-            {
-                let _ = self.render_statusbar();
+                changed
+            } else {
+                false
+            };
+            if title_changed {
+                if Some(event.window) == self.focused_window()
+                    && let Some(ref mut bar) = self.statusbar {
+                        bar.set_title(&title);
+                }
+                if let Some(ws) = self.workspace_manager.find_workspace_for(event.window)
+                    && ws == self.current_workspace
+                {
+                    let _ = self.render_statusbar();
+                }
             }
         }
 

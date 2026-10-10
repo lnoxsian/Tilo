@@ -197,7 +197,7 @@ impl Launcher {
         self.dir_mtimes = new_mtimes;
 
         // Clean up any removed directories from cache
-        self.dir_cache.retain(|k, _| self.monitored_dirs.contains(k));
+        self.dir_cache.retain(|k, _| seen.contains(k));
 
         // Re-merge all cached entries
         let mut all_names = HashSet::new();
@@ -209,9 +209,7 @@ impl Launcher {
                     all_names.insert(item.clone());
                 }
                 for (k, v) in &entry.commands {
-                    if !app_commands.contains_key(k) {
-                        app_commands.insert(k.clone(), v.clone());
-                    }
+                    app_commands.entry(k.clone()).or_insert_with(|| v.clone());
                 }
             }
         }
@@ -736,13 +734,13 @@ pub fn create_launcher_window(
     conn: &impl Connection,
     screen: &Screen,
     rect: Rect,
-    background_color: u32,
+    _background_color: u32,
 ) -> Result<u32, StatusbarError> {
     let window_id = conn.generate_id()?;
 
     let aux = CreateWindowAux::new()
         .override_redirect(1) // Avoid WM window management interception
-        .background_pixel(background_color)
+        .background_pixmap(x11rb::NONE)
         .event_mask(
             EventMask::EXPOSURE
                 | EventMask::STRUCTURE_NOTIFY

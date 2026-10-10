@@ -438,7 +438,7 @@ impl WindowManager {
                     }
                     last_status_update = std::time::Instant::now();
                 }
-                (time_until_next.as_millis() as i32).clamp(10, 500)
+                (time_until_next.as_millis() as i32).clamp(10, 1000)
             } else {
                 250
             };
