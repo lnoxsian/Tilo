@@ -93,6 +93,9 @@ impl WindowManager {
                     let _ = self.render_launcher();
                 }
             }
+            Event::Error(err) => {
+                eprintln!("[ERROR tilo::x11] X11 Protocol Error: {:?}", err);
+            }
             _ => {}
         }
         Ok(())

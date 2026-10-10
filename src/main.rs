@@ -1,5 +1,6 @@
 use tilo::wm::WindowManager;
 use tilo::x11::{X11Context, X11Error};
+use x11rb::connection::Connection;
 
 fn main() {
     let ctx = match X11Context::new() {
@@ -7,9 +8,15 @@ fn main() {
             println!("[INFO  tilo::x11] Connected to X11 server.");
             println!("[INFO  tilo::x11] Managing root window: 0x{:x}", ctx.root_window);
             println!(
-                "[INFO  tilo::x11] Screen dimensions: {}x{}",
-                ctx.screen_width, ctx.screen_height
+                "[INFO  tilo::x11] Screen dimensions: {}x{}, root depth: {}",
+                ctx.screen_width, ctx.screen_height, ctx.screen().root_depth
             );
+            for fmt in &ctx.connection.setup().pixmap_formats {
+                println!(
+                    "[INFO  tilo::x11] Pixmap format: depth {} bpp {} pad {}",
+                    fmt.depth, fmt.bits_per_pixel, fmt.scanline_pad
+                );
+            }
             ctx
         }
         Err(err) => {

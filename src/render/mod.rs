@@ -176,10 +176,19 @@ impl Renderer {
 
         // 1. If not explicitly core, attempt to load via fontdue pure Rust engine
         let mut font_engine_opt = None;
-        if !is_explicit_core
-            && let Ok(engine) = FontEngine::load(font_name) {
-                font_engine_opt = Some(engine);
+        if !is_explicit_core {
+            match FontEngine::load(font_name) {
+                Ok(engine) => {
+                    font_engine_opt = Some(engine);
+                }
+                Err(err) => {
+                    eprintln!(
+                        "[WARN  tilo::render] Failed to load TrueType font '{}': {}. Falling back to core X11 fonts.",
+                        font_name, err
+                    );
+                }
             }
+        }
 
         let is_core = is_explicit_core || font_engine_opt.is_none();
 
@@ -195,6 +204,11 @@ impl Renderer {
                     loaded = Some(res);
                     break;
                 }
+            }
+            if loaded.is_none() {
+                eprintln!(
+                    "[ERROR tilo::render] No usable TrueType or core X11 fonts found on system. Install 'fonts-dejavu-core' or 'fonts-liberation'."
+                );
             }
             loaded.unwrap_or((0, 12, 4, 8))
         };
@@ -395,6 +409,10 @@ impl Renderer {
         }
 
         // Core X11 font rendering path (zero heap allocations)
+        if self.font_id == 0 {
+            return Ok(());
+        }
+
         let aux = ChangeGCAux::new().foreground(color);
         conn.change_gc(self.gc, &aux)?;
 
@@ -546,7 +564,7 @@ impl Renderer {
             0,
             self.width,
             self.height,
-        )?;
+        )?.check()?;
         conn.flush()?;
         Ok(())
     }
@@ -559,27 +577,137 @@ impl Renderer {
 
         let fb = self.framebuffer.as_ref().unwrap().borrow();
         let depth = if self.depth > 0 { self.depth } else { 24 };
+        let width = self.width as usize;
+        let height = self.height as usize;
+        if width == 0 || height == 0 {
+            return Ok(());
+        }
 
-        // Zero-copy byte slice cast for ImageFormat::Z_PIXMAP
-        let byte_slice: &[u8] = unsafe {
-            std::slice::from_raw_parts(
-                fb.as_ptr() as *const u8,
-                fb.len() * std::mem::size_of::<u32>(),
-            )
-        };
+        let (bpp, pad) = conn
+            .setup()
+            .pixmap_formats
+            .iter()
+            .find(|f| f.depth == depth)
+            .map(|f| (f.bits_per_pixel, f.scanline_pad))
+            .unwrap_or((32, 32));
 
-        conn.put_image(
-            ImageFormat::Z_PIXMAP,
-            self.pixmap,
-            self.gc,
-            self.width,
-            self.height,
-            0,
-            0,
-            0,
-            depth,
-            byte_slice,
-        )?;
+        let max_chunk_bytes = 32768usize;
+
+        match bpp {
+            24 => {
+                let pad_bytes = (pad as usize / 8).max(1);
+                let raw_row_bytes = width * 3;
+                let row_bytes = (raw_row_bytes + pad_bytes - 1) / pad_bytes * pad_bytes;
+                let rows_per_chunk = (max_chunk_bytes / row_bytes).max(1).min(height);
+
+                let mut y = 0;
+                while y < height {
+                    let chunk_rows = (height - y).min(rows_per_chunk);
+                    let mut chunk_buf = vec![0u8; chunk_rows * row_bytes];
+                    for r in 0..chunk_rows {
+                        let row_y = y + r;
+                        let src_start = row_y * width;
+                        let dst_start = r * row_bytes;
+                        for x in 0..width {
+                            let p = fb[src_start + x];
+                            let px_dst = dst_start + x * 3;
+                            chunk_buf[px_dst] = (p & 0xff) as u8;
+                            chunk_buf[px_dst + 1] = ((p >> 8) & 0xff) as u8;
+                            chunk_buf[px_dst + 2] = ((p >> 16) & 0xff) as u8;
+                        }
+                    }
+
+                    conn.put_image(
+                        ImageFormat::Z_PIXMAP,
+                        self.pixmap,
+                        self.gc,
+                        self.width,
+                        chunk_rows as u16,
+                        0,
+                        y as i16,
+                        0,
+                        depth,
+                        &chunk_buf,
+                    )?.check()?;
+
+                    y += chunk_rows;
+                }
+            }
+            16 => {
+                let pad_bytes = (pad as usize / 8).max(1);
+                let raw_row_bytes = width * 2;
+                let row_bytes = (raw_row_bytes + pad_bytes - 1) / pad_bytes * pad_bytes;
+                let rows_per_chunk = (max_chunk_bytes / row_bytes).max(1).min(height);
+
+                let mut y = 0;
+                while y < height {
+                    let chunk_rows = (height - y).min(rows_per_chunk);
+                    let mut chunk_buf = vec![0u8; chunk_rows * row_bytes];
+                    for r in 0..chunk_rows {
+                        let row_y = y + r;
+                        let src_start = row_y * width;
+                        let dst_start = r * row_bytes;
+                        for x in 0..width {
+                            let p = fb[src_start + x];
+                            let red = ((p >> 16) & 0xff) >> 3;
+                            let green = ((p >> 8) & 0xff) >> 2;
+                            let blue = (p & 0xff) >> 3;
+                            let rgb565 = ((red << 11) | (green << 5) | blue) as u16;
+                            let px_dst = dst_start + x * 2;
+                            chunk_buf[px_dst..px_dst + 2].copy_from_slice(&rgb565.to_le_bytes());
+                        }
+                    }
+
+                    conn.put_image(
+                        ImageFormat::Z_PIXMAP,
+                        self.pixmap,
+                        self.gc,
+                        self.width,
+                        chunk_rows as u16,
+                        0,
+                        y as i16,
+                        0,
+                        depth,
+                        &chunk_buf,
+                    )?.check()?;
+
+                    y += chunk_rows;
+                }
+            }
+            _ => {
+                let bytes_per_row = width * 4;
+                let rows_per_chunk = (max_chunk_bytes / bytes_per_row).max(1).min(height);
+
+                let mut y = 0;
+                while y < height {
+                    let chunk_rows = (height - y).min(rows_per_chunk);
+                    let start_pixel = y * width;
+                    let end_pixel = (y + chunk_rows) * width;
+                    let byte_slice: &[u8] = unsafe {
+                        std::slice::from_raw_parts(
+                            fb[start_pixel..end_pixel].as_ptr() as *const u8,
+                            chunk_rows * bytes_per_row,
+                        )
+                    };
+
+                    conn.put_image(
+                        ImageFormat::Z_PIXMAP,
+                        self.pixmap,
+                        self.gc,
+                        self.width,
+                        chunk_rows as u16,
+                        0,
+                        y as i16,
+                        0,
+                        depth,
+                        byte_slice,
+                    )?.check()?;
+
+                    y += chunk_rows;
+                }
+            }
+        }
+
         Ok(())
     }
 
@@ -597,7 +725,7 @@ impl Renderer {
         height: u16,
     ) -> Result<(), StatusbarError> {
         if !self.is_core {
-            let _ = self.flush_framebuffer_to_pixmap(conn);
+            self.flush_framebuffer_to_pixmap(conn)?;
         }
         conn.copy_area(
             self.pixmap,
@@ -609,7 +737,7 @@ impl Renderer {
             0,
             width.min(self.width),
             height.min(self.height),
-        )?;
+        )?.check()?;
         conn.flush()?;
         Ok(())
     }

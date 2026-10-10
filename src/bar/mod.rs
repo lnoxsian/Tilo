@@ -338,7 +338,8 @@ impl Statusbar {
             let sig = hasher.finish();
 
             if self.last_render_sig == Some(sig) {
-                // Contents are identical: window already displays the current pixmap
+                // Contents are identical: re-blit the existing pixmap to the window (e.g. on Expose)
+                r.copy_pixmap_to_window(conn, self.window_id)?;
                 return Ok(());
             }
 

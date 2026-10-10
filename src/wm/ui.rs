@@ -24,7 +24,7 @@ impl WindowManager {
 
         // Initialize and attach double-buffered renderer
         let font_name = self.config.bar_font();
-        if let Ok(renderer) = crate::render::Renderer::new(
+        match crate::render::Renderer::new(
             &self.context.connection,
             win_id,
             rect.width as u16,
@@ -32,7 +32,12 @@ impl WindowManager {
             screen.root_depth,
             font_name,
         ) {
-            bar.attach_renderer(renderer);
+            Ok(renderer) => {
+                bar.attach_renderer(renderer);
+            }
+            Err(err) => {
+                eprintln!("[WARN  tilo::wm] Failed to initialize statusbar renderer: {}", err);
+            }
         }
         let _ = bar.update_all();
 
@@ -84,7 +89,7 @@ impl WindowManager {
         };
         if let Some(ref mut bar) = self.statusbar {
             bar.set_title(&title);
-            bar.render(
+            if let Err(err) = bar.render(
                 &self.context.connection,
                 current_ws,
                 &occupied,
@@ -92,7 +97,10 @@ impl WindowManager {
                 &title,
                 tabs.as_deref(),
                 &self.config.tab_config,
-            )?;
+            ) {
+                eprintln!("[WARN  tilo::wm] Statusbar render failed: {}", err);
+                return Err(err);
+            }
         }
         Ok(())
     }
@@ -145,7 +153,7 @@ impl WindowManager {
             launcher.window_id = win_id;
             let _ = self.cursor_manager.apply_window(&self.context.connection, win_id);
 
-            if let Ok(renderer) = crate::render::Renderer::new(
+            match crate::render::Renderer::new(
                 &self.context.connection,
                 win_id,
                 width,
@@ -153,7 +161,12 @@ impl WindowManager {
                 screen.root_depth,
                 font_name,
             ) {
-                launcher.attach_renderer(renderer);
+                Ok(renderer) => {
+                    launcher.attach_renderer(renderer);
+                }
+                Err(err) => {
+                    eprintln!("[WARN  tilo::wm] Failed to initialize launcher renderer: {}", err);
+                }
             }
         } else {
             // Reposition window if active monitor changed
@@ -263,7 +276,10 @@ impl WindowManager {
     pub fn render_launcher(&mut self) -> Result<(), StatusbarError> {
         if let Some(ref mut launcher) = self.launcher
             && launcher.visible {
-                launcher.render(&self.context.connection)?;
+                if let Err(err) = launcher.render(&self.context.connection) {
+                    eprintln!("[WARN  tilo::wm] Launcher render failed: {}", err);
+                    return Err(err);
+                }
             }
         Ok(())
     }
