@@ -1,4 +1,5 @@
 use std::process::{Child, Command};
+use tilo::config::Config;
 use tilo::keybind::MOD_SUPER;
 use tilo::mouse::{
     default_mouse_bindings, handle_button_press, MouseAction, MouseActionType,
@@ -110,7 +111,7 @@ fn test_mouse_interaction_in_xephyr() {
     let ctx = X11Context::connect_to(Some(&xephyr.display)).expect("Failed to connect to Xephyr");
     ctx.become_wm().expect("Failed to become WM in Xephyr");
 
-    let mut wm = WindowManager::new(ctx).expect("Failed to initialize WindowManager");
+    let mut wm = WindowManager::new_with_config(ctx, Config::default()).expect("Failed to initialize WindowManager");
 
     // 1. Create and manage a client window
     let client_win = wm.context.connection.generate_id().unwrap();
@@ -278,7 +279,7 @@ fn test_click_to_focus_and_tiled_drag_in_xephyr() {
     let ctx = X11Context::connect_to(Some(&xephyr.display)).expect("Failed to connect to Xephyr");
     ctx.become_wm().expect("Failed to become WM in Xephyr");
 
-    let mut wm = WindowManager::new(ctx).expect("Failed to initialize WindowManager");
+    let mut wm = WindowManager::new_with_config(ctx, Config::default()).expect("Failed to initialize WindowManager");
     let screen = wm.context.screen();
 
     let aux = CreateWindowAux::new()
@@ -423,7 +424,7 @@ fn test_cursor_initialization_and_application_in_xephyr() {
     };
 
     let ctx = X11Context::connect_to(Some(":149")).expect("Connect to Xephyr");
-    let wm = WindowManager::new(ctx).expect("Create WM");
+    let wm = WindowManager::new_with_config(ctx, Config::default()).expect("Create WM");
 
     // Verify cursors are created with valid X11 IDs
     assert_ne!(wm.cursor_manager.normal, 0, "Normal pointer cursor must not be 0");
@@ -462,7 +463,7 @@ fn test_tiled_window_mouse_drag_resize_in_xephyr() {
     };
 
     let ctx = X11Context::connect_to(Some(":150")).expect("Connect to Xephyr");
-    let mut wm = WindowManager::new(ctx).expect("Create WM");
+    let mut wm = WindowManager::new_with_config(ctx, Config::default()).expect("Create WM");
 
     let screen = &wm.context.connection.setup().roots[wm.context.screen_num];
     let w1 = wm.context.connection.generate_id().unwrap();

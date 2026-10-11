@@ -251,10 +251,29 @@ fn test_invalid_config_fallback_without_panic() {
     let load_res = tilo::config::load_config_from_path(&cfg_file);
     assert!(load_res.is_err());
 
-    // Fallback load_config_or_default returns Default without panicking
+    // Point XDG_CONFIG_HOME to temp_dir so load_config_or_default attempts to load the corrupted config
+    let tilo_dir = temp_dir.join("tilo");
+    let _ = std::fs::create_dir_all(&tilo_dir);
+    let xdg_cfg_file = tilo_dir.join("config");
+    std::fs::write(&xdg_cfg_file, "this_is_an_invalid_directive @@@ 9999\nborder_width not_a_number\n").unwrap();
+
+    let prev_xdg = std::env::var("XDG_CONFIG_HOME").ok();
+    unsafe {
+        std::env::set_var("XDG_CONFIG_HOME", &temp_dir);
+    }
+
+    // Fallback load_config_or_default returns Default without panicking when config file is corrupted
     let default_cfg = tilo::config::load_config_or_default();
     assert_eq!(default_cfg.mod_key, "Mod4");
     assert_eq!(default_cfg.border_width, 2);
+
+    unsafe {
+        if let Some(prev) = prev_xdg {
+            std::env::set_var("XDG_CONFIG_HOME", prev);
+        } else {
+            std::env::remove_var("XDG_CONFIG_HOME");
+        }
+    }
 
     let _ = std::fs::remove_dir_all(&temp_dir);
 }

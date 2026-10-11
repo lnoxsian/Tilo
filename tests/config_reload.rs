@@ -1,8 +1,8 @@
 use std::process::{Child, Command};
-use tilo::config::{ConfigError, ReloadError};
+use tilo::config::{Config, ConfigError, ReloadError};
 use tilo::input::re_register_keybindings;
 use tilo::keybind::{Action, KeyBind, MOD_SUPER, XK_RETURN};
-use tilo::wm::{reload_config, WindowManager};
+use tilo::wm::WindowManager;
 use tilo::x11::X11Context;
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::{
@@ -233,11 +233,10 @@ unknown_directive foo bar
             wm.context.root_window
         ).is_ok());
 
-        // 8. Test standalone reload_config function
+        // 8. Test reload_config_from_path
         // Write valid config again
         std::fs::write(&config_path, updated_cfg).unwrap();
-        // Point default config path / reload
-        assert!(reload_config(&mut wm).is_err() || reload_config(&mut wm).is_ok());
+        assert!(wm.reload_config_from_path(&config_path).is_ok());
 
         // 9. Verify Mod4 + Shift + r KeyPress event triggers Action::Reload
         let mapping = wm.input_manager.mapping.clone().expect("Mapping missing");
@@ -281,7 +280,7 @@ fn test_default_keybinding_mod4_shift_r_reload_in_xephyr() {
             .expect("WM context connect failed");
         assert!(wm_ctx.become_wm().is_ok());
 
-        let mut wm = WindowManager::new(wm_ctx).expect("Failed to initialize WM");
+        let mut wm = WindowManager::new_with_config(wm_ctx, Config::default()).expect("Failed to initialize WM");
 
         // Verify default keybindings include Mod4 + Shift + r mapped to Action::Reload
         assert!(wm.config.bindings.iter().any(|b| {

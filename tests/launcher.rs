@@ -160,7 +160,8 @@ fn test_launcher_in_xephyr_lifecycle_and_interaction() {
             .expect("WM context connect failed");
         assert!(wm_ctx.become_wm().is_ok());
 
-        let mut wm = WindowManager::new(wm_ctx).expect("Failed to create WM");
+        let mut wm = WindowManager::new_with_config(wm_ctx, tilo::config::Config::default())
+            .expect("Failed to create WM");
 
         // 1. Initial state: launcher is closed
         assert!(!wm.launcher.as_ref().unwrap().visible);

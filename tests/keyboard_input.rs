@@ -1,4 +1,5 @@
 use std::process::{Child, Command};
+use tilo::config::Config;
 use tilo::focus::Direction;
 use tilo::keybind::{
     Action, Keysym, MOD_SHIFT, MOD_SUPER, XK_DOWN, XK_H, XK_J, XK_K, XK_L, XK_LEFT, XK_Q, XK_RIGHT,
@@ -71,7 +72,7 @@ fn test_keyboard_input_and_actions_in_xephyr() {
             .expect("WM context connect failed");
         assert!(wm_ctx.become_wm().is_ok());
 
-        let mut wm = WindowManager::new(wm_ctx).expect("Failed to initialize WM");
+        let mut wm = WindowManager::new_with_config(wm_ctx, Config::default()).expect("Failed to initialize WM");
 
         // Client connection to create windows
         let (client_conn, screen_num) =
@@ -166,7 +167,7 @@ fn test_keypress_event_handling_in_xephyr() {
             .expect("WM context connect failed");
         assert!(wm_ctx.become_wm().is_ok());
 
-        let mut wm = WindowManager::new(wm_ctx).expect("Failed to initialize WM");
+        let mut wm = WindowManager::new_with_config(wm_ctx, Config::default()).expect("Failed to initialize WM");
         let mapping = wm.input_manager.mapping.as_ref().expect("Keyboard mapping missing");
 
         // Find keycode for 'q'
@@ -213,7 +214,7 @@ fn test_mod4_shift_numbers_move_focused_window_in_xephyr() {
             .expect("WM context connect failed");
         assert!(wm_ctx.become_wm().is_ok());
 
-        let mut wm = WindowManager::new(wm_ctx).expect("Failed to initialize WM");
+        let mut wm = WindowManager::new_with_config(wm_ctx, Config::default()).expect("Failed to initialize WM");
 
         // Client connection to create windows
         let (client_conn, screen_num) =
@@ -403,7 +404,7 @@ fn test_window_movement_and_focus_with_vim_and_arrow_keys_in_xephyr() {
             .expect("WM context connect failed");
         assert!(wm_ctx.become_wm().is_ok());
 
-        let mut wm = WindowManager::new(wm_ctx).expect("Failed to initialize WM");
+        let mut wm = WindowManager::new_with_config(wm_ctx, Config::default()).expect("Failed to initialize WM");
 
         // Client connection to create windows
         let (client_conn, screen_num) =
@@ -587,7 +588,7 @@ fn test_bsp_keyboard_tile_resizing_and_preselection_in_xephyr() {
     };
 
     let ctx = X11Context::connect_to(Some(":151")).expect("Connect to Xephyr");
-    let mut wm = WindowManager::new(ctx).expect("Create WindowManager");
+    let mut wm = WindowManager::new_with_config(ctx, Config::default()).expect("Create WindowManager");
 
     let root_depth = wm.context.connection.setup().roots[wm.context.screen_num].root_depth;
     let root_visual = wm.context.connection.setup().roots[wm.context.screen_num].root_visual;
