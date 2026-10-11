@@ -8,6 +8,7 @@ use tilo::launcher::{
 };
 use tilo::wm::WindowManager;
 use tilo::x11::X11Context;
+use x11rb::connection::Connection;
 use x11rb::protocol::xproto::{ConnectionExt, KeyPressEvent};
 
 struct XephyrServer {
@@ -216,6 +217,13 @@ fn test_launcher_in_xephyr_lifecycle_and_interaction() {
         assert!(!wm.launcher.as_ref().unwrap().visible);
         assert_eq!(wm.launcher.as_ref().unwrap().query, "");
 
+        for _ in 0..10 {
+            while let Ok(Some(ev)) = wm.context.connection.poll_for_event() {
+                let _ = wm.handle_event(ev);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+
         // 6. Test toggle launcher
         wm.toggle_launcher().expect("toggle_launcher (open) should succeed");
         assert!(wm.launcher.as_ref().unwrap().visible);
@@ -398,5 +406,29 @@ fn test_mod4_shift_q_keybinding_and_cancel() {
 
     let action = handle_launcher_keypress(24, tilo::keybind::MOD_SUPER | MOD_SHIFT, &mapping);
     assert_eq!(action, Some(LauncherAction::Cancel));
+}
+
+#[test]
+fn test_launcher_scrolling_and_execution_beyond_top_8() {
+    let mut launcher = Launcher::new();
+    launcher.executable_cache = (0..25).map(|i| format!("app_{:02}", i)).collect();
+    launcher.query.clear();
+    launcher.selected_index = 0;
+    launcher.scroll_offset = 0;
+
+    // Verify all 25 binaries are in all_filtered_results
+    let all = launcher.all_filtered_results();
+    assert_eq!(all.len(), 25);
+
+    // Scroll down to index 15
+    for _ in 0..15 {
+        tilo::launcher::update_launcher_state(&mut launcher, LauncherAction::SelectNext);
+    }
+    assert_eq!(launcher.selected_index, 15);
+    assert_eq!(launcher.scroll_offset, 8); // Visible window is 8..16 (items 8 through 15)
+
+    // Verify command resolution for item at index 15
+    let selected = launcher.all_filtered_results().get(launcher.selected_index).cloned();
+    assert_eq!(selected, Some("app_15".to_string()));
 }
 

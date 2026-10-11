@@ -19,8 +19,8 @@ use std::time::SystemTime;
 use crate::input::KeyboardMapping;
 use crate::keybind::{
     MOD_CONTROL, MOD_SHIFT, MOD_SUPER, XK_A, XK_B, XK_BACKSPACE, XK_C, XK_D, XK_DOWN, XK_E,
-    XK_END, XK_ESCAPE, XK_F, XK_F5, XK_HOME, XK_LEFT, XK_N, XK_P, XK_Q, XK_R, XK_RETURN, XK_RIGHT,
-    XK_TAB, XK_U, XK_UP, XK_W,
+    XK_END, XK_ESCAPE, XK_F, XK_F5, XK_HOME, XK_LEFT, XK_N, XK_P, XK_PAGE_DOWN, XK_PAGE_UP,
+    XK_Q, XK_R, XK_RETURN, XK_RIGHT, XK_TAB, XK_U, XK_UP, XK_W,
 };
 use crate::layout::Rect;
 use crate::render::Renderer;
@@ -77,6 +77,8 @@ pub struct Launcher {
     pub cursor_position: usize,
     /// Currently selected index in the filtered results.
     pub selected_index: usize,
+    /// Vertical scroll offset for windowing visible items.
+    pub scroll_offset: usize,
     /// Whether the launcher is currently active and mapped on screen.
     pub visible: bool,
     /// Operating mode of the launcher (App search or Exit menu).
@@ -115,6 +117,7 @@ impl Launcher {
             query: String::new(),
             cursor_position: 0,
             selected_index: 0,
+            scroll_offset: 0,
             visible: false,
             mode: LauncherMode::App,
             rect: Rect::new(0, 0, LAUNCHER_WIDTH as u32, LAUNCHER_HEIGHT as u32),
@@ -220,10 +223,8 @@ impl Launcher {
         self.executable_cache = sorted;
         self.app_commands = app_commands;
 
-        let count = self.filtered_results(LAUNCHER_MAX_RESULTS).len();
-        if self.selected_index >= count {
-            self.selected_index = count.saturating_sub(1);
-        }
+        let count = self.all_filtered_results().len();
+        self.adjust_scroll(count, LAUNCHER_MAX_RESULTS);
 
         any_changed
     }
@@ -335,23 +336,55 @@ impl Launcher {
         }
     }
 
+    /// Returns all filtered executable results matching the current query without truncation.
+    pub fn all_filtered_results(&self) -> Vec<String> {
+        if self.mode == LauncherMode::Exit {
+            Self::filter_exit_options(&self.query)
+        } else {
+            filter_executables(&self.executable_cache, &self.query, usize::MAX)
+        }
+    }
+
+    /// Adjusts the scroll offset and clamps `selected_index` so that the selected
+    /// item is visible within the visible results window of size `max_visible`.
+    pub fn adjust_scroll(&mut self, total_count: usize, max_visible: usize) {
+        if total_count == 0 {
+            self.selected_index = 0;
+            self.scroll_offset = 0;
+            return;
+        }
+
+        if self.selected_index >= total_count {
+            self.selected_index = total_count - 1;
+        }
+
+        if self.selected_index < self.scroll_offset {
+            self.scroll_offset = self.selected_index;
+        } else if self.selected_index >= self.scroll_offset + max_visible {
+            self.scroll_offset = self.selected_index + 1 - max_visible;
+        }
+
+        if self.scroll_offset + max_visible > total_count {
+            self.scroll_offset = total_count.saturating_sub(max_visible);
+        }
+        if self.selected_index < self.scroll_offset {
+            self.scroll_offset = self.selected_index;
+        }
+    }
+
     /// Renders the launcher UI into its off-screen pixmap and copies it to the window.
     pub fn render(&mut self, conn: &impl Connection) -> Result<(), StatusbarError> {
-        let renderer = match self.renderer {
-            Some(ref r) => r,
-            None => return Ok(()),
-        };
-
-        if self.window_id == 0 {
+        if self.renderer.is_none() || self.window_id == 0 {
             return Ok(());
         }
 
-        let results = self.filtered_results(LAUNCHER_MAX_RESULTS);
+        let all_results = self.all_filtered_results();
+        let total_count = all_results.len();
 
-        // Keep selected index within valid bounds
-        if !results.is_empty() && self.selected_index >= results.len() {
-            self.selected_index = results.len() - 1;
-        }
+        // Keep selected index within valid bounds and adjust scroll window
+        self.adjust_scroll(total_count, LAUNCHER_MAX_RESULTS);
+
+        let renderer = self.renderer.as_ref().unwrap();
 
         // Launcher maintains a fixed height and position so it doesn't move or resize
         // when search results are 1 or fewer than 8.
@@ -440,15 +473,42 @@ impl Launcher {
             self.color_scheme.active_bg,
         )?;
 
+        // Match count indicator on right side of input box (e.g. "1/2150") if results exist
+        if total_count > 0 {
+            let count_text = format!("{}/{}", self.selected_index + 1, total_count);
+            let count_w = renderer.text_width(&count_text);
+            let count_x = (w.saturating_sub(16) as i16) - (count_w as i16);
+            let query_end_x = text_start_x + renderer.text_width(query_text) as i16 + 10;
+            if count_x > query_end_x {
+                renderer.draw_text(
+                    conn,
+                    renderer.pixmap,
+                    count_x,
+                    input_baseline,
+                    &count_text,
+                    self.color_scheme.inactive_fg,
+                )?;
+            }
+        }
+
         // 4. Draw separator line below input field
         renderer.fill_rect(conn, renderer.pixmap, 8, 36, w.saturating_sub(16), 1, self.color_scheme.border)?;
 
-        // 5. Draw filtered result items
+        // 5. Draw filtered result items (windowed slice)
         let mut cur_y = 42i16;
         let row_height = 26i16;
 
-        for (idx, item) in results.iter().enumerate() {
-            let is_selected = idx == self.selected_index;
+        let visible_slice = if total_count > 0 {
+            let start = self.scroll_offset.min(total_count);
+            let end = (start + LAUNCHER_MAX_RESULTS).min(total_count);
+            &all_results[start..end]
+        } else {
+            &[][..]
+        };
+
+        for (idx, item) in visible_slice.iter().enumerate() {
+            let item_index = self.scroll_offset + idx;
+            let is_selected = item_index == self.selected_index;
             let item_baseline = cur_y + 18;
 
             if is_selected {
@@ -487,7 +547,7 @@ impl Launcher {
         }
 
         // If no results and query is non-empty, indicate notice / direct command execution mode
-        if results.is_empty() && !self.query.is_empty() {
+        if total_count == 0 && !self.query.is_empty() {
             let notice = if self.mode == LauncherMode::Exit {
                 format!("Unknown action: '{}' (options: Logout, Reboot, Poweroff)", self.query)
             } else {
@@ -542,6 +602,10 @@ pub enum LauncherAction {
     SelectPrevious,
     /// Move selection down (Arrow Down, Ctrl+N)
     SelectNext,
+    /// Move selection up by one page / 8 items (Page Up)
+    PageUp,
+    /// Move selection down by one page / 8 items (Page Down)
+    PageDown,
     /// Execute the currently selected item or typed command line (Enter)
     Execute,
     /// Close the launcher without executing (Escape)
@@ -612,11 +676,20 @@ pub fn handle_launcher_keypress(
         XK_BACKSPACE => Some(LauncherAction::DeleteChar),
         XK_UP => Some(LauncherAction::SelectPrevious),
         XK_DOWN => Some(LauncherAction::SelectNext),
+        XK_PAGE_UP => Some(LauncherAction::PageUp),
+        XK_PAGE_DOWN => Some(LauncherAction::PageDown),
         XK_LEFT => Some(LauncherAction::MoveCursorLeft),
         XK_RIGHT => Some(LauncherAction::MoveCursorRight),
         XK_HOME => Some(LauncherAction::MoveToStart),
         XK_END => Some(LauncherAction::MoveToEnd),
-        XK_TAB => Some(LauncherAction::AutoComplete),
+        XK_TAB => {
+            if shift {
+                Some(LauncherAction::SelectPrevious)
+            } else {
+                Some(LauncherAction::AutoComplete)
+            }
+        }
+        0xfe20 => Some(LauncherAction::SelectPrevious), // XK_ISO_Left_Tab (Shift+Tab)
         XK_F5 => Some(LauncherAction::Refresh),
         s if (0x20..=0x7e).contains(&s) => {
             Some(LauncherAction::InsertChar(s as u8 as char))
@@ -633,6 +706,7 @@ pub fn update_launcher_state(launcher: &mut Launcher, action: LauncherAction) {
             launcher.query.insert(byte_offset, c);
             launcher.cursor_position += 1;
             launcher.selected_index = 0;
+            launcher.scroll_offset = 0;
         }
         LauncherAction::DeleteChar => {
             if launcher.cursor_position > 0 {
@@ -641,6 +715,7 @@ pub fn update_launcher_state(launcher: &mut Launcher, action: LauncherAction) {
                     launcher.query.remove(byte_offset);
                     launcher.cursor_position = char_idx;
                     launcher.selected_index = 0;
+                    launcher.scroll_offset = 0;
                 }
             }
         }
@@ -663,6 +738,7 @@ pub fn update_launcher_state(launcher: &mut Launcher, action: LauncherAction) {
                 launcher.query.drain(start_byte..end_byte);
                 launcher.cursor_position = i;
                 launcher.selected_index = 0;
+                launcher.scroll_offset = 0;
             }
         }
         LauncherAction::DeleteLine => {
@@ -672,6 +748,7 @@ pub fn update_launcher_state(launcher: &mut Launcher, action: LauncherAction) {
             launcher.query.drain(0..end_byte);
             launcher.cursor_position = 0;
             launcher.selected_index = 0;
+            launcher.scroll_offset = 0;
         }
         LauncherAction::MoveToStart => {
             launcher.cursor_position = 0;
@@ -680,16 +757,38 @@ pub fn update_launcher_state(launcher: &mut Launcher, action: LauncherAction) {
             launcher.cursor_position = launcher.query.chars().count();
         }
         LauncherAction::MoveCursorLeft => {
-            launcher.cursor_position = launcher.cursor_position.saturating_sub(1);
+            if launcher.query.is_empty() {
+                // When search query is empty, Left arrow explores previous binary like dmenu!
+                let count = launcher.all_filtered_results().len();
+                if count > 0 {
+                    if launcher.selected_index == 0 {
+                        launcher.selected_index = count - 1;
+                    } else {
+                        launcher.selected_index -= 1;
+                    }
+                    launcher.adjust_scroll(count, LAUNCHER_MAX_RESULTS);
+                }
+            } else {
+                launcher.cursor_position = launcher.cursor_position.saturating_sub(1);
+            }
         }
         LauncherAction::MoveCursorRight => {
-            let len = launcher.query.chars().count();
-            if launcher.cursor_position < len {
-                launcher.cursor_position += 1;
+            if launcher.query.is_empty() {
+                // When search query is empty, Right arrow explores next binary like dmenu!
+                let count = launcher.all_filtered_results().len();
+                if count > 0 {
+                    launcher.selected_index = (launcher.selected_index + 1) % count;
+                    launcher.adjust_scroll(count, LAUNCHER_MAX_RESULTS);
+                }
+            } else {
+                let len = launcher.query.chars().count();
+                if launcher.cursor_position < len {
+                    launcher.cursor_position += 1;
+                }
             }
         }
         LauncherAction::AutoComplete => {
-            let results = launcher.filtered_results(LAUNCHER_MAX_RESULTS);
+            let results = launcher.all_filtered_results();
             if let Some(selected) = results.get(launcher.selected_index) {
                 let trimmed = launcher.query.trim_start();
                 if let Some(space_idx) = trimmed.find(' ') {
@@ -700,22 +799,39 @@ pub fn update_launcher_state(launcher: &mut Launcher, action: LauncherAction) {
                 }
                 launcher.cursor_position = launcher.query.chars().count();
                 launcher.selected_index = 0;
+                launcher.scroll_offset = 0;
             }
         }
         LauncherAction::SelectNext => {
-            let count = launcher.filtered_results(LAUNCHER_MAX_RESULTS).len();
+            let count = launcher.all_filtered_results().len();
             if count > 0 {
                 launcher.selected_index = (launcher.selected_index + 1) % count;
+                launcher.adjust_scroll(count, LAUNCHER_MAX_RESULTS);
             }
         }
         LauncherAction::SelectPrevious => {
-            let count = launcher.filtered_results(LAUNCHER_MAX_RESULTS).len();
+            let count = launcher.all_filtered_results().len();
             if count > 0 {
                 if launcher.selected_index == 0 {
                     launcher.selected_index = count - 1;
                 } else {
                     launcher.selected_index -= 1;
                 }
+                launcher.adjust_scroll(count, LAUNCHER_MAX_RESULTS);
+            }
+        }
+        LauncherAction::PageDown => {
+            let count = launcher.all_filtered_results().len();
+            if count > 0 {
+                launcher.selected_index = (launcher.selected_index + LAUNCHER_MAX_RESULTS).min(count - 1);
+                launcher.adjust_scroll(count, LAUNCHER_MAX_RESULTS);
+            }
+        }
+        LauncherAction::PageUp => {
+            let count = launcher.all_filtered_results().len();
+            if count > 0 {
+                launcher.selected_index = launcher.selected_index.saturating_sub(LAUNCHER_MAX_RESULTS);
+                launcher.adjust_scroll(count, LAUNCHER_MAX_RESULTS);
             }
         }
         LauncherAction::Refresh => {
@@ -1197,5 +1313,146 @@ Exec=link
             let s = dir.to_string_lossy();
             assert!(!s.ends_with("share/applications"), "Monitored dirs should not contain desktop application dirs: {}", s);
         }
+    }
+
+    #[test]
+    fn test_scroll_past_top_8_binaries() {
+        let mut launcher = Launcher::new();
+        // Create 20 binaries: bin00 .. bin19
+        launcher.executable_cache = (0..20).map(|i| format!("bin{:02}", i)).collect();
+        launcher.query = String::new();
+        launcher.selected_index = 0;
+        launcher.scroll_offset = 0;
+
+        assert_eq!(launcher.all_filtered_results().len(), 20);
+
+        // Advance through first 7 items (indices 0..7): scroll_offset stays 0
+        for i in 1..=7 {
+            update_launcher_state(&mut launcher, LauncherAction::SelectNext);
+            assert_eq!(launcher.selected_index, i);
+            assert_eq!(launcher.scroll_offset, 0);
+        }
+
+        // 8th item (index 8): beyond top 8! scroll_offset shifts to 1
+        update_launcher_state(&mut launcher, LauncherAction::SelectNext);
+        assert_eq!(launcher.selected_index, 8);
+        assert_eq!(launcher.scroll_offset, 1);
+
+        // 9th item (index 9): scroll_offset shifts to 2
+        update_launcher_state(&mut launcher, LauncherAction::SelectNext);
+        assert_eq!(launcher.selected_index, 9);
+        assert_eq!(launcher.scroll_offset, 2);
+
+        // Advance to last item (index 19)
+        for _ in 10..=19 {
+            update_launcher_state(&mut launcher, LauncherAction::SelectNext);
+        }
+        assert_eq!(launcher.selected_index, 19);
+        assert_eq!(launcher.scroll_offset, 12); // visible window: 12..20 (8 items)
+
+        // SelectPrevious steps back from 19 to 18; scroll_offset stays 12
+        update_launcher_state(&mut launcher, LauncherAction::SelectPrevious);
+        assert_eq!(launcher.selected_index, 18);
+        assert_eq!(launcher.scroll_offset, 12);
+
+        // Step back until selected_index is 11: scroll_offset shifts to 11
+        for _ in (11..18).rev() {
+            update_launcher_state(&mut launcher, LauncherAction::SelectPrevious);
+        }
+        assert_eq!(launcher.selected_index, 11);
+        assert_eq!(launcher.scroll_offset, 11);
+
+        // Wrap around from 0 to 19 with SelectPrevious
+        launcher.selected_index = 0;
+        launcher.scroll_offset = 0;
+        update_launcher_state(&mut launcher, LauncherAction::SelectPrevious);
+        assert_eq!(launcher.selected_index, 19);
+        assert_eq!(launcher.scroll_offset, 12);
+
+        // Wrap around from 19 to 0 with SelectNext
+        update_launcher_state(&mut launcher, LauncherAction::SelectNext);
+        assert_eq!(launcher.selected_index, 0);
+        assert_eq!(launcher.scroll_offset, 0);
+    }
+
+    #[test]
+    fn test_dmenu_arrow_keys_exploration_when_query_empty() {
+        let mut launcher = Launcher::new();
+        launcher.executable_cache = (0..15).map(|i| format!("app{:02}", i)).collect();
+        launcher.query = String::new();
+        launcher.selected_index = 0;
+        launcher.scroll_offset = 0;
+
+        // When query is empty, MoveCursorRight acts like dmenu next item!
+        update_launcher_state(&mut launcher, LauncherAction::MoveCursorRight);
+        assert_eq!(launcher.selected_index, 1);
+
+        update_launcher_state(&mut launcher, LauncherAction::MoveCursorRight);
+        assert_eq!(launcher.selected_index, 2);
+
+        // MoveCursorLeft acts like dmenu previous item!
+        update_launcher_state(&mut launcher, LauncherAction::MoveCursorLeft);
+        assert_eq!(launcher.selected_index, 1);
+
+        update_launcher_state(&mut launcher, LauncherAction::MoveCursorLeft);
+        assert_eq!(launcher.selected_index, 0);
+
+        // Wrap around to last item with MoveCursorLeft
+        update_launcher_state(&mut launcher, LauncherAction::MoveCursorLeft);
+        assert_eq!(launcher.selected_index, 14);
+        assert_eq!(launcher.scroll_offset, 7);
+
+        // Wrap back to first item with MoveCursorRight
+        update_launcher_state(&mut launcher, LauncherAction::MoveCursorRight);
+        assert_eq!(launcher.selected_index, 0);
+        assert_eq!(launcher.scroll_offset, 0);
+    }
+
+    #[test]
+    fn test_page_up_page_down_paging() {
+        let mut launcher = Launcher::new();
+        launcher.executable_cache = (0..30).map(|i| format!("pkg{:02}", i)).collect();
+        launcher.query = String::new();
+        launcher.selected_index = 0;
+        launcher.scroll_offset = 0;
+
+        // Page down advances by 8
+        update_launcher_state(&mut launcher, LauncherAction::PageDown);
+        assert_eq!(launcher.selected_index, 8);
+        assert_eq!(launcher.scroll_offset, 1);
+
+        update_launcher_state(&mut launcher, LauncherAction::PageDown);
+        assert_eq!(launcher.selected_index, 16);
+        assert_eq!(launcher.scroll_offset, 9);
+
+        // Page up rewinds by 8
+        update_launcher_state(&mut launcher, LauncherAction::PageUp);
+        assert_eq!(launcher.selected_index, 8);
+        assert_eq!(launcher.scroll_offset, 8);
+
+        update_launcher_state(&mut launcher, LauncherAction::PageUp);
+        assert_eq!(launcher.selected_index, 0);
+        assert_eq!(launcher.scroll_offset, 0);
+    }
+
+    #[test]
+    fn test_autocomplete_on_scrolled_result() {
+        let mut launcher = Launcher::new();
+        launcher.executable_cache = (0..20).map(|i| format!("program{:02}", i)).collect();
+        launcher.query = "prog".to_string();
+        launcher.cursor_position = 4;
+
+        // Scroll down to 10th item (program09)
+        for _ in 0..9 {
+            update_launcher_state(&mut launcher, LauncherAction::SelectNext);
+        }
+        assert_eq!(launcher.selected_index, 9);
+        assert_eq!(launcher.scroll_offset, 2);
+
+        // Press Tab (AutoComplete) on scrolled selection
+        update_launcher_state(&mut launcher, LauncherAction::AutoComplete);
+        assert_eq!(launcher.query, "program09 ");
+        assert_eq!(launcher.selected_index, 0);
+        assert_eq!(launcher.scroll_offset, 0);
     }
 }

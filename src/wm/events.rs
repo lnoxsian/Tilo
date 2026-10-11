@@ -181,13 +181,37 @@ impl WindowManager {
                 if let Some(focused) = self.focused_window() {
                     let _ = self.focus_client(focused);
                 }
+                return Ok(());
             }
-        self.unmanage_window(window);
+
+        // If statusbar window was destroyed, ignore
+        if let Some(ref bar) = self.statusbar
+            && bar.window_id == window {
+                return Ok(());
+            }
+
+        // Only managed clients need unmanaging on destroy
+        if self.client_state.contains(window) {
+            self.unmanage_destroyed_window(window);
+        }
         Ok(())
     }
 
     /// Handles the notification that a window was unmapped.
     pub fn handle_unmap_notify(&mut self, window: Window) -> Result<(), X11Error> {
+        // Ignore unmanaged windows such as the launcher or status bar overlay
+        if let Some(ref launcher) = self.launcher
+            && launcher.window_id == window {
+                return Ok(());
+            }
+        if let Some(ref bar) = self.statusbar
+            && bar.window_id == window {
+                return Ok(());
+            }
+        if !self.client_state.contains(window) {
+            return Ok(());
+        }
+
         // If the window belongs to an inactive workspace, it was unmapped intentionally
         // by the window manager during a workspace switch. Keep it tracked on its workspace!
         if let Some(ws) = self.workspace_manager.find_workspace_for(window) {

@@ -467,7 +467,26 @@ impl WindowManager {
     ///   is on an inactive workspace, does not alter the active workspace's focus or layout.
     /// - If the window was active on the current workspace, transfers focus to the previous window
     ///   on the workspace/focus stack or reverts to the root window.
+    /// Unmanages a client window.
+    ///
+    /// If `set_withdrawn` is true (e.g. on unmap), updates `WM_STATE` to `Withdrawn`.
+    /// When called from `handle_destroy_notify`, `set_withdrawn` should be false because
+    /// the window has already been destroyed on the X server.
     pub fn unmanage_window(&mut self, window: Window) -> Option<Client> {
+        self.unmanage_window_internal(window, true)
+    }
+
+    /// Unmanages a destroyed client window without attempting to set `WM_STATE` on a destroyed window ID.
+    pub fn unmanage_destroyed_window(&mut self, window: Window) -> Option<Client> {
+        self.unmanage_window_internal(window, false)
+    }
+
+    fn unmanage_window_internal(&mut self, window: Window, set_withdrawn: bool) -> Option<Client> {
+        // Ignore unmanaged / internal windows (e.g. launcher, statusbar, helper windows)
+        if !self.client_state.contains(window) {
+            return None;
+        }
+
         let ws = self
             .workspace_manager
             .find_workspace_for(window)
@@ -480,7 +499,9 @@ impl WindowManager {
         if self.scratchpad.client == Some(window) {
             self.scratchpad.clear_client();
         }
-        let _ = self.set_wm_state(window, WmState::Withdrawn);
+        if set_withdrawn {
+            let _ = self.set_wm_state(window, WmState::Withdrawn);
+        }
         let _ = self.update_ewmh_client_list();
         if removed.is_some() {
             // Update status bar occupied workspace indicators

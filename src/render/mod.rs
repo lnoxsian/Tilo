@@ -1001,6 +1001,7 @@ mod tests {
             is_core: false,
             font_engine: engine,
             framebuffer: Some(RefCell::new(vec![0u32; 1000 * 24])),
+            blit_gc: 1,
             text_width_cache: RefCell::new(HashMap::new()),
         }
     }
@@ -1008,6 +1009,7 @@ mod tests {
     fn dummy_core_renderer() -> Renderer {
         Renderer {
             gc: 1,
+            blit_gc: 1,
             font_id: 2,
             pixmap: 3,
             width: 1000,

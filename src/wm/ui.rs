@@ -216,6 +216,7 @@ impl WindowManager {
         launcher.query.clear();
         launcher.cursor_position = 0;
         launcher.selected_index = 0;
+        launcher.scroll_offset = 0;
 
         let _ = launcher.render(&self.context.connection);
         self.context.flush()?;
@@ -231,6 +232,7 @@ impl WindowManager {
                 launcher.query.clear();
                 launcher.cursor_position = 0;
                 launcher.selected_index = 0;
+                launcher.scroll_offset = 0;
                 let _ = self.context.connection.ungrab_keyboard(x11rb::CURRENT_TIME);
                 let _ = launcher.destroy(&self.context.connection);
                 self.context.flush()?;
@@ -308,12 +310,12 @@ impl WindowManager {
 
                     if let Some(ref launcher) = self.launcher {
                         if launcher.mode == crate::launcher::LauncherMode::Exit {
-                            let results = launcher.filtered_results(8);
+                            let results = launcher.all_filtered_results();
                             let selected = results.get(launcher.selected_index).cloned()
                                 .unwrap_or_else(|| launcher.query.trim().to_string());
                             power_action = Some(selected);
                         } else {
-                            let results = launcher.filtered_results(8);
+                            let results = launcher.all_filtered_results();
                             let trimmed = launcher.query.trim();
                             let candidate = if trimmed.is_empty() {
                                 results.get(launcher.selected_index).map(|s| launcher.command_for(s))

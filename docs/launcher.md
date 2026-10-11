@@ -57,14 +57,17 @@ Shows three fixed power actions:
 | Type | Insert characters into the query |
 | `Backspace` | Delete character before cursor |
 | `Delete` | Delete character after cursor |
-| `Home` | Move cursor to beginning |
-| `End` | Move cursor to end |
-| `Left` | Move cursor left |
-| `Right` | Move cursor right |
-| `Up` / `Shift+Tab` | Select previous result |
-| `Down` / `Tab` | Select next result |
+| `Home` / `Ctrl+A` | Move cursor to beginning |
+| `End` / `Ctrl+E` | Move cursor to end |
+| `Left` / `Ctrl+B` | Move cursor left (or explore previous binary like dmenu when query is empty) |
+| `Right` / `Ctrl+F` | Move cursor right (or explore next binary like dmenu when query is empty) |
+| `Up` / `Shift+Tab` / `Ctrl+P` | Select previous result (scrolls through all binaries) |
+| `Down` / `Ctrl+N` | Select next result (scrolls through all binaries) |
+| `PageUp` | Scroll up by 8 results |
+| `PageDown` | Scroll down by 8 results |
+| `Tab` | Auto-complete selected suggestion |
 | `Return` / `Enter` | Launch selected result |
-| `Escape` | Close launcher |
+| `Escape` / `Ctrl+C` | Close launcher |
 
 The query cursor tracks Unicode character positions (not byte offsets), so multi-byte characters work correctly.
 
@@ -110,7 +113,7 @@ Ranking uses multiple scoring tiers (higher is better):
 
 **Argument handling:** Queries with arguments are matched using both the full query and just the first token. So `firefox --private-window` matches `firefox` in the suggestions.
 
-At most 8 suggestions are rendered. The selection index is clamped to the filtered result count after each query change.
+At most 8 suggestions are visible in the overlay window at a time. The list dynamically scrolls so you can explore all binaries in `$PATH` using arrow keys (or PageUp/PageDown), exactly like dmenu. A match counter (e.g., `1/2150`) is displayed in the input row.
 
 ---
 

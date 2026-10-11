@@ -35,6 +35,8 @@ pub const XK_LEFT: Keysym = 0xff51;
 pub const XK_UP: Keysym = 0xff52;
 pub const XK_RIGHT: Keysym = 0xff53;
 pub const XK_DOWN: Keysym = 0xff54;
+pub const XK_PAGE_UP: Keysym = 0xff55;
+pub const XK_PAGE_DOWN: Keysym = 0xff56;
 pub const XK_END: Keysym = 0xff57;
 
 pub const XK_NUM_LOCK: Keysym = 0xff7f;
@@ -216,6 +218,10 @@ pub fn parse_keysym(name: &str) -> Option<Keysym> {
         "Up" | "up" => Some(XK_UP),
         "Right" | "right" => Some(XK_RIGHT),
         "Down" | "down" => Some(XK_DOWN),
+        "Page_Up" | "PageUp" | "Prior" => Some(XK_PAGE_UP),
+        "Page_Down" | "PageDown" | "Next" => Some(XK_PAGE_DOWN),
+        "Home" | "home" => Some(XK_HOME),
+        "End" | "end" => Some(XK_END),
         "comma" | "," => Some(XK_COMMA),
         "period" | "." => Some(XK_PERIOD),
         "grave" | "`" => Some(XK_GRAVE),
