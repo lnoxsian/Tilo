@@ -277,12 +277,12 @@ impl WindowManager {
     /// Renders the launcher UI if visible.
     pub fn render_launcher(&mut self) -> Result<(), StatusbarError> {
         if let Some(ref mut launcher) = self.launcher
-            && launcher.visible {
-                if let Err(err) = launcher.render(&self.context.connection) {
-                    eprintln!("[WARN  tilo::wm] Launcher render failed: {}", err);
-                    return Err(err);
-                }
-            }
+            && launcher.visible
+            && let Err(err) = launcher.render(&self.context.connection)
+        {
+            eprintln!("[WARN  tilo::wm] Launcher render failed: {}", err);
+            return Err(err);
+        }
         Ok(())
     }
 

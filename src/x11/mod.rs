@@ -215,10 +215,8 @@ mod tests {
         let result = X11Context::connect_to(Some(":98"));
         assert!(result.is_err());
         match result.unwrap_err() {
-            X11Error::Connect(_) => {
-                // Expected connection failure
-            }
-            other => panic!("Expected X11Error::Connect, got: {:?}", other),
+            X11Error::Connect(_) => {}
+            other => panic!("Expected X11Error::Connect, got: {other:?}"),
         }
     }
 
@@ -270,15 +268,8 @@ mod tests {
             // If another WM is running (like on normal desktop), become_wm must detect it
             // and return AnotherWmRunning cleanly without crashing or panicking.
             match ctx.become_wm() {
-                Ok(()) => {
-                    // Running in an environment without a WM (e.g. bare Xephyr/Xvfb)
-                }
-                Err(X11Error::AnotherWmRunning) => {
-                    // Successfully caught the existing window manager conflict
-                }
-                Err(other) => {
-                    panic!("Unexpected error from become_wm: {:?}", other);
-                }
+                Ok(()) | Err(X11Error::AnotherWmRunning) => {}
+                Err(other) => panic!("Unexpected error from become_wm: {other:?}"),
             }
         }
     }

@@ -280,26 +280,6 @@ pub fn update_client_button_grabs(
     Ok(())
 }
 
-/// Grabs configured mouse button shortcuts and the focus button on a client window.
-pub fn grab_client_buttons(
-    conn: &impl Connection,
-    window: Window,
-    bindings: &[MouseBinding],
-    num_lock_mask: u16,
-) -> Result<(), X11Error> {
-    update_client_button_grabs(conn, window, bindings, num_lock_mask, false)
-}
-
-/// Releases all mouse button grabs on a client window.
-pub fn ungrab_client_buttons(
-    conn: &impl Connection,
-    window: Window,
-) -> Result<(), X11Error> {
-    let _ = conn.ungrab_button(ButtonIndex::ANY, window, ModMask::ANY);
-    conn.flush()?;
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

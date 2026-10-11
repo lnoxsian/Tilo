@@ -21,24 +21,6 @@ use x11rb::protocol::xproto::{
 use x11rb::wrapper::ConnectionExt as _;
 
 impl WindowManager {
-    /// Checks if screen dimensions or statusbar width have changed, triggering refresh if needed.
-    pub fn check_screen_resize(&mut self) -> bool {
-        let (geom_w, geom_h) = match self.context.connection.get_geometry(self.context.root_window) {
-            Ok(cookie) => match cookie.reply() {
-                Ok(geom) => (geom.width, geom.height),
-                Err(_) => return false,
-            },
-            Err(_) => return false,
-        };
-
-        let bar_mismatch = self.statusbar.as_ref().map(|b| b.rect.width != geom_w as u32).unwrap_or(false);
-        if geom_w != self.context.screen_width || geom_h != self.context.screen_height || bar_mismatch {
-            let _ = self.refresh_monitors();
-            return true;
-        }
-        false
-    }
-
     /// Updates the root window's `_NET_ACTIVE_WINDOW` property.
     pub fn update_ewmh_active_window(&self) -> Result<(), X11Error> {
         let focused = self.focused_window();

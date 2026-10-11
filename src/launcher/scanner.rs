@@ -96,14 +96,7 @@ fn is_field_code(arg: &str) -> bool {
             | "@@f"
             | "@@U"
             | "@@F"
-    ) || (arg.starts_with('%')
-        && arg.len() == 2
-        && arg.chars().nth(1).is_some_and(|c| {
-            matches!(
-                c,
-                'f' | 'F' | 'u' | 'U' | 'd' | 'D' | 'n' | 'N' | 'i' | 'c' | 'k' | 'v' | 'm'
-            )
-        }))
+    )
 }
 
 /// Strips field codes (e.g. `%u`, `%U`, `%f`, `%F`, `@@`) from an `Exec` line in a `.desktop` file.
@@ -287,22 +280,6 @@ pub fn scan_desktop_dirs(dirs: &[PathBuf]) -> (Vec<String>, HashMap<String, Stri
                     }
                 }
             }
-        }
-    }
-
-    let mut sorted: Vec<String> = all_names.into_iter().collect();
-    sorted.sort();
-    (sorted, app_commands)
-}
-
-/// Scans `$PATH` executables.
-pub fn scan_all_executables(path_var: &str) -> (Vec<String>, HashMap<String, String>) {
-    let mut all_names = HashSet::new();
-    let app_commands = HashMap::new();
-
-    if let Ok(path_execs) = scan_path_from(path_var) {
-        for exe in path_execs {
-            all_names.insert(exe);
         }
     }
 

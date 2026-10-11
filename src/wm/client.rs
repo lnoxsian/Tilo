@@ -12,7 +12,7 @@ use crate::icccm::{
 };
 use crate::rules::{apply_rules as apply_window_rules, RuleAction, WindowRule};
 use crate::x11::X11Error;
-use crate::error::{is_client_disconnect_error, is_connection_lost_error, WmError};
+use crate::error::{is_connection_lost_error, WmError};
 use x11rb::protocol::xproto::{
     ButtonIndex, ChangeWindowAttributesAux, ConfigureWindowAux, ConnectionExt, EventMask,
     InputFocus, MapState, ModMask, StackMode, Window,
@@ -467,6 +467,7 @@ impl WindowManager {
     ///   is on an inactive workspace, does not alter the active workspace's focus or layout.
     /// - If the window was active on the current workspace, transfers focus to the previous window
     ///   on the workspace/focus stack or reverts to the root window.
+    ///
     /// Unmanages a client window.
     ///
     /// If `set_withdrawn` is true (e.g. on unmap), updates `WM_STATE` to `Withdrawn`.
@@ -532,48 +533,11 @@ impl WindowManager {
         removed
     }
 
-    /// Recovers from an unexpected client disconnection (e.g. `BadWindow`).
-    ///
-    /// Removes the client from internal state, retiles the workspace, and transfers
-    /// focus to the next available window, continuing without crashing.
-    pub fn recover_disconnected_client(&mut self, window: Window) {
-        if self.client_state.contains(window) {
-            eprintln!(
-                "[WARN  tilo::wm] Client 0x{:x} disconnected unexpectedly; recovering state.",
-                window
-            );
-            self.unmanage_window(window);
-        }
-    }
 
-    /// Executes an operation on a client window with automatic state recovery if the client disconnected.
-    pub fn with_client_recovery<F>(&mut self, window: Window, op: F) -> Result<(), WmError>
-    where
-        F: FnOnce(&mut Self) -> Result<(), X11Error>,
-    {
-        match op(self) {
-            Ok(()) => Ok(()),
-            Err(err) => {
-                if is_client_disconnect_error(&err) {
-                    self.recover_disconnected_client(window);
-                    Ok(())
-                } else if is_connection_lost_error(&err) {
-                    Err(WmError::ConnectionLost(err.to_string()))
-                } else {
-                    Err(WmError::X11ProtocolError(err))
-                }
-            }
-        }
-    }
 
     /// Adds a window rule to the window manager.
     pub fn add_rule(&mut self, rule: WindowRule) {
         self.rules.push(rule);
-    }
-
-    /// Replaces the configured window rules with a new set.
-    pub fn set_rules(&mut self, rules: Vec<WindowRule>) {
-        self.rules = rules;
     }
 
     /// Evaluates window rules for a window using the currently configured rules.

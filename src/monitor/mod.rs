@@ -124,11 +124,6 @@ impl MonitorManager {
         self.monitors.iter().find(|m| m.id == id)
     }
 
-    /// Retrieves a mutable reference to a monitor by its unique [`MonitorId`].
-    pub fn get_monitor_mut(&mut self, id: MonitorId) -> Option<&mut Monitor> {
-        self.monitors.iter_mut().find(|m| m.id == id)
-    }
-
     /// Finds which monitor hosts the given workspace ID.
     pub fn monitor_for_workspace(&self, ws: WorkspaceId) -> Option<&Monitor> {
         self.monitors.iter().find(|m| m.workspace == ws)

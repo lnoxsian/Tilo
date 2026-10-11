@@ -113,7 +113,7 @@ Ranking uses multiple scoring tiers (higher is better):
 
 **Argument handling:** Queries with arguments are matched using both the full query and just the first token. So `firefox --private-window` matches `firefox` in the suggestions.
 
-At most 8 suggestions are visible in the overlay window at a time. The list dynamically scrolls so you can explore all binaries in `$PATH` using arrow keys (or PageUp/PageDown), exactly like dmenu. A match counter (e.g., `1/2150`) is displayed in the input row.
+At most 8 suggestions are visible in the overlay window at a time. The list dynamically scrolls so you can explore all binaries in `$PATH` using arrow keys (or PageUp/PageDown), exactly like dmenu.
 
 ---
 

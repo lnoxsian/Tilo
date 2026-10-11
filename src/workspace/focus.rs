@@ -11,10 +11,7 @@
 use std::collections::HashMap;
 use crate::layout::Rect;
 use crate::x11::X11Error;
-use x11rb::protocol::xproto::{
-    Atom, ClientMessageData, ClientMessageEvent, ConnectionExt, EventMask, InputFocus,
-    Timestamp, Window,
-};
+use x11rb::protocol::xproto::{ConnectionExt, InputFocus, Window};
 
 /// Direction for spatial focus and movement.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -335,33 +332,6 @@ pub fn set_input_focus<C: ConnectionExt>(
     window: Window,
 ) -> Result<(), X11Error> {
     conn.set_input_focus(InputFocus::POINTER_ROOT, window, x11rb::CURRENT_TIME)?;
-    Ok(())
-}
-
-/// Sends ICCCM `WM_TAKE_FOCUS` ClientMessage to the client window.
-pub fn send_take_focus<C: ConnectionExt>(
-    conn: &C,
-    window: Window,
-    wm_protocols: Atom,
-    wm_take_focus: Atom,
-    timestamp: Timestamp,
-) -> Result<(), X11Error> {
-    let data = [
-        wm_take_focus,
-        timestamp,
-        0,
-        0,
-        0,
-    ];
-    let event = ClientMessageEvent {
-        response_type: x11rb::protocol::xproto::CLIENT_MESSAGE_EVENT,
-        format: 32,
-        sequence: 0,
-        window,
-        type_: wm_protocols,
-        data: ClientMessageData::from(data),
-    };
-    conn.send_event(false, window, EventMask::NO_EVENT, event)?;
     Ok(())
 }
 

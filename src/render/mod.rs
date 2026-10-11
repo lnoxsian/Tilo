@@ -25,15 +25,6 @@ use x11rb::protocol::xproto::{
     ChangeGCAux, ConnectionExt, CreateGCAux, ImageFormat, Rectangle,
 };
 
-/// Converts a 0x00RRGGBB integer color into floating point RGB values (0.0 to 1.0).
-#[inline]
-pub fn color_to_rgb(color: u32) -> (f64, f64, f64) {
-    let r = ((color >> 16) & 0xff) as f64 / 255.0;
-    let g = ((color >> 8) & 0xff) as f64 / 255.0;
-    let b = (color & 0xff) as f64 / 255.0;
-    (r, g, b)
-}
-
 /// Determines if a font specification should use the ultra-low-memory X11 Core font engine.
 pub fn is_core_font_spec(font_name: &str) -> bool {
     let trimmed = font_name.trim();
@@ -606,7 +597,7 @@ impl Renderer {
             24 => {
                 let pad_bytes = (pad as usize / 8).max(1);
                 let raw_row_bytes = width * 3;
-                let row_bytes = (raw_row_bytes + pad_bytes - 1) / pad_bytes * pad_bytes;
+                let row_bytes = raw_row_bytes.div_ceil(pad_bytes) * pad_bytes;
                 let rows_per_chunk = (max_chunk_bytes / row_bytes).max(1).min(height);
 
                 let mut y = 0;
@@ -646,7 +637,7 @@ impl Renderer {
             16 => {
                 let pad_bytes = (pad as usize / 8).max(1);
                 let raw_row_bytes = width * 2;
-                let row_bytes = (raw_row_bytes + pad_bytes - 1) / pad_bytes * pad_bytes;
+                let row_bytes = raw_row_bytes.div_ceil(pad_bytes) * pad_bytes;
                 let rows_per_chunk = (max_chunk_bytes / row_bytes).max(1).min(height);
 
                 let mut y = 0;

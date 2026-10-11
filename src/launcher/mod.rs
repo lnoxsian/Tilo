@@ -101,8 +101,6 @@ pub struct Launcher {
     pub last_path_var: String,
     /// Per-directory incremental cache.
     pub dir_cache: HashMap<PathBuf, DirCacheEntry>,
-    /// Timestamp of last filesystem check for rapid keystroke throttling.
-    pub last_check_instant: Option<std::time::Instant>,
 }
 
 impl Launcher {
@@ -129,7 +127,6 @@ impl Launcher {
             monitored_dirs: Vec::new(),
             last_path_var: String::new(),
             dir_cache: HashMap::new(),
-            last_check_instant: None,
         }
     }
 
@@ -263,18 +260,6 @@ impl Launcher {
     pub fn refresh_if_needed(&mut self) -> bool {
         let current_path = std::env::var("PATH").unwrap_or_default();
         self.refresh_if_needed_from(&current_path, &[])
-    }
-
-    /// Checks for directory modifications with rate-limiting to prevent excessive
-    /// filesystem stat calls during rapid keystrokes.
-    pub fn refresh_if_needed_throttled(&mut self, min_interval: std::time::Duration) -> bool {
-        let now = std::time::Instant::now();
-        if let Some(last) = self.last_check_instant
-            && now.duration_since(last) < min_interval {
-                return false;
-            }
-        self.last_check_instant = Some(now);
-        self.refresh_if_needed()
     }
 
     /// Calculates the exact window height required for a given number of result items with no empty space.
@@ -472,24 +457,6 @@ impl Launcher {
             cursor_height,
             self.color_scheme.active_bg,
         )?;
-
-        // Match count indicator on right side of input box (e.g. "1/2150") if results exist
-        if total_count > 0 {
-            let count_text = format!("{}/{}", self.selected_index + 1, total_count);
-            let count_w = renderer.text_width(&count_text);
-            let count_x = (w.saturating_sub(16) as i16) - (count_w as i16);
-            let query_end_x = text_start_x + renderer.text_width(query_text) as i16 + 10;
-            if count_x > query_end_x {
-                renderer.draw_text(
-                    conn,
-                    renderer.pixmap,
-                    count_x,
-                    input_baseline,
-                    &count_text,
-                    self.color_scheme.inactive_fg,
-                )?;
-            }
-        }
 
         // 4. Draw separator line below input field
         renderer.fill_rect(conn, renderer.pixmap, 8, 36, w.saturating_sub(16), 1, self.color_scheme.border)?;

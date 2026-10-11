@@ -79,11 +79,6 @@ pub fn get_backend() -> AudioBackend {
     *DETECTED_BACKEND.get_or_init(detect_backend)
 }
 
-/// Allows manually overriding the detected backend (e.g. for testing).
-pub fn set_backend_for_test(backend: AudioBackend) {
-    let _ = DETECTED_BACKEND.set(backend);
-}
-
 // ---------------------------------------------------------------------------
 fn run_command_stdout(cmd: &str, args: &[&str]) -> Option<String> {
     use std::io::Read;
@@ -144,10 +139,10 @@ pub fn parse_wpctl_output(output: &str) -> Option<VolumeState> {
 pub fn parse_pactl_volume_output(output: &str) -> Option<u8> {
     for part in output.split('/') {
         let trimmed = part.trim();
-        if let Some(pct) = trimmed.strip_suffix('%') {
-            if let Ok(val) = pct.trim().parse::<u8>() {
-                return Some(val);
-            }
+        if let Some(pct) = trimmed.strip_suffix('%')
+            && let Ok(val) = pct.trim().parse::<u8>()
+        {
+            return Some(val);
         }
     }
     None
@@ -177,12 +172,12 @@ pub fn parse_amixer_output(output: &str) -> Option<VolumeState> {
     let mut muted = false;
 
     for line in output.lines() {
-        if let Some(start) = line.find('[') {
-            if let Some(pct_idx) = line[start..].find("%]") {
-                let pct_str = &line[start + 1..start + pct_idx];
-                if let Ok(v) = pct_str.parse::<u8>() {
-                    volume = Some(v);
-                }
+        if let Some(start) = line.find('[')
+            && let Some(pct_idx) = line[start..].find("%]")
+        {
+            let pct_str = &line[start + 1..start + pct_idx];
+            if let Ok(v) = pct_str.parse::<u8>() {
+                volume = Some(v);
             }
         }
         if line.contains("[off]") {
@@ -201,36 +196,34 @@ pub fn parse_amixer_output(output: &str) -> Option<VolumeState> {
 pub fn get_volume() -> Option<VolumeState> {
     // 1. Try wpctl if available
     if is_command_available("wpctl") {
-        if let Some(out) = run_command_stdout("wpctl", &["get-volume", "@DEFAULT_AUDIO_SINK@"]) {
-            if let Some(state) = parse_wpctl_output(&out) {
-                return Some(state);
-            }
+        if let Some(out) = run_command_stdout("wpctl", &["get-volume", "@DEFAULT_AUDIO_SINK@"])
+            && let Some(state) = parse_wpctl_output(&out)
+        {
+            return Some(state);
         }
-        if let Some(out) = run_command_stdout("wpctl", &["get-volume", "@DEFAULT_SINK@"]) {
-            if let Some(state) = parse_wpctl_output(&out) {
-                return Some(state);
-            }
+        if let Some(out) = run_command_stdout("wpctl", &["get-volume", "@DEFAULT_SINK@"])
+            && let Some(state) = parse_wpctl_output(&out)
+        {
+            return Some(state);
         }
     }
 
     // 2. Try pactl if available
-    if is_command_available("pactl") {
-        if let Some(vol_out) = run_command_stdout("pactl", &["get-sink-volume", "@DEFAULT_SINK@"]) {
-            if let Some(vol) = parse_pactl_volume_output(&vol_out) {
-                let mute_out = run_command_stdout("pactl", &["get-sink-mute", "@DEFAULT_SINK@"]);
-                let muted = mute_out.as_deref().and_then(parse_pactl_mute_output).unwrap_or(false);
-                return Some(VolumeState { volume: vol, muted });
-            }
-        }
+    if is_command_available("pactl")
+        && let Some(vol_out) = run_command_stdout("pactl", &["get-sink-volume", "@DEFAULT_SINK@"])
+        && let Some(vol) = parse_pactl_volume_output(&vol_out)
+    {
+        let mute_out = run_command_stdout("pactl", &["get-sink-mute", "@DEFAULT_SINK@"]);
+        let muted = mute_out.as_deref().and_then(parse_pactl_mute_output).unwrap_or(false);
+        return Some(VolumeState { volume: vol, muted });
     }
 
     // 3. Try amixer if available
-    if is_command_available("amixer") {
-        if let Some(out) = run_command_stdout("amixer", &["get", "Master"]) {
-            if let Some(state) = parse_amixer_output(&out) {
-                return Some(state);
-            }
-        }
+    if is_command_available("amixer")
+        && let Some(out) = run_command_stdout("amixer", &["get", "Master"])
+        && let Some(state) = parse_amixer_output(&out)
+    {
+        return Some(state);
     }
 
     None
