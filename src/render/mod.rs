@@ -754,6 +754,7 @@ impl Renderer {
         window: u32,
         current_workspace: u32,
         occupied_workspaces: &[u32],
+        workspace_tags: &[String],
         layout_symbol: &str,
         active_window_title: &str,
         tabs: Option<&[crate::bar::tabs::TabInfo]>,
@@ -795,7 +796,12 @@ impl Renderer {
             let is_active = ws == current_workspace;
             let is_occupied = occupied_workspaces.contains(&ws);
 
-            let ws_str = WS_STRS.get(ws as usize).copied().unwrap_or("?");
+            let ws_str = if let Some(tag) = workspace_tags.get((ws - 1) as usize)
+                && !tag.is_empty() {
+                    tag.as_str()
+                } else {
+                    WS_STRS.get(ws as usize).copied().unwrap_or("?")
+                };
             let ws_text_w = self.text_width(ws_str);
             let pad = 6i16;
             let pill_w = ws_text_w + (pad as u16 * 2);
@@ -851,28 +857,28 @@ impl Renderer {
         do_draw_text(cur_x, baseline, &layout_text, color_scheme.active_bg)?;
         cur_x += self.text_width(&layout_text) as i16 + 12;
 
-        // 4. Collect right-aligned status modules
-        let mut right_items = Vec::new();
+        // 4. Format right-aligned status modules directly
+        let mut right_buf = String::with_capacity(96);
+        let mut first = true;
         for m in modules {
             let name = m.name();
             if name != "workspace" && name != "layout" && name != "title" {
                 let t = m.current_text();
                 if !t.is_empty() {
-                    right_items.push(t);
+                    if !first {
+                        right_buf.push_str(separator);
+                    }
+                    right_buf.push_str(t);
+                    first = false;
                 }
             }
         }
 
-        let right_text = if !right_items.is_empty() {
-            Some(right_items.join(separator))
+        let (right_text, right_width) = if !right_buf.is_empty() {
+            let w = self.text_width(&right_buf) as i16;
+            (Some(right_buf), w)
         } else {
-            None
-        };
-
-        let right_width = if let Some(ref rt) = right_text {
-            self.text_width(rt) as i16
-        } else {
-            0
+            (None, 0)
         };
 
         let mut tab_rects = Vec::new();

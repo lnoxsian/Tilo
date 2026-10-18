@@ -9,6 +9,7 @@ use super::StatusbarError;
 pub struct WorkspaceModule {
     pub current_workspace: u32,
     pub occupied_workspaces: Vec<u32>,
+    pub tags: Vec<String>,
     pub cached_text: String,
     pub last_updated: Option<Instant>,
 }
@@ -18,6 +19,7 @@ impl WorkspaceModule {
         let mut s = Self {
             current_workspace: 1,
             occupied_workspaces: vec![1],
+            tags: Vec::new(),
             cached_text: String::new(),
             last_updated: None,
         };
@@ -32,19 +34,33 @@ impl WorkspaceModule {
         self.rebuild_text();
     }
 
+    pub fn set_tags(&mut self, tags: &[String]) {
+        self.tags = tags.to_vec();
+        self.rebuild_text();
+    }
+
     fn rebuild_text(&mut self) {
         self.cached_text.clear();
         use std::fmt::Write;
+        const DEFAULT_TAGS: [&str; 9] = ["1", "2", "3", "4", "5", "6", "7", "8", "9"];
         for ws in 1..=9 {
             if ws > 1 {
                 self.cached_text.push(' ');
             }
+            let idx = (ws - 1) as usize;
+            let tag = self
+                .tags
+                .get(idx)
+                .map(|s| s.as_str())
+                .filter(|s| !s.is_empty())
+                .unwrap_or(DEFAULT_TAGS[idx]);
+
             if ws == self.current_workspace {
-                let _ = write!(&mut self.cached_text, "[{}]", ws);
+                let _ = write!(&mut self.cached_text, "[{}]", tag);
             } else if self.occupied_workspaces.contains(&ws) {
-                let _ = write!(&mut self.cached_text, "{}:*", ws);
+                let _ = write!(&mut self.cached_text, "{}:*", tag);
             } else {
-                let _ = write!(&mut self.cached_text, "{}", ws);
+                let _ = write!(&mut self.cached_text, "{}", tag);
             }
         }
     }

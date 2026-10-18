@@ -536,4 +536,89 @@ fn test_statusbar_mouse_workspace_interaction_in_xephyr() {
     wm.disable_statusbar().expect("disable_statusbar failed");
 }
 
+#[test]
+fn test_statusbar_custom_modules_and_reconfiguration() {
+    use tilo::bar::{BarModuleType, ColorScheme, Statusbar};
+
+    // 1. Create with custom reordered modules: Clock, Volume, Battery
+    let custom_modules = vec![
+        BarModuleType::Clock,
+        BarModuleType::Volume,
+        BarModuleType::Battery,
+    ];
+    let mut bar = Statusbar::with_modules(100, Rect::new(0, 0, 1920, 24), &custom_modules, ColorScheme::default());
+    bar.set_title("Terminal");
+    let _ = bar.update_all();
+
+    // Verify left modules are present
+    assert_eq!(bar.modules[0].name(), "workspace");
+    assert_eq!(bar.modules[1].name(), "layout");
+    assert_eq!(bar.modules[2].name(), "title");
+
+    // Verify right modules are in exact order: clock, volume, battery
+    assert_eq!(bar.modules[3].name(), "clock");
+    assert_eq!(bar.modules[4].name(), "volume");
+    assert_eq!(bar.modules[5].name(), "battery");
+    assert_eq!(bar.modules.len(), 6);
+
+    let text1 = bar.full_text();
+    assert!(text1.contains("Terminal"));
+    assert!(text1.contains("BAT"));
+    assert!(text1.contains("VOL"));
+    assert!(!text1.contains("RAM"));
+    assert!(!text1.contains("IP"));
+
+    // 2. Reconfigure dynamically to only RAM and IP (reversed)
+    bar.reconfigure_modules(&[BarModuleType::Ram, BarModuleType::Ip]);
+    let _ = bar.update_all();
+
+    assert_eq!(bar.modules.len(), 5);
+    assert_eq!(bar.modules[0].name(), "workspace");
+    assert_eq!(bar.modules[1].name(), "layout");
+    assert_eq!(bar.modules[2].name(), "title");
+    assert_eq!(bar.modules[3].name(), "ram");
+    assert_eq!(bar.modules[4].name(), "ip");
+
+    let text2 = bar.full_text();
+    assert!(text2.contains("RAM"));
+    assert!(text2.contains("IP"));
+    assert!(!text2.contains("BAT"));
+    assert!(!text2.contains("VOL"));
+
+    // 3. Reconfigure to empty/none
+    bar.reconfigure_modules(&[]);
+    let _ = bar.update_all();
+    assert_eq!(bar.modules.len(), 3);
+    assert_eq!(bar.modules[0].name(), "workspace");
+    assert_eq!(bar.modules[1].name(), "layout");
+    assert_eq!(bar.modules[2].name(), "title");
+}
+
+#[test]
+fn test_statusbar_custom_workspace_tags() {
+    use tilo::bar::Statusbar;
+
+    let mut bar = Statusbar::default_with_window(100, Rect::new(0, 0, 1920, 24));
+    let custom_tags = vec![
+        "".to_string(),
+        "".to_string(),
+        "".to_string(),
+        "".to_string(),
+        "󰓇".to_string(),
+        "󰙯".to_string(),
+        "󰈹".to_string(),
+        "󰓓".to_string(),
+        "󰊴".to_string(),
+    ];
+    bar.set_workspace_tags(&custom_tags);
+    bar.set_workspace(1, &[1, 2]);
+
+    let text = bar.full_text();
+    assert!(text.contains("[]"));
+    assert!(text.contains(":*"));
+    assert!(text.contains(""));
+    assert!(text.contains("󰊴"));
+    assert!(!text.contains("[1]"));
+}
+
 

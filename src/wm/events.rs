@@ -368,7 +368,7 @@ impl WindowManager {
                 let _ = self.open_exit_launcher();
             }
             Action::Quit => {
-                let _ = self.perform_graceful_shutdown();
+                let _ = self.perform_desktop_shutdown(None);
             }
             Action::ResizeTile(dir) => {
                 let current_ws = self.workspace_manager.current_id();

@@ -11,14 +11,17 @@ use x11rb::protocol::xproto::{
 
 impl WindowManager {
     pub fn enable_statusbar(&mut self, height: u32) -> Result<u32, StatusbarError> {
+        if let Some(old_bar) = self.statusbar.take() {
+            let _ = old_bar.destroy(&self.context.connection);
+        }
         let rect = Rect::new(0, 0, self.context.screen_width as u32, height);
         let screen = &self.context.connection.setup().roots[self.context.screen_num];
         let bar_colors = self.config.bar_color_scheme();
         let win_id = crate::bar::create_statusbar_window_with_color(&self.context.connection, screen, rect, bar_colors.bg)?;
         let _ = self.cursor_manager.apply_window(&self.context.connection, win_id);
-        let mut bar = Statusbar::default_with_window(win_id, rect);
-        bar.color_scheme = bar_colors;
+        let mut bar = Statusbar::with_modules(win_id, rect, &self.config.bar_modules, bar_colors);
         bar.separator = self.config.bar_separator().to_string();
+        bar.set_workspace_tags(&self.config.workspace_tags);
         let occupied = self.workspace_manager.occupied_workspaces();
         bar.set_workspace(self.current_workspace, &occupied);
 
@@ -79,22 +82,35 @@ impl WindowManager {
             Some(w) if self.client_state.get_client(w).map(|c| c.floating).unwrap_or(false) => "><>",
             _ => ws_layout.symbol(),
         };
-        let title = focused
-            .and_then(|w| self.client_state.get_client(w).and_then(|c| c.title.clone()))
-            .unwrap_or_else(|| focused.map(|w| self.get_window_title(w)).unwrap_or_default());
+        let fallback_title;
+        let title_str: &str = if let Some(w) = focused {
+            if let Some(c) = self.client_state.get_client(w) {
+                if let Some(ref t) = c.title {
+                    t.as_str()
+                } else {
+                    fallback_title = self.get_window_title(w);
+                    fallback_title.as_str()
+                }
+            } else {
+                fallback_title = self.get_window_title(w);
+                fallback_title.as_str()
+            }
+        } else {
+            ""
+        };
         let tabs = if ws_layout == LayoutType::Tabbed {
             Some(self.get_workspace_tabs(current_ws))
         } else {
             None
         };
         if let Some(ref mut bar) = self.statusbar {
-            bar.set_title(&title);
+            bar.set_title(title_str);
             if let Err(err) = bar.render(
                 &self.context.connection,
                 current_ws,
                 &occupied,
                 layout_symbol,
-                &title,
+                title_str,
                 tabs.as_deref(),
                 &self.config.tab_config,
             ) {
@@ -389,15 +405,17 @@ impl WindowManager {
         let lower = action_name.trim().to_lowercase();
         match lower.as_str() {
             "logout" | "exit" | "quit" => {
-                let _ = self.perform_graceful_shutdown();
+                let _ = self.perform_desktop_shutdown(None);
             }
             "reboot" | "restart" => {
+                let _ = self.perform_desktop_shutdown(None);
                 let _ = std::process::Command::new("systemctl")
                     .arg("reboot")
                     .spawn()
                     .or_else(|_| std::process::Command::new("reboot").spawn());
             }
             "poweroff" | "power off" | "shutdown" => {
+                let _ = self.perform_desktop_shutdown(None);
                 let _ = std::process::Command::new("systemctl")
                     .arg("poweroff")
                     .spawn()

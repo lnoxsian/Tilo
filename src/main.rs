@@ -42,8 +42,10 @@ fn main() {
             std::process::exit(1);
         }
     };
-    if let Err(err) = wm.enable_statusbar(24) {
-        eprintln!("[WARN  tilo::wm] Failed to enable statusbar: {}", err);
+    if wm.config.statusbar {
+        if let Err(err) = wm.enable_statusbar(24) {
+            eprintln!("[WARN  tilo::wm] Failed to enable statusbar: {}", err);
+        }
     }
     if let Err(err) = wm.manage_existing_windows() {
         eprintln!("[WARN  tilo::wm] Failed to manage pre-existing windows: {}", err);

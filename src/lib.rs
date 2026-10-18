@@ -33,7 +33,7 @@ pub use x11::ewmh;
 pub use x11::icccm;
 
 pub use error::WmError;
-pub use wm::{manage_existing_windows, perform_graceful_shutdown};
+pub use wm::{manage_existing_windows, perform_desktop_shutdown, perform_graceful_shutdown};
 
 /// WM state type alias conforming to Plan.md specification.
 pub type WmState = wm::WindowManager;

@@ -10,6 +10,7 @@ pub mod theme;
 pub use theme::*;
 
 use crate::autostart::AutostartCmd;
+use crate::bar::BarModuleType;
 use crate::focus::Direction;
 use crate::keybind::{default_keybindings, parse_keybind, Action, KeyBind};
 use crate::x11::X11Error;
@@ -100,6 +101,14 @@ pub struct Config {
     pub workspace_mouse: bool,
     /// Enable mouse wheel scrolling to cycle workspaces on the status bar (default: true).
     pub workspace_wheel_switch: bool,
+    /// Timeout in milliseconds to wait for applications to close gracefully before forceful termination (default: 2000).
+    pub shutdown_timeout_ms: u64,
+    /// Ordered list of active right-aligned statusbar modules.
+    pub bar_modules: Vec<BarModuleType>,
+    /// Configured display tags or icons for workspaces 1 through 9.
+    pub workspace_tags: Vec<String>,
+    /// Whether the built-in statusbar is enabled (default: true).
+    pub statusbar: bool,
 }
 
 impl Config {
@@ -121,6 +130,28 @@ impl Config {
     /// Returns the effective separator between modules in the status bar (default: " | ").
     pub fn bar_separator(&self) -> &str {
         self.theme.bar_separator.as_deref().unwrap_or(" | ")
+    }
+
+    /// Returns the configured tag/icon for the given 1-based workspace ID.
+    pub fn workspace_tag(&self, ws_id: u32) -> &str {
+        if ws_id >= 1
+            && let Some(tag) = self.workspace_tags.get((ws_id - 1) as usize) {
+                if !tag.is_empty() {
+                    return tag.as_str();
+                }
+            }
+        match ws_id {
+            1 => "1",
+            2 => "2",
+            3 => "3",
+            4 => "4",
+            5 => "5",
+            6 => "6",
+            7 => "7",
+            8 => "8",
+            9 => "9",
+            _ => "?",
+        }
     }
 
     /// Returns the effective font for the application launcher.
@@ -154,6 +185,17 @@ impl Default for Config {
             theme: ThemeConfig::default(),
             workspace_mouse: true,
             workspace_wheel_switch: true,
+            shutdown_timeout_ms: 2000,
+            bar_modules: vec![
+                BarModuleType::Ip,
+                BarModuleType::Ram,
+                BarModuleType::Cpu,
+                BarModuleType::Battery,
+                BarModuleType::Volume,
+                BarModuleType::Clock,
+            ],
+            workspace_tags: (1..=9).map(|i| i.to_string()).collect(),
+            statusbar: true,
         }
     }
 }
@@ -847,6 +889,258 @@ fn parse_line(
             let val = token_to_string(line[1]).to_lowercase();
             config.workspace_wheel_switch = val == "true" || val == "1" || val == "yes";
         }
+        "shutdown_timeout" | "shutdown_timeout_ms" => {
+            if line.len() < 2 {
+                return Err(ConfigError::ParseError {
+                    line: line_number,
+                    message: "Directive 'shutdown_timeout' requires a numeric value in milliseconds".to_string(),
+                });
+            }
+            let timeout = token_to_u32(line[1], line_number, "shutdown_timeout")?;
+            config.shutdown_timeout_ms = timeout as u64;
+        }
+
+        // --- Statusbar Enable / Disable ---
+        "statusbar" | "bar" | "enable_statusbar" | "statusbar_enabled" | "statusbar_enable" | "bar_enabled" | "bar_enable" => {
+            if line.len() < 2 {
+                return Err(ConfigError::ParseError {
+                    line: line_number,
+                    message: format!("Directive '{}' requires 'true' or 'false'", directive),
+                });
+            }
+            let val = token_to_string(line[1]).to_lowercase();
+            config.statusbar = val == "true" || val == "1" || val == "yes" || val == "on" || val == "enable" || val == "enabled";
+        }
+
+        // --- Statusbar Modules Configuration ---
+        "bar_modules" | "statusbar_modules" | "modules" | "bar_components" => {
+            if line.len() < 2 {
+                config.bar_modules.clear();
+            } else {
+                let first_word = token_to_string(line[1]).to_lowercase();
+                if line.len() == 2
+                    && (first_word == "none"
+                        || first_word == "off"
+                        || first_word == "empty"
+                        || first_word == "disabled"
+                        || first_word == "\"\""
+                        || first_word.is_empty())
+                {
+                    config.bar_modules.clear();
+                } else {
+                    let mut parsed = Vec::new();
+                    for token in &line[1..] {
+                        let word = token_to_string(token);
+                        let clean = word.trim().trim_matches(',').to_lowercase();
+                        if clean.is_empty() {
+                            continue;
+                        }
+                        match BarModuleType::from_str_loose(&clean) {
+                            Ok(mod_type) => {
+                                if !parsed.contains(&mod_type) {
+                                    parsed.push(mod_type);
+                                }
+                            }
+                            Err(_) => {
+                                return Err(ConfigError::InvalidValue {
+                                    line: line_number,
+                                    value: format!(
+                                        "Unknown statusbar module '{}'. Available: ip, ram, cpu, battery, volume, clock",
+                                        word
+                                    ),
+                                });
+                            }
+                        }
+                    }
+                    config.bar_modules = parsed;
+                }
+            }
+        }
+        "bar_module" | "statusbar_module" | "module" => {
+            if line.len() < 3 {
+                return Err(ConfigError::ParseError {
+                    line: line_number,
+                    message: "Directive 'bar_module' requires a module name and state (e.g. 'bar_module ip false')".to_string(),
+                });
+            }
+            let mod_name = token_to_string(line[1]);
+            let mod_type = BarModuleType::from_str_loose(&mod_name).map_err(|_| ConfigError::InvalidValue {
+                line: line_number,
+                value: format!("Unknown statusbar module '{}'", mod_name),
+            })?;
+            let val = token_to_string(line[2]).to_lowercase();
+            let enabled = val == "true" || val == "1" || val == "yes" || val == "on" || val == "enable" || val == "enabled";
+            set_module_enabled(&mut config.bar_modules, mod_type, enabled);
+        }
+        "enable_module" => {
+            if line.len() < 2 {
+                return Err(ConfigError::ParseError {
+                    line: line_number,
+                    message: "Directive 'enable_module' requires a module name (e.g. 'enable_module ip')".to_string(),
+                });
+            }
+            let mod_name = token_to_string(line[1]);
+            let mod_type = BarModuleType::from_str_loose(&mod_name).map_err(|_| ConfigError::InvalidValue {
+                line: line_number,
+                value: format!("Unknown statusbar module '{}'", mod_name),
+            })?;
+            set_module_enabled(&mut config.bar_modules, mod_type, true);
+        }
+        "disable_module" => {
+            if line.len() < 2 {
+                return Err(ConfigError::ParseError {
+                    line: line_number,
+                    message: "Directive 'disable_module' requires a module name (e.g. 'disable_module ip')".to_string(),
+                });
+            }
+            let mod_name = token_to_string(line[1]);
+            let mod_type = BarModuleType::from_str_loose(&mod_name).map_err(|_| ConfigError::InvalidValue {
+                line: line_number,
+                value: format!("Unknown statusbar module '{}'", mod_name),
+            })?;
+            set_module_enabled(&mut config.bar_modules, mod_type, false);
+        }
+        "bar_module_ip" | "bar_ip" => {
+            if line.len() < 2 {
+                return Err(ConfigError::ParseError {
+                    line: line_number,
+                    message: format!("Directive '{}' requires 'true' or 'false'", directive),
+                });
+            }
+            let val = token_to_string(line[1]).to_lowercase();
+            let enabled = val == "true" || val == "1" || val == "yes" || val == "on" || val == "enable";
+            set_module_enabled(&mut config.bar_modules, BarModuleType::Ip, enabled);
+        }
+        "bar_module_ram" | "bar_ram" => {
+            if line.len() < 2 {
+                return Err(ConfigError::ParseError {
+                    line: line_number,
+                    message: format!("Directive '{}' requires 'true' or 'false'", directive),
+                });
+            }
+            let val = token_to_string(line[1]).to_lowercase();
+            let enabled = val == "true" || val == "1" || val == "yes" || val == "on" || val == "enable";
+            set_module_enabled(&mut config.bar_modules, BarModuleType::Ram, enabled);
+        }
+        "bar_module_cpu" | "bar_cpu" => {
+            if line.len() < 2 {
+                return Err(ConfigError::ParseError {
+                    line: line_number,
+                    message: format!("Directive '{}' requires 'true' or 'false'", directive),
+                });
+            }
+            let val = token_to_string(line[1]).to_lowercase();
+            let enabled = val == "true" || val == "1" || val == "yes" || val == "on" || val == "enable";
+            set_module_enabled(&mut config.bar_modules, BarModuleType::Cpu, enabled);
+        }
+        "bar_module_battery" | "bar_battery" | "bar_module_bat" | "bar_bat" => {
+            if line.len() < 2 {
+                return Err(ConfigError::ParseError {
+                    line: line_number,
+                    message: format!("Directive '{}' requires 'true' or 'false'", directive),
+                });
+            }
+            let val = token_to_string(line[1]).to_lowercase();
+            let enabled = val == "true" || val == "1" || val == "yes" || val == "on" || val == "enable";
+            set_module_enabled(&mut config.bar_modules, BarModuleType::Battery, enabled);
+        }
+        "bar_module_volume" | "bar_volume" | "bar_module_vol" | "bar_vol" => {
+            if line.len() < 2 {
+                return Err(ConfigError::ParseError {
+                    line: line_number,
+                    message: format!("Directive '{}' requires 'true' or 'false'", directive),
+                });
+            }
+            let val = token_to_string(line[1]).to_lowercase();
+            let enabled = val == "true" || val == "1" || val == "yes" || val == "on" || val == "enable";
+            set_module_enabled(&mut config.bar_modules, BarModuleType::Volume, enabled);
+        }
+        "bar_module_clock" | "bar_clock" | "bar_module_time" | "bar_time" => {
+            if line.len() < 2 {
+                return Err(ConfigError::ParseError {
+                    line: line_number,
+                    message: format!("Directive '{}' requires 'true' or 'false'", directive),
+                });
+            }
+            let val = token_to_string(line[1]).to_lowercase();
+            let enabled = val == "true" || val == "1" || val == "yes" || val == "on" || val == "enable";
+            set_module_enabled(&mut config.bar_modules, BarModuleType::Clock, enabled);
+        }
+
+        // --- Workspace Identifiers / Tags ---
+        "workspace_tags" | "bar_workspace_tags" | "workspace_icons" | "workspaces_icons" | "workspace_labels" | "workspaces_tags" => {
+            if line.len() < 2 {
+                config.workspace_tags = (1..=9).map(|i| i.to_string()).collect();
+            } else {
+                let first_val = token_to_string(line[1]).to_lowercase();
+                if line.len() == 2 && (first_val == "default" || first_val == "numbers") {
+                    config.workspace_tags = (1..=9).map(|i| i.to_string()).collect();
+                } else {
+                    let mut tags = Vec::new();
+                    for token in &line[1..] {
+                        let word = token_to_string(token);
+                        if !word.is_empty() {
+                            tags.push(word);
+                        }
+                        if tags.len() >= 9 {
+                            break;
+                        }
+                    }
+                    while tags.len() < 9 {
+                        let next_num = tags.len() + 1;
+                        tags.push(next_num.to_string());
+                    }
+                    config.workspace_tags = tags;
+                }
+            }
+        }
+        "workspace_tag" | "bar_workspace_tag" | "workspace_icon" | "bar_workspace_icon" => {
+            if line.len() < 3 {
+                return Err(ConfigError::ParseError {
+                    line: line_number,
+                    message: "Directive 'workspace_tag' requires workspace number (1-9) and label (e.g. 'workspace_tag 1 ')".to_string(),
+                });
+            }
+            let ws_id = token_to_u32(line[1], line_number, directive)?;
+            if !(1..=9).contains(&ws_id) {
+                return Err(ConfigError::InvalidValue {
+                    line: line_number,
+                    value: format!("Workspace ID must be between 1 and 9, got {}", ws_id),
+                });
+            }
+            let tag = token_to_string(line[2]);
+            while config.workspace_tags.len() < 9 {
+                let next_num = config.workspace_tags.len() + 1;
+                config.workspace_tags.push(next_num.to_string());
+            }
+            config.workspace_tags[(ws_id - 1) as usize] = tag;
+        }
+        dir if dir.starts_with("workspace_tag_")
+            || dir.starts_with("bar_workspace_tag_")
+            || dir.starts_with("workspace_icon_")
+            || dir.starts_with("bar_workspace_icon_") =>
+        {
+            if line.len() < 2 {
+                return Err(ConfigError::ParseError {
+                    line: line_number,
+                    message: format!("Directive '{}' requires a tag label", directive),
+                });
+            }
+            let suffix = dir.rsplit('_').next().unwrap_or("");
+            if let Ok(ws_id) = suffix.parse::<u32>() && (1..=9).contains(&ws_id) {
+                let tag = token_to_string(line[1]);
+                while config.workspace_tags.len() < 9 {
+                    let next_num = config.workspace_tags.len() + 1;
+                    config.workspace_tags.push(next_num.to_string());
+                }
+                config.workspace_tags[(ws_id - 1) as usize] = tag;
+            } else {
+                return Err(ConfigError::InvalidValue {
+                    line: line_number,
+                    value: directive.to_string(),
+                });
+            }
+        }
         unknown => {
             return Err(ConfigError::InvalidValue {
                 line: line_number,
@@ -856,6 +1150,16 @@ fn parse_line(
     }
 
     Ok(())
+}
+
+fn set_module_enabled(modules: &mut Vec<BarModuleType>, mod_type: BarModuleType, enabled: bool) {
+    if enabled {
+        if !modules.contains(&mod_type) {
+            modules.push(mod_type);
+        }
+    } else {
+        modules.retain(|&m| m != mod_type);
+    }
 }
 
 fn token_to_string(token: &Token) -> String {
@@ -1192,11 +1496,37 @@ border_urgent #ff0000
 # launcher_font monospace 10
 
 # --- Status Bar & Workspace Behavior ---
+# Enable or disable the built-in status bar entirely (set to false to reclaim screen space).
+# statusbar true
+
 # Enable clicking on workspace tags in the status bar to switch workspaces.
 workspace_mouse true
 
 # Enable mouse wheel scrolling over workspace tags to cycle workspaces.
 workspace_wheel_switch true
+
+# --- Workspace Identifiers / Tags ---
+# Custom display labels or Nerd Font icons for workspaces 1 through 9.
+# Examples:
+#   workspace_tags 1 2 3 4 5 6 7 8 9
+#   workspace_tags     󰓇 󰙯 󰈹 󰓓 󰊴
+#   workspace_tags I II III IV V VI VII VIII IX
+#   workspace_tags web dev term code chat music media game misc
+# Individual tags can also be set: workspace_tag 1 
+workspace_tags 1 2 3 4 5 6 7 8 9
+
+# --- Status Bar Modules ---
+# Ordered list of modules displayed on the right side of the status bar.
+# Available modules:
+#   - ip (or ip_address)
+#   - ram (or ram_usage)
+#   - cpu (or cpu_usage)
+#   - battery (or battery_percentage)
+#   - volume (or vol)
+#   - clock (or day:date:time)
+#
+# Rearrange the order or omit modules to disable them:
+bar_modules ip ram cpu battery volume clock
 
 # --- Tabbed Layout Settings ---
 # Show numeric index in tab titles.
@@ -1665,6 +1995,23 @@ bind $mod+1 select_tab 1
         assert!(config.tab_config.mouse);
         assert!(config.tab_config.wheel_switch);
 
+        assert_eq!(
+            config.bar_modules,
+            vec![
+                BarModuleType::Ip,
+                BarModuleType::Ram,
+                BarModuleType::Cpu,
+                BarModuleType::Battery,
+                BarModuleType::Volume,
+                BarModuleType::Clock,
+            ]
+        );
+
+        assert_eq!(
+            config.workspace_tags,
+            vec!["1", "2", "3", "4", "5", "6", "7", "8", "9"]
+        );
+
         let default_bindings = default_keybindings();
         assert_eq!(config.bindings.len(), default_bindings.len());
         for (idx, (parsed, expected)) in config.bindings.iter().zip(default_bindings.iter()).enumerate() {
@@ -1732,5 +2079,211 @@ bind $mod+F10 vol_mute
         assert_eq!(config.bindings[3].action, Action::VolumeUp(2));
         assert_eq!(config.bindings[4].action, Action::VolumeDown(2));
         assert_eq!(config.bindings[5].action, Action::VolumeToggleMute);
+    }
+
+    #[test]
+    fn test_parse_shutdown_timeout() {
+        let tokens = tokenize("shutdown_timeout 3500\n").unwrap();
+        let config = parse(&tokens).unwrap();
+        assert_eq!(config.shutdown_timeout_ms, 3500);
+    }
+
+    #[test]
+    fn test_parse_bar_modules_reordering() {
+        let input = "bar_modules clock volume battery cpu ram ip\n";
+        let tokens = tokenize(input).unwrap();
+        let config = parse(&tokens).unwrap();
+        assert_eq!(
+            config.bar_modules,
+            vec![
+                BarModuleType::Clock,
+                BarModuleType::Volume,
+                BarModuleType::Battery,
+                BarModuleType::Cpu,
+                BarModuleType::Ram,
+                BarModuleType::Ip,
+            ]
+        );
+    }
+
+    #[test]
+    fn test_parse_bar_modules_subset_and_commas() {
+        let input = "bar_modules volume, clock, battery\n";
+        let tokens = tokenize(input).unwrap();
+        let config = parse(&tokens).unwrap();
+        assert_eq!(
+            config.bar_modules,
+            vec![
+                BarModuleType::Volume,
+                BarModuleType::Clock,
+                BarModuleType::Battery,
+            ]
+        );
+    }
+
+    #[test]
+    fn test_parse_bar_modules_none() {
+        let input = "bar_modules none\n";
+        let tokens = tokenize(input).unwrap();
+        let config = parse(&tokens).unwrap();
+        assert!(config.bar_modules.is_empty());
+
+        let input_off = "statusbar_modules off\n";
+        let tokens_off = tokenize(input_off).unwrap();
+        let config_off = parse(&tokens_off).unwrap();
+        assert!(config_off.bar_modules.is_empty());
+    }
+
+    #[test]
+    fn test_parse_bar_modules_synonyms() {
+        let input = "bar_modules day:date:time ip_address ram_usage cpu_usage battery_percentage vol\n";
+        let tokens = tokenize(input).unwrap();
+        let config = parse(&tokens).unwrap();
+        assert_eq!(
+            config.bar_modules,
+            vec![
+                BarModuleType::Clock,
+                BarModuleType::Ip,
+                BarModuleType::Ram,
+                BarModuleType::Cpu,
+                BarModuleType::Battery,
+                BarModuleType::Volume,
+            ]
+        );
+    }
+
+    #[test]
+    fn test_parse_bar_module_individual_directives() {
+        let input = r#"
+bar_modules ip ram cpu
+bar_module ip false
+bar_module clock true
+enable_module volume
+disable_module ram
+"#;
+        let tokens = tokenize(input).unwrap();
+        let config = parse(&tokens).unwrap();
+        assert_eq!(
+            config.bar_modules,
+            vec![
+                BarModuleType::Cpu,
+                BarModuleType::Clock,
+                BarModuleType::Volume,
+            ]
+        );
+    }
+
+    #[test]
+    fn test_parse_bar_module_specific_toggles() {
+        let input = r#"
+bar_module_battery false
+bar_module_clock true
+bar_ip false
+"#;
+        let tokens = tokenize(input).unwrap();
+        let config = parse(&tokens).unwrap();
+        // default was: Ip, Ram, Cpu, Battery, Volume, Clock
+        // battery is removed, ip is removed, clock was already in, so:
+        assert_eq!(
+            config.bar_modules,
+            vec![
+                BarModuleType::Ram,
+                BarModuleType::Cpu,
+                BarModuleType::Volume,
+                BarModuleType::Clock,
+            ]
+        );
+    }
+
+    #[test]
+    fn test_parse_workspace_tags_nerd_font_icons() {
+        let input = "workspace_tags     󰓇 󰙯 󰈹 󰓓 󰊴\n";
+        let tokens = tokenize(input).unwrap();
+        let config = parse(&tokens).unwrap();
+        assert_eq!(
+            config.workspace_tags,
+            vec!["", "", "", "", "󰓇", "󰙯", "󰈹", "󰓓", "󰊴"]
+        );
+        assert_eq!(config.workspace_tag(1), "");
+        assert_eq!(config.workspace_tag(2), "");
+        assert_eq!(config.workspace_tag(9), "󰊴");
+    }
+
+    #[test]
+    fn test_parse_workspace_tags_partial_fallback() {
+        let input = "workspace_tags web dev term\n";
+        let tokens = tokenize(input).unwrap();
+        let config = parse(&tokens).unwrap();
+        assert_eq!(
+            config.workspace_tags,
+            vec!["web", "dev", "term", "4", "5", "6", "7", "8", "9"]
+        );
+        assert_eq!(config.workspace_tag(1), "web");
+        assert_eq!(config.workspace_tag(2), "dev");
+        assert_eq!(config.workspace_tag(3), "term");
+        assert_eq!(config.workspace_tag(4), "4");
+        assert_eq!(config.workspace_tag(9), "9");
+    }
+
+    #[test]
+    fn test_parse_workspace_tags_reset_default() {
+        let input = "workspace_tags  \nworkspace_tags default\n";
+        let tokens = tokenize(input).unwrap();
+        let config = parse(&tokens).unwrap();
+        assert_eq!(
+            config.workspace_tags,
+            vec!["1", "2", "3", "4", "5", "6", "7", "8", "9"]
+        );
+    }
+
+    #[test]
+    fn test_parse_workspace_tag_individual_and_indexed() {
+        let input = r#"
+workspace_tag 1 
+workspace_tag 2 
+workspace_tag_3 
+bar_workspace_icon 4 
+"#;
+        let tokens = tokenize(input).unwrap();
+        let config = parse(&tokens).unwrap();
+        assert_eq!(config.workspace_tag(1), "");
+        assert_eq!(config.workspace_tag(2), "");
+        assert_eq!(config.workspace_tag(3), "");
+        assert_eq!(config.workspace_tag(4), "");
+        assert_eq!(config.workspace_tag(5), "5");
+    }
+
+    #[test]
+    fn test_parse_statusbar_enabled_and_disabled() {
+        let input_default = "";
+        let cfg_default = parse(&tokenize(input_default).unwrap()).unwrap();
+        assert!(cfg_default.statusbar, "Statusbar should be enabled by default");
+
+        let input_false = "statusbar false\n";
+        let cfg_false = parse(&tokenize(input_false).unwrap()).unwrap();
+        assert!(!cfg_false.statusbar, "Statusbar should be disabled when false");
+
+        let input_true = "statusbar true\n";
+        let cfg_true = parse(&tokenize(input_true).unwrap()).unwrap();
+        assert!(cfg_true.statusbar, "Statusbar should be enabled when true");
+    }
+
+    #[test]
+    fn test_parse_statusbar_aliases() {
+        let input_bar_off = "bar off\n";
+        let cfg1 = parse(&tokenize(input_bar_off).unwrap()).unwrap();
+        assert!(!cfg1.statusbar);
+
+        let input_enable_statusbar = "enable_statusbar false\n";
+        let cfg2 = parse(&tokenize(input_enable_statusbar).unwrap()).unwrap();
+        assert!(!cfg2.statusbar);
+
+        let input_statusbar_enabled = "statusbar_enabled on\n";
+        let cfg3 = parse(&tokenize(input_statusbar_enabled).unwrap()).unwrap();
+        assert!(cfg3.statusbar);
+
+        let input_bar_enabled = "bar_enabled disable\n";
+        let cfg4 = parse(&tokenize(input_bar_enabled).unwrap()).unwrap();
+        assert!(!cfg4.statusbar);
     }
 }

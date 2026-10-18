@@ -132,6 +132,8 @@ pub struct Statusbar {
     pub color_scheme: ColorScheme,
     /// Delimiter/separator between right-aligned status modules (default: " | ").
     pub separator: String,
+    /// Configured display tags for workspaces 1 through 9.
+    pub workspace_tags: Vec<String>,
     /// Optional graphical text and shape renderer.
     pub renderer: Option<crate::render::Renderer>,
     /// Hit-test geometries for clickable tabs in tabbed layout: (client_window, tab_rect).
@@ -164,6 +166,7 @@ impl Statusbar {
             modules,
             color_scheme,
             separator: " | ".to_string(),
+            workspace_tags: (1..=9).map(|i| i.to_string()).collect(),
             renderer: None,
             tab_rects: Vec::new(),
             workspace_rects,
@@ -188,6 +191,77 @@ impl Statusbar {
         Self::new(window_id, rect, modules, ColorScheme::default())
     }
 
+    /// Creates a `Statusbar` with the specified right-aligned modules and color scheme.
+    pub fn with_modules(
+        window_id: u32,
+        rect: Rect,
+        bar_modules: &[BarModuleType],
+        color_scheme: ColorScheme,
+    ) -> Self {
+        let mut modules: Vec<Box<dyn StatusModule>> = vec![
+            Box::new(WorkspaceModule::new()),
+            Box::new(LayoutModule::new()),
+            Box::new(TitleModule::new()),
+        ];
+        for mod_type in bar_modules {
+            modules.push(mod_type.instantiate());
+        }
+        Self::new(window_id, rect, modules, color_scheme)
+    }
+
+    /// Reconfigures and rearranges the right-aligned modules according to `new_modules`.
+    ///
+    /// Preserves internal modules (workspace, layout, title) at the front and reuses existing
+    /// right-aligned module instances if present to retain cached values and poll timestamps.
+    pub fn reconfigure_modules(&mut self, new_modules: &[BarModuleType]) {
+        let mut left_modules = Vec::new();
+        let mut existing_right: std::collections::HashMap<&'static str, Box<dyn StatusModule>> =
+            std::collections::HashMap::new();
+
+        for m in self.modules.drain(..) {
+            match m.name() {
+                "workspace" | "layout" | "title" => left_modules.push(m),
+                other => {
+                    existing_right.insert(other, m);
+                }
+            }
+        }
+
+        // Guarantee all 3 core left modules are present in order
+        let mut has_ws = false;
+        let mut has_layout = false;
+        let mut has_title = false;
+        for m in &left_modules {
+            match m.name() {
+                "workspace" => has_ws = true,
+                "layout" => has_layout = true,
+                "title" => has_title = true,
+                _ => {}
+            }
+        }
+        if !has_ws {
+            left_modules.insert(0, Box::new(WorkspaceModule::new()));
+        }
+        if !has_layout {
+            let pos = left_modules.iter().position(|m| m.name() == "workspace").map(|p| p + 1).unwrap_or(0);
+            left_modules.insert(pos, Box::new(LayoutModule::new()));
+        }
+        if !has_title {
+            left_modules.push(Box::new(TitleModule::new()));
+        }
+
+        self.modules = left_modules;
+        for mod_type in new_modules {
+            if let Some(existing) = existing_right.remove(mod_type.as_str()) {
+                self.modules.push(existing);
+            } else {
+                self.modules.push(mod_type.instantiate());
+            }
+        }
+
+        self.last_render_sig = None;
+    }
+
     /// Polls all statusbar modules whose update intervals have elapsed.
     ///
     /// # Returns
@@ -196,8 +270,13 @@ impl Statusbar {
         let now = Instant::now();
         let mut any_changed = false;
         for module in &mut self.modules {
+            match module.name() {
+                "workspace" | "layout" | "title" => continue,
+                _ => {}
+            }
+            let interval_ms = module.update_interval();
             if let Some(last) = module.last_updated()
-                && now.duration_since(last).as_millis() < module.update_interval() as u128 {
+                && now.duration_since(last).as_millis() < interval_ms as u128 {
                     continue;
                 }
             match module.update() {
@@ -215,18 +294,20 @@ impl Statusbar {
         let now = Instant::now();
         let mut min_remaining = std::time::Duration::from_millis(1000);
         for module in &self.modules {
+            match module.name() {
+                "workspace" | "layout" | "title" => continue,
+                _ => {}
+            }
             let interval_ms = module.update_interval();
-            if interval_ms >= 1000 {
-                let interval = std::time::Duration::from_millis(interval_ms);
-                if let Some(last) = module.last_updated() {
-                    let elapsed = now.duration_since(last);
-                    let remaining = interval.saturating_sub(elapsed);
-                    if remaining < min_remaining {
-                        min_remaining = remaining;
-                    }
-                } else {
-                    return std::time::Duration::ZERO;
+            let interval = std::time::Duration::from_millis(interval_ms);
+            if let Some(last) = module.last_updated() {
+                let elapsed = now.duration_since(last);
+                let remaining = interval.saturating_sub(elapsed);
+                if remaining < min_remaining {
+                    min_remaining = remaining;
                 }
+            } else {
+                return std::time::Duration::ZERO;
             }
         }
         min_remaining
@@ -249,6 +330,17 @@ impl Statusbar {
                 ws_mod.set_workspace(current, occupied);
             }
         }
+    }
+
+    /// Sets the workspace display tags and updates the workspace module if present.
+    pub fn set_workspace_tags(&mut self, tags: &[String]) {
+        self.workspace_tags = tags.to_vec();
+        for m in &mut self.modules {
+            if let Some(ws_mod) = m.as_any_mut().and_then(|a| a.downcast_mut::<WorkspaceModule>()) {
+                ws_mod.set_tags(tags);
+            }
+        }
+        self.last_render_sig = None;
     }
 
     /// Updates the active layout indicator in the layout module if present.
@@ -311,6 +403,9 @@ impl Statusbar {
             let mut hasher = std::collections::hash_map::DefaultHasher::new();
             current_ws.hash(&mut hasher);
             occupied_ws.hash(&mut hasher);
+            for tag in &self.workspace_tags {
+                tag.hash(&mut hasher);
+            }
             layout_symbol.hash(&mut hasher);
             active_title.hash(&mut hasher);
             tab_config.show_index.hash(&mut hasher);
@@ -348,6 +443,7 @@ impl Statusbar {
                 self.window_id,
                 current_ws,
                 occupied_ws,
+                &self.workspace_tags,
                 layout_symbol,
                 active_title,
                 tabs,

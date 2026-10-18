@@ -311,3 +311,101 @@ fn test_default_keybinding_mod4_shift_r_reload_in_xephyr() {
         assert!(wm.handle_key_press(&ev).is_ok());
     }
 }
+
+#[test]
+fn test_config_reload_updates_statusbar_modules() {
+    let mut config = Config::default();
+    config.bar_modules = vec![
+        tilo::bar::BarModuleType::Ip,
+        tilo::bar::BarModuleType::Ram,
+    ];
+
+    let mut bar = tilo::bar::Statusbar::with_modules(
+        100,
+        tilo::layout::Rect::new(0, 0, 1000, 24),
+        &config.bar_modules,
+        tilo::bar::ColorScheme::default(),
+    );
+    assert_eq!(bar.modules.len(), 5); // 3 left + 2 right
+    assert_eq!(bar.modules[3].name(), "ip");
+    assert_eq!(bar.modules[4].name(), "ram");
+
+    // Simulate reload with new modules: clock, volume, battery
+    let new_modules = vec![
+        tilo::bar::BarModuleType::Clock,
+        tilo::bar::BarModuleType::Volume,
+        tilo::bar::BarModuleType::Battery,
+    ];
+    bar.reconfigure_modules(&new_modules);
+    assert_eq!(bar.modules.len(), 6); // 3 left + 3 right
+    assert_eq!(bar.modules[3].name(), "clock");
+    assert_eq!(bar.modules[4].name(), "volume");
+    assert_eq!(bar.modules[5].name(), "battery");
+}
+
+#[test]
+fn test_config_reload_updates_workspace_tags() {
+    let mut bar = tilo::bar::Statusbar::default_with_window(
+        100,
+        tilo::layout::Rect::new(0, 0, 1000, 24),
+    );
+    assert_eq!(bar.workspace_tags[0], "1");
+
+    // Simulate reload with custom icons
+    let custom_tags = vec![
+        "".to_string(),
+        "".to_string(),
+        "".to_string(),
+        "4".to_string(),
+        "5".to_string(),
+        "6".to_string(),
+        "7".to_string(),
+        "8".to_string(),
+        "9".to_string(),
+    ];
+    bar.set_workspace_tags(&custom_tags);
+    assert_eq!(bar.workspace_tags[0], "");
+    assert_eq!(bar.workspace_tags[1], "");
+    assert_eq!(bar.workspace_tags[2], "");
+}
+
+#[test]
+fn test_config_reload_toggles_statusbar_in_xephyr() {
+    if !Command::new("which")
+        .arg("Xephyr")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+    {
+        return;
+    }
+
+    let xephyr = XephyrServer::start(210);
+    if let Some(server) = xephyr {
+        let wm_ctx = X11Context::connect_to(Some(&server.display))
+            .expect("WM context connect failed");
+        assert!(wm_ctx.become_wm().is_ok());
+
+        let mut config = Config::default();
+        config.statusbar = true;
+
+        let mut wm = WindowManager::new_with_config(wm_ctx, config.clone())
+            .expect("Failed to initialize WM");
+
+        // Enable statusbar
+        let _ = wm.enable_statusbar(24);
+        assert!(wm.statusbar.is_some(), "Statusbar should be active");
+
+        // 1. Reload with statusbar = false
+        let mut disabled_cfg = config.clone();
+        disabled_cfg.statusbar = false;
+        assert!(wm.apply_config(disabled_cfg).is_ok());
+        assert!(wm.statusbar.is_none(), "Statusbar should be destroyed when disabled in config");
+
+        // 2. Reload with statusbar = true
+        let mut enabled_cfg = config.clone();
+        enabled_cfg.statusbar = true;
+        assert!(wm.apply_config(enabled_cfg).is_ok());
+        assert!(wm.statusbar.is_some(), "Statusbar should be re-created when re-enabled in config");
+    }
+}

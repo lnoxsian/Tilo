@@ -269,6 +269,102 @@ bind $mod+Shift+period move_to_monitor right
 
 ---
 
+## Status Bar Enable / Disable
+
+The built-in status bar can be completely enabled or disabled:
+
+```
+# Completely disable the status bar (reclaims top 24px screen area for windows):
+statusbar false
+
+# Re-enable the status bar:
+statusbar true
+```
+
+Supported aliases: `bar`, `enable_statusbar`, `statusbar_enabled`, `bar_enabled`.  
+Accepted values: `true`/`false`, `on`/`off`, `yes`/`no`, `1`/`0`, `enable`/`disable`.
+
+---
+
+## Status Bar Modules
+
+The modules on the right side of the status bar can be enabled, disabled, and rearranged in any order using `bar_modules` (or `statusbar_modules`, `modules`):
+
+```
+# Rearrange and enable modules in custom order:
+bar_modules ip ram cpu battery volume clock
+```
+
+To display only a subset of modules, simply list the desired modules (omitted modules are disabled):
+
+```
+# Show only clock, volume, and battery percentage (in this order):
+bar_modules clock volume battery
+```
+
+To disable all right-side modules entirely:
+```
+bar_modules none
+```
+
+### Supported Module Names and Aliases
+
+| Module | Canonical Name | Supported Aliases |
+|---|---|---|
+| IP Address | `ip` | `ip_address`, `ip-address`, `ipaddress`, `network`, `net` |
+| RAM Usage | `ram` | `ram_usage`, `ram-usage`, `ramusage`, `memory`, `mem` |
+| CPU Usage | `cpu` | `cpu_usage`, `cpu-usage`, `cpuusage` |
+| Battery Percentage | `battery` | `bat`, `battery_percentage`, `battery-percentage` |
+| Volume Level | `volume` | `vol`, `audio`, `sound` |
+| Day / Date / Time | `clock` | `day:date:time`, `time`, `date`, `datetime`, `day_date_time` |
+
+### Individual Module Toggles
+
+Individual modules can also be enabled or disabled:
+
+```
+bar_module ip false             # disable ip module
+bar_module battery true         # enable battery module
+enable_module volume            # enable volume
+disable_module ram              # disable ram
+bar_module_clock true           # toggle clock
+```
+
+---
+
+## Workspace Tags and Icons
+
+Workspaces 1 through 9 can be configured with custom identifiers, characters, words, or Nerd Font icons via `workspace_tags` (or `bar_workspace_tags`, `workspace_icons`):
+
+```
+# Nerd Font icons for workspaces 1 through 9:
+workspace_tags     󰓇 󰙯 󰈹 󰓓 󰊴
+
+# Roman numerals or descriptive names:
+workspace_tags I II III IV V VI VII VIII IX
+workspace_tags web dev term code chat music media game misc
+
+# Quoted labels with spaces:
+workspace_tags "1: web" "2: code" "3: term"
+
+# Reset to default numbers 1-9:
+workspace_tags default
+```
+
+If fewer than 9 tags are specified (e.g. `workspace_tags   `), the remaining workspaces automatically fall back to their numeric index (`4`, `5`, etc.).
+
+### Individual Workspace Tags
+
+Individual tags can also be set or overridden:
+
+```
+workspace_tag 1 
+workspace_tag 2 
+workspace_tag_3 
+```
+
+---
+
 ## Status Bar and Tab Directives
 
 ```

@@ -1,6 +1,8 @@
 use std::process::{Child, Command};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
-use tilo::perform_graceful_shutdown;
+use tilo::{perform_desktop_shutdown, perform_graceful_shutdown};
 use tilo::rules::{RuleAction, RuleCondition, WindowRule};
 use tilo::wm::WindowManager;
 use tilo::x11::X11Context;
@@ -226,3 +228,237 @@ fn test_graceful_shutdown_releases_substructure_and_allows_reacquisition() {
         );
     }
 }
+
+#[test]
+fn test_desktop_shutdown_closes_apps_gracefully() {
+    if !has_xephyr() {
+        return;
+    }
+
+    let xephyr = XephyrServer::start(195);
+    if let Some(server) = xephyr {
+        let (client_conn, screen_num) =
+            x11rb::connect(Some(&server.display)).expect("Client connect failed");
+        let screen = &client_conn.setup().roots[screen_num];
+        let root = screen.root;
+
+        // Window with WM_DELETE_WINDOW support
+        let win = client_conn.generate_id().expect("XID");
+        client_conn
+            .create_window(
+                x11rb::COPY_DEPTH_FROM_PARENT,
+                win,
+                root,
+                20,
+                20,
+                300,
+                200,
+                0,
+                WindowClass::INPUT_OUTPUT,
+                x11rb::COPY_FROM_PARENT,
+                &CreateWindowAux::default(),
+            )
+            .expect("Create win");
+
+        let wm_protocols = client_conn.intern_atom(false, b"WM_PROTOCOLS").unwrap().reply().unwrap().atom;
+        let wm_delete_window = client_conn.intern_atom(false, b"WM_DELETE_WINDOW").unwrap().reply().unwrap().atom;
+        client_conn
+            .change_property32(
+                PropMode::REPLACE,
+                win,
+                wm_protocols,
+                AtomEnum::ATOM,
+                &[wm_delete_window],
+            )
+            .unwrap();
+        client_conn.map_window(win).unwrap();
+        client_conn.flush().unwrap();
+        client_conn.sync().unwrap();
+
+        // Start WM
+        let wm_ctx = X11Context::connect_to(Some(&server.display)).expect("WM connect");
+        assert!(wm_ctx.become_wm().is_ok());
+
+        let mut wm = WindowManager::new(wm_ctx).expect("WM init");
+        wm.manage_existing_windows().expect("manage existing");
+        assert_eq!(wm.client_state.len(), 1);
+
+        // Client thread to respond to WM_DELETE_WINDOW
+        let received_delete = Arc::new(AtomicBool::new(false));
+        let flag_clone = received_delete.clone();
+
+        let client_thread = std::thread::spawn(move || {
+            for _ in 0..50 {
+                if let Ok(Some(ev)) = client_conn.poll_for_event() {
+                    if let x11rb::protocol::Event::ClientMessage(msg) = ev {
+                        if msg.type_ == wm_protocols && msg.data.as_data32()[0] == wm_delete_window {
+                            flag_clone.store(true, Ordering::SeqCst);
+                            let _ = client_conn.destroy_window(win);
+                            let _ = client_conn.flush();
+                            break;
+                        }
+                    }
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        });
+
+        // Trigger desktop shutdown
+        wm.perform_desktop_shutdown(Some(Duration::from_millis(1500))).expect("desktop shutdown");
+        let _ = client_thread.join();
+
+        assert!(received_delete.load(Ordering::SeqCst), "Client must receive WM_DELETE_WINDOW");
+        assert!(!wm.running, "WM running state must be false");
+        assert_eq!(wm.client_state.len(), 0, "All clients must be unmanaged");
+    }
+}
+
+#[test]
+fn test_desktop_shutdown_forcefully_terminates_unresponsive_clients() {
+    if !has_xephyr() {
+        return;
+    }
+
+    let xephyr = XephyrServer::start(196);
+    if let Some(server) = xephyr {
+        let (client_conn, screen_num) =
+            x11rb::connect(Some(&server.display)).expect("Client connect failed");
+        let screen = &client_conn.setup().roots[screen_num];
+        let root = screen.root;
+
+        // Window without event loop (stubborn / ignoring)
+        let win = client_conn.generate_id().expect("XID");
+        client_conn
+            .create_window(
+                x11rb::COPY_DEPTH_FROM_PARENT,
+                win,
+                root,
+                20,
+                20,
+                300,
+                200,
+                0,
+                WindowClass::INPUT_OUTPUT,
+                x11rb::COPY_FROM_PARENT,
+                &CreateWindowAux::default(),
+            )
+            .expect("Create win");
+        client_conn.map_window(win).unwrap();
+        client_conn.flush().unwrap();
+        client_conn.sync().unwrap();
+
+        let wm_ctx = X11Context::connect_to(Some(&server.display)).expect("WM connect");
+        assert!(wm_ctx.become_wm().is_ok());
+
+        let mut wm = WindowManager::new(wm_ctx).expect("WM init");
+        wm.manage_existing_windows().expect("manage existing");
+        assert_eq!(wm.client_state.len(), 1);
+
+        // Perform desktop shutdown with a short timeout (150ms)
+        wm.perform_desktop_shutdown(Some(Duration::from_millis(150))).expect("desktop shutdown");
+
+        assert!(!wm.running);
+        assert_eq!(wm.client_state.len(), 0);
+
+        // Client connection should be disconnected by XKillClient
+        assert!(client_conn.sync().is_err(), "Unresponsive client connection must be severed by KillClient");
+    }
+}
+
+#[test]
+fn test_desktop_shutdown_closes_scratchpad_window() {
+    if !has_xephyr() {
+        return;
+    }
+
+    let xephyr = XephyrServer::start(197);
+    if let Some(server) = xephyr {
+        let (client_conn, screen_num) =
+            x11rb::connect(Some(&server.display)).expect("Client connect failed");
+        let screen = &client_conn.setup().roots[screen_num];
+        let root = screen.root;
+
+        let win = client_conn.generate_id().expect("XID");
+        client_conn
+            .create_window(
+                x11rb::COPY_DEPTH_FROM_PARENT,
+                win,
+                root,
+                10,
+                10,
+                200,
+                200,
+                0,
+                WindowClass::INPUT_OUTPUT,
+                x11rb::COPY_FROM_PARENT,
+                &CreateWindowAux::default(),
+            )
+            .expect("Create win");
+        client_conn.map_window(win).unwrap();
+        client_conn.flush().unwrap();
+        client_conn.sync().unwrap();
+
+        let wm_ctx = X11Context::connect_to(Some(&server.display)).expect("WM connect");
+        assert!(wm_ctx.become_wm().is_ok());
+
+        let mut wm = WindowManager::new(wm_ctx).expect("WM init");
+        wm.manage_existing_windows().expect("manage existing");
+        wm.set_scratchpad_client(win);
+        assert_eq!(wm.scratchpad.client, Some(win));
+
+        wm.perform_desktop_shutdown(Some(Duration::from_millis(150))).expect("desktop shutdown");
+
+        assert!(!wm.running);
+        assert_eq!(wm.scratchpad.client, None);
+        assert_eq!(wm.client_state.len(), 0);
+    }
+}
+
+#[test]
+fn test_execute_power_action_logout_performs_desktop_shutdown() {
+    if !has_xephyr() {
+        return;
+    }
+
+    let xephyr = XephyrServer::start(198);
+    if let Some(server) = xephyr {
+        let (client_conn, screen_num) =
+            x11rb::connect(Some(&server.display)).expect("Client connect failed");
+        let screen = &client_conn.setup().roots[screen_num];
+        let root = screen.root;
+
+        let win = client_conn.generate_id().expect("XID");
+        client_conn
+            .create_window(
+                x11rb::COPY_DEPTH_FROM_PARENT,
+                win,
+                root,
+                10,
+                10,
+                200,
+                200,
+                0,
+                WindowClass::INPUT_OUTPUT,
+                x11rb::COPY_FROM_PARENT,
+                &CreateWindowAux::default(),
+            )
+            .expect("Create win");
+        client_conn.map_window(win).unwrap();
+        client_conn.flush().unwrap();
+        client_conn.sync().unwrap();
+
+        let wm_ctx = X11Context::connect_to(Some(&server.display)).expect("WM connect");
+        assert!(wm_ctx.become_wm().is_ok());
+
+        let mut wm = WindowManager::new(wm_ctx).expect("WM init");
+        wm.config.shutdown_timeout_ms = 150;
+        wm.manage_existing_windows().expect("manage existing");
+        assert_eq!(wm.client_state.len(), 1);
+
+        wm.execute_power_action("logout");
+
+        assert!(!wm.running);
+        assert_eq!(wm.client_state.len(), 0);
+    }
+}
+

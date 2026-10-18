@@ -15,6 +15,80 @@ pub enum ModuleUpdate {
     Error(String),
 }
 
+/// Identifies a configurable right-aligned statusbar module.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum BarModuleType {
+    /// Local IP address module.
+    Ip,
+    /// RAM usage percentage module.
+    Ram,
+    /// CPU usage percentage module.
+    Cpu,
+    /// Battery capacity and charging status module.
+    Battery,
+    /// Output audio volume level and mute state module.
+    Volume,
+    /// System clock module formatted as DAY:DATE:TIME.
+    Clock,
+}
+
+impl BarModuleType {
+    /// Returns the canonical identifier string for this module.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            BarModuleType::Ip => "ip",
+            BarModuleType::Ram => "ram",
+            BarModuleType::Cpu => "cpu",
+            BarModuleType::Battery => "battery",
+            BarModuleType::Volume => "volume",
+            BarModuleType::Clock => "clock",
+        }
+    }
+
+    /// Parses a module name or synonym loosely (case-insensitive, trims commas/spaces).
+    pub fn from_str_loose(s: &str) -> Result<Self, String> {
+        let clean = s.trim().trim_matches(',').to_lowercase();
+        match clean.as_str() {
+            "ip" | "ip_address" | "ip-address" | "ipaddress" | "network" | "net" => Ok(BarModuleType::Ip),
+            "ram" | "ram_usage" | "ram-usage" | "ramusage" | "memory" | "mem" => Ok(BarModuleType::Ram),
+            "cpu" | "cpu_usage" | "cpu-usage" | "cpuusage" => Ok(BarModuleType::Cpu),
+            "battery" | "battery_percentage" | "battery-percentage" | "batterypercentage" | "bat" => Ok(BarModuleType::Battery),
+            "volume" | "vol" | "audio" | "sound" => Ok(BarModuleType::Volume),
+            "clock" | "time" | "date" | "datetime" | "date-time" | "day:date:time" | "day_date_time" | "day-date-time" => Ok(BarModuleType::Clock),
+            _ => Err(format!(
+                "Unknown statusbar module '{}'. Available modules: ip, ram, cpu, battery, volume, clock",
+                s
+            )),
+        }
+    }
+
+    /// Instantiates a new boxed status module instance for this module type.
+    pub fn instantiate(&self) -> Box<dyn StatusModule> {
+        match self {
+            BarModuleType::Ip => Box::new(IpModule::new()),
+            BarModuleType::Ram => Box::new(RamModule::new()),
+            BarModuleType::Cpu => Box::new(CpuModule::new()),
+            BarModuleType::Battery => Box::new(BatteryModule::new()),
+            BarModuleType::Volume => Box::new(VolumeModule::new()),
+            BarModuleType::Clock => Box::new(ClockModule::new()),
+        }
+    }
+}
+
+impl std::fmt::Display for BarModuleType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+impl std::str::FromStr for BarModuleType {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::from_str_loose(s)
+    }
+}
+
 /// Trait defining the behavior of an independent statusbar module.
 pub trait StatusModule: std::fmt::Debug + Send {
     /// Returns the name of the module for debugging and identification.
@@ -77,7 +151,7 @@ impl IpModule {
         self.custom_ip = ip;
     }
 
-    fn query_local_ip() -> Option<String> {
+    fn query_local_ip_addr() -> Option<std::net::IpAddr> {
         let socket = UdpSocket::bind("0.0.0.0:0").ok()?;
         socket.connect("1.1.1.1:80").ok()?;
         let addr = socket.local_addr().ok()?;
@@ -85,8 +159,12 @@ impl IpModule {
         if ip.is_unspecified() || ip.is_loopback() {
             None
         } else {
-            Some(ip.to_string())
+            Some(ip)
         }
+    }
+
+    fn query_local_ip() -> Option<String> {
+        Self::query_local_ip_addr().map(|ip| ip.to_string())
     }
 }
 
@@ -118,14 +196,19 @@ impl StatusModule for IpModule {
             return Ok(ModuleUpdate::Unchanged);
         }
 
-        self.cached_ip = current_ip.clone();
-        let new_text = match current_ip {
-            Some(ref ip) if !ip.is_empty() => format!("IP {}", ip),
-            _ => "IP Offline".to_string(),
-        };
+        self.cached_ip = current_ip;
+        use std::fmt::Write;
+        self.cached_text.clear();
+        match self.cached_ip.as_deref() {
+            Some(ip) if !ip.is_empty() => {
+                let _ = write!(&mut self.cached_text, "IP {}", ip);
+            }
+            _ => {
+                self.cached_text.push_str("IP Offline");
+            }
+        }
 
-        self.cached_text = new_text.clone();
-        Ok(ModuleUpdate::Changed(new_text))
+        Ok(ModuleUpdate::Changed(self.cached_text.clone()))
     }
 
     fn current_text(&self) -> &str {
@@ -247,9 +330,10 @@ impl StatusModule for RamModule {
             }
 
             self.cached_percent = Some(percent);
-            let new_text = format!("RAM {}%", percent);
-            self.cached_text = new_text.clone();
-            Ok(ModuleUpdate::Changed(new_text))
+            use std::fmt::Write;
+            self.cached_text.clear();
+            let _ = write!(&mut self.cached_text, "RAM {}%", percent);
+            Ok(ModuleUpdate::Changed(self.cached_text.clone()))
         } else {
             self.cached_text = "RAM: ERR".to_string();
             Ok(ModuleUpdate::Error("Malformed /proc/meminfo content".to_string()))
@@ -382,9 +466,10 @@ impl StatusModule for CpuModule {
                     return Ok(ModuleUpdate::Unchanged);
                 }
                 self.cached_percent = Some(percent);
-                let new_text = format!("CPU {}%", percent);
-                self.cached_text = new_text.clone();
-                Ok(ModuleUpdate::Changed(new_text))
+                use std::fmt::Write;
+                self.cached_text.clear();
+                let _ = write!(&mut self.cached_text, "CPU {}%", percent);
+                Ok(ModuleUpdate::Changed(self.cached_text.clone()))
             } else {
                 Ok(ModuleUpdate::Unchanged)
             }
@@ -460,11 +545,11 @@ impl BatteryModule {
         None
     }
 
-    pub fn parse_battery_info(bat_dir: &std::path::Path) -> Result<(u32, bool), String> {
-        let capacity_path = bat_dir.join("capacity");
-        let status_path = bat_dir.join("status");
-
-        let mut cap_file = std::fs::File::open(&capacity_path)
+    pub fn parse_battery_from_files(
+        capacity_path: &std::path::Path,
+        status_path: Option<&std::path::Path>,
+    ) -> Result<(u32, bool), String> {
+        let mut cap_file = std::fs::File::open(capacity_path)
             .map_err(|e| format!("Failed to read capacity: {}", e))?;
         let mut cap_buf = [0u8; 16];
         let n = cap_file.read(&mut cap_buf)
@@ -476,11 +561,15 @@ impl BatteryModule {
             .parse::<u32>()
             .map_err(|e| format!("Failed to parse capacity: {}", e))?;
 
-        let is_charging = if let Ok(mut status_file) = std::fs::File::open(&status_path) {
-            let mut stat_buf = [0u8; 32];
-            if let Ok(sn) = status_file.read(&mut stat_buf) {
-                let status_content = std::str::from_utf8(&stat_buf[..sn]).unwrap_or("");
-                status_content.trim().eq_ignore_ascii_case("charging")
+        let is_charging = if let Some(stat_path) = status_path {
+            if let Ok(mut status_file) = std::fs::File::open(stat_path) {
+                let mut stat_buf = [0u8; 32];
+                if let Ok(sn) = status_file.read(&mut stat_buf) {
+                    let status_content = std::str::from_utf8(&stat_buf[..sn]).unwrap_or("");
+                    status_content.trim().eq_ignore_ascii_case("charging")
+                } else {
+                    false
+                }
             } else {
                 false
             }
@@ -489,6 +578,12 @@ impl BatteryModule {
         };
 
         Ok((cap.min(100), is_charging))
+    }
+
+    pub fn parse_battery_info(bat_dir: &std::path::Path) -> Result<(u32, bool), String> {
+        let capacity_path = bat_dir.join("capacity");
+        let status_path = bat_dir.join("status");
+        Self::parse_battery_from_files(&capacity_path, Some(&status_path))
     }
 }
 
@@ -510,33 +605,34 @@ impl StatusModule for BatteryModule {
     fn update(&mut self) -> Result<ModuleUpdate, StatusbarError> {
         self.last_updated = Some(Instant::now());
 
-        let path = match self.sysfs_path {
-            Some(ref p) => p,
+        let cap_path = match self.capacity_path.as_deref() {
+            Some(p) => p,
             None => {
-                let na = "BAT N/A".to_string();
+                let na = "BAT N/A";
                 if self.cached_text != na {
-                    self.cached_text = na.clone();
-                    return Ok(ModuleUpdate::Changed(na));
+                    self.cached_text = na.to_string();
+                    return Ok(ModuleUpdate::Changed(self.cached_text.clone()));
                 }
                 return Ok(ModuleUpdate::Unchanged);
             }
         };
 
-        match Self::parse_battery_info(path) {
+        match Self::parse_battery_from_files(cap_path, self.status_path.as_deref()) {
             Ok((cap, is_charging)) => {
                 if self.cached_state == Some((cap, is_charging)) {
                     return Ok(ModuleUpdate::Unchanged);
                 }
 
                 self.cached_state = Some((cap, is_charging));
-                let new_text = if is_charging {
-                    format!("BAT {}% (+)", cap)
+                use std::fmt::Write;
+                self.cached_text.clear();
+                if is_charging {
+                    let _ = write!(&mut self.cached_text, "BAT {}% (+)", cap);
                 } else {
-                    format!("BAT {}%", cap)
-                };
+                    let _ = write!(&mut self.cached_text, "BAT {}%", cap);
+                }
 
-                self.cached_text = new_text.clone();
-                Ok(ModuleUpdate::Changed(new_text))
+                Ok(ModuleUpdate::Changed(self.cached_text.clone()))
             }
             Err(e) => {
                 self.cached_text = "BAT: ERR".to_string();
@@ -559,6 +655,7 @@ impl StatusModule for BatteryModule {
 pub struct ClockModule {
     pub cached_text: String,
     pub last_updated: Option<Instant>,
+    pub cached_time: Option<(i32, i32, i32)>,
 }
 
 impl ClockModule {
@@ -566,6 +663,7 @@ impl ClockModule {
         let mut s = Self {
             cached_text: String::new(),
             last_updated: None,
+            cached_time: None,
         };
         let _ = s.update();
         s
@@ -610,12 +708,41 @@ impl StatusModule for ClockModule {
 
     fn update(&mut self) -> Result<ModuleUpdate, StatusbarError> {
         self.last_updated = Some(Instant::now());
-        let new_text = Self::format_now();
-        if new_text != self.cached_text {
-            self.cached_text = new_text.clone();
-            Ok(ModuleUpdate::Changed(new_text))
-        } else {
-            Ok(ModuleUpdate::Unchanged)
+        let mut now = 0 as libc::time_t;
+        unsafe {
+            libc::time(&mut now);
+            let mut tm = std::mem::MaybeUninit::<libc::tm>::zeroed();
+            if !libc::localtime_r(&now, tm.as_mut_ptr()).is_null() {
+                let tm = tm.assume_init();
+                let time_key = (tm.tm_yday, tm.tm_hour, tm.tm_min);
+                if self.cached_time == Some(time_key) && !self.cached_text.is_empty() {
+                    return Ok(ModuleUpdate::Unchanged);
+                }
+                self.cached_time = Some(time_key);
+                const DAYS: [&str; 7] = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"];
+                let day_name = DAYS.get(tm.tm_wday.clamp(0, 6) as usize).unwrap_or(&"---");
+                let year = 1900 + tm.tm_year;
+                let month = tm.tm_mon + 1;
+                let mday = tm.tm_mday;
+                let hour = tm.tm_hour;
+                let min = tm.tm_min;
+
+                use std::fmt::Write;
+                self.cached_text.clear();
+                let _ = write!(
+                    &mut self.cached_text,
+                    "{}:{:04}-{:02}-{:02}:{:02}:{:02}",
+                    day_name, year, month, mday, hour, min
+                );
+                Ok(ModuleUpdate::Changed(self.cached_text.clone()))
+            } else {
+                if self.cached_text == "---:0000-00-00:00:00" {
+                    return Ok(ModuleUpdate::Unchanged);
+                }
+                self.cached_text = "---:0000-00-00:00:00".to_string();
+                self.cached_time = None;
+                Ok(ModuleUpdate::Changed(self.cached_text.clone()))
+            }
         }
     }
 
@@ -665,23 +792,34 @@ impl VolumeModule {
             return ModuleUpdate::Unchanged;
         }
         self.cached_state = state;
-        let new_text = Self::format_state(state);
-        self.cached_text = new_text.clone();
-        ModuleUpdate::Changed(new_text)
+        Self::write_state(&mut self.cached_text, state);
+        ModuleUpdate::Changed(self.cached_text.clone())
     }
 
-    pub fn format_state(state: Option<crate::audio::VolumeState>) -> String {
+    pub fn write_state(buf: &mut String, state: Option<crate::audio::VolumeState>) {
+        buf.clear();
+        use std::fmt::Write;
         match state {
             Some(s) if s.muted => {
                 if s.volume > 0 {
-                    format!("VOL {}% [MUTE]", s.volume)
+                    let _ = write!(buf, "VOL {}% [MUTE]", s.volume);
                 } else {
-                    "VOL MUTE".to_string()
+                    buf.push_str("VOL MUTE");
                 }
             }
-            Some(s) => format!("VOL {}%", s.volume),
-            None => "VOL N/A".to_string(),
+            Some(s) => {
+                let _ = write!(buf, "VOL {}%", s.volume);
+            }
+            None => {
+                buf.push_str("VOL N/A");
+            }
         }
+    }
+
+    pub fn format_state(state: Option<crate::audio::VolumeState>) -> String {
+        let mut s = String::new();
+        Self::write_state(&mut s, state);
+        s
     }
 }
 
@@ -707,9 +845,8 @@ impl StatusModule for VolumeModule {
             return Ok(ModuleUpdate::Unchanged);
         }
         self.cached_state = current_state;
-        let new_text = Self::format_state(current_state);
-        self.cached_text = new_text.clone();
-        Ok(ModuleUpdate::Changed(new_text))
+        Self::write_state(&mut self.cached_text, current_state);
+        Ok(ModuleUpdate::Changed(self.cached_text.clone()))
     }
 
     fn current_text(&self) -> &str {

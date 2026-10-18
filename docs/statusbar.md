@@ -14,9 +14,23 @@ The tilo status bar is an integrated X11 window — not an external process. It 
 | Height | 24 pixels (initial; updated on monitor changes) |
 | Strut | Published via `_NET_WM_STRUT` and `_NET_WM_STRUT_PARTIAL` |
 
-The layout engine subtracts the bar's reserved area from the usable rectangle before computing tiled window geometries. This ensures tiled windows never overlap the bar.
-
 The bar is stored as `Option<Statusbar>` inside `WindowManager`, not as a separate process.
+
+### Enabling or Disabling the Bar
+
+The status bar is enabled by default, but can be completely disabled in `~/.config/tilo/config`:
+
+```ini
+# Completely disable the status bar and reclaim the top 24px screen area:
+statusbar false
+
+# Re-enable the status bar:
+statusbar true
+```
+Supported aliases: `bar`, `enable_statusbar`, `statusbar_enabled`, `bar_enabled`.
+
+When disabled, no status bar window is created, no struts are published, and application windows tile across the entire screen from `y = 0`.
+Changes take effect immediately on startup or upon `$mod+Shift+r` configuration hot reload.
 
 ---
 
@@ -33,24 +47,39 @@ The bar is divided into three logical sections:
 
 **Left:** Workspace tags + layout symbol  
 **Center:** Active window title  
-**Right:** Status modules (IP, RAM, CPU, battery, clock)
+**Center:** Active window title  
+**Right:** Status modules (IP, RAM, CPU, battery, volume, day:date:time clock)
 
 ---
 
-## Default Modules
+## Default Modules and Configuration
 
-Modules are polled on individual intervals and joined with ` | ` separators (configurable via `bar_separator`):
+Modules are polled on individual intervals and joined with ` | ` separators (configurable via `bar_separator`).
 
-| Module | Poll Interval | Data Source | Example Output |
-|---|---|---|---|
-| Workspace tags | On event | Internal state | `[1] [●2] [3]` |
-| Layout symbol | On event | Internal state | `[B]` |
-| Active title | On event | `WM_NAME` / `_NET_WM_NAME` | `Firefox — GitHub` |
-| Local IP | 3 seconds | UDP socket route lookup | `192.168.1.5` |
-| RAM | 2 seconds | `/proc/meminfo` | `2.1GB / 8GB` |
-| CPU | 1 second | `/proc/stat` deltas | `37%` |
-| Battery | 5 seconds | Linux power-supply sysfs | `▶ 78%` |
-| Clock | 1 second | System time | `14:32` |
+Right-aligned status modules can be rearranged, enabled, or disabled in `~/.config/tilo/config` using the `bar_modules` directive:
+
+```
+# Rearrange in any order or omit to disable:
+bar_modules ip ram cpu battery volume clock
+
+# Example: show only day:date:time, volume, and battery percentage
+bar_modules clock volume battery
+
+# Example: disable all right-aligned modules
+bar_modules none
+```
+
+| Module | Canonical Name | Supported Aliases | Poll Interval | Data Source | Example Output |
+|---|---|---|---|---|---|
+| Workspace tags | `workspace` | — | On event | Internal state | `[1] [●2] [3]` |
+| Layout symbol | `layout` | — | On event | Internal state | `[]=` |
+| Active title | `title` | — | On event | `WM_NAME` / `_NET_WM_NAME` | `Firefox — GitHub` |
+| Local IP | `ip` | `ip_address`, `network`, `net` | 3 seconds | UDP socket route lookup | `IP 192.168.1.5` |
+| RAM Usage | `ram` | `ram_usage`, `memory`, `mem` | 2 seconds | `/proc/meminfo` | `RAM 42%` |
+| CPU Usage | `cpu` | `cpu_usage` | 1 second | `/proc/stat` deltas | `CPU 15%` |
+| Battery Percentage | `battery` | `battery_percentage`, `bat` | 5 seconds | Linux power-supply sysfs | `BAT 78% (+)` |
+| Volume Level | `volume` | `vol`, `audio`, `sound` | 2 seconds | ALSA / PipeWire / PulseAudio | `VOL 65%` |
+| Day : Date : Time | `clock` | `day:date:time`, `time`, `date`, `datetime` | 1 second | System time | `MON:2026-10-19:14:32` |
 
 Module errors become cached error text rather than crashing the WM.
 
@@ -84,6 +113,18 @@ Uses system time formatted as `HH:MM`.
 ---
 
 ## Workspace Tags
+
+Workspaces 1 through 9 are displayed on the left side of the bar. By default, they display numbers `1` through `9`. You can customize them with any characters, words, or Nerd Font icons using `workspace_tags` in `~/.config/tilo/config`:
+
+```
+# Example: Nerd Font icons
+workspace_tags     󰓇 󰙯 󰈹 󰓓 󰊴
+
+# Example: Descriptive names
+workspace_tags web dev term code chat music media game misc
+```
+
+Pill widths automatically adjust to fit the text or icon width dynamically, with no clipping and exact mouse hit targets.
 
 Workspace tags in the bar show:
 

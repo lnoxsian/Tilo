@@ -28,6 +28,7 @@ use crate::rules::WindowRule;
 use crate::statusbar::Statusbar;
 use crate::workspace::WorkspaceManager;
 use crate::x11::{X11Context, X11Error};
+use x11rb::wrapper::ConnectionExt as _;
 pub use crate::error::WmError;
 use crate::error::is_connection_lost_error;
 use x11rb::connection::Connection;
@@ -262,6 +263,8 @@ impl WindowManager {
             );
         }
 
+        let old_bar_font = self.config.bar_font().to_string();
+        let old_launcher_font = self.config.launcher_font().to_string();
         self.config = config;
 
         // Apply updated border width and colors to all existing client windows
@@ -282,27 +285,60 @@ impl WindowManager {
             }
         }
 
-        // Apply updated theme to statusbar if active
-        if let Some(ref mut bar) = self.statusbar {
-            bar.color_scheme = self.config.bar_color_scheme();
-            bar.separator = self.config.bar_separator().to_string();
-            let font_name = self.config.bar_font();
-            let screen = &self.context.connection.setup().roots[self.context.screen_num];
-            if let Ok(new_renderer) = crate::render::Renderer::new(
-                &self.context.connection,
-                bar.window_id,
-                bar.rect.width as u16,
-                bar.rect.height as u16,
-                screen.root_depth,
-                font_name,
-            ) {
-                if let Some(old_renderer) = bar.renderer.take() {
-                    let _ = old_renderer.destroy(&self.context.connection);
-                }
-                bar.attach_renderer(new_renderer);
+        // Update workspace names in WorkspaceManager
+        for ws in 1..=9 {
+            if let Some(w) = self.workspace_manager.get_mut(ws) {
+                w.name = self.config.workspace_tag(ws).to_string();
             }
-            let _ = bar.update_all();
-            let _ = self.render_statusbar();
+        }
+
+        // Update _NET_DESKTOP_NAMES on root
+        let mut ewmh_names = Vec::new();
+        for ws in 1..=9 {
+            ewmh_names.extend_from_slice(self.config.workspace_tag(ws).as_bytes());
+            ewmh_names.push(0);
+        }
+        let _ = self.context.connection.change_property8(
+            x11rb::protocol::xproto::PropMode::REPLACE,
+            self.context.root_window,
+            self.ewmh_atoms.net_desktop_names,
+            self.ewmh_atoms.utf8_string,
+            &ewmh_names,
+        );
+
+        // Apply updated theme and modules to statusbar if active or toggle
+        if self.config.statusbar {
+            if self.statusbar.is_none() {
+                if let Err(err) = self.enable_statusbar(24) {
+                    eprintln!("[WARN  tilo::wm] Failed to enable statusbar on config reload: {}", err);
+                }
+            } else if let Some(ref mut bar) = self.statusbar {
+                bar.color_scheme = self.config.bar_color_scheme();
+                bar.separator = self.config.bar_separator().to_string();
+                bar.reconfigure_modules(&self.config.bar_modules);
+                bar.set_workspace_tags(&self.config.workspace_tags);
+                let font_name = self.config.bar_font();
+                if bar.renderer.is_none() || font_name != old_bar_font {
+                    let screen = &self.context.connection.setup().roots[self.context.screen_num];
+                    if let Ok(new_renderer) = crate::render::Renderer::new(
+                        &self.context.connection,
+                        bar.window_id,
+                        bar.rect.width as u16,
+                        bar.rect.height as u16,
+                        screen.root_depth,
+                        font_name,
+                    ) {
+                        if let Some(old_renderer) = bar.renderer.take() {
+                            let _ = old_renderer.destroy(&self.context.connection);
+                        }
+                        bar.attach_renderer(new_renderer);
+                    }
+                }
+                let _ = bar.update_all();
+                let _ = self.render_statusbar();
+            }
+        } else if self.statusbar.is_some() {
+            let _ = self.disable_statusbar();
         }
 
         // Apply updated theme to launcher if initialized
@@ -311,19 +347,21 @@ impl WindowManager {
             launcher.border_color = Some(self.config.launcher_border_color());
             if launcher.visible && launcher.window_id != 0 {
                 let font_name = self.config.launcher_font();
-                let screen = &self.context.connection.setup().roots[self.context.screen_num];
-                if let Ok(new_renderer) = crate::render::Renderer::new(
-                    &self.context.connection,
-                    launcher.window_id,
-                    crate::launcher::LAUNCHER_WIDTH,
-                    crate::launcher::LAUNCHER_HEIGHT,
-                    screen.root_depth,
-                    font_name,
-                ) {
-                    if let Some(old_renderer) = launcher.renderer.take() {
-                        let _ = old_renderer.destroy(&self.context.connection);
+                if launcher.renderer.is_none() || font_name != old_launcher_font {
+                    let screen = &self.context.connection.setup().roots[self.context.screen_num];
+                    if let Ok(new_renderer) = crate::render::Renderer::new(
+                        &self.context.connection,
+                        launcher.window_id,
+                        crate::launcher::LAUNCHER_WIDTH,
+                        crate::launcher::LAUNCHER_HEIGHT,
+                        screen.root_depth,
+                        font_name,
+                    ) {
+                        if let Some(old_renderer) = launcher.renderer.take() {
+                            let _ = old_renderer.destroy(&self.context.connection);
+                        }
+                        launcher.attach_renderer(new_renderer);
                     }
-                    launcher.attach_renderer(new_renderer);
                 }
                 let _ = launcher.render(&self.context.connection);
             } else if !launcher.visible && launcher.window_id != 0 {
@@ -405,7 +443,7 @@ impl WindowManager {
 
         while self.running {
             if TERMINATE_SIGNAL.swap(false, Ordering::Relaxed) {
-                let _ = self.perform_graceful_shutdown();
+                let _ = self.perform_desktop_shutdown(None);
                 break;
             }
             if LAUNCHER_SIGNAL.swap(false, Ordering::Relaxed) {
@@ -463,7 +501,11 @@ impl WindowManager {
                 libc::poll(&mut pfd, 1, timeout_ms);
             }
         }
-        let _ = self.perform_graceful_shutdown();
+        if self.running {
+            let _ = self.perform_desktop_shutdown(None);
+        } else {
+            let _ = self.perform_graceful_shutdown();
+        }
         Ok(())
     }
 
@@ -596,6 +638,24 @@ pub fn manage_existing_windows(
     let _ = state.render_statusbar();
     let _ = state.context.flush();
     Ok(())
+}
+
+/// Executes the full desktop environment shutdown sequence.
+///
+/// Closes all running applications gracefully via ICCCM `WM_DELETE_WINDOW`
+/// (or forcefully kills unresponsive clients), cleans up state, releases X11 resources,
+/// and terminates the window manager.
+///
+/// # Arguments
+/// * `_conn` - The X11 connection.
+/// * `state` - The current WM state.
+/// * `timeout` - Optional timeout duration to wait for applications to close.
+pub fn perform_desktop_shutdown(
+    _conn: &impl Connection,
+    state: &mut WindowManager,
+    timeout: Option<std::time::Duration>,
+) -> Result<(), WmError> {
+    state.perform_desktop_shutdown(timeout)
 }
 
 /// Executes the graceful shutdown sequence.

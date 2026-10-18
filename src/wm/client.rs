@@ -13,6 +13,8 @@ use crate::icccm::{
 use crate::rules::{apply_rules as apply_window_rules, RuleAction, WindowRule};
 use crate::x11::X11Error;
 use crate::error::{is_connection_lost_error, WmError};
+use std::collections::HashMap;
+use std::time::{Duration, Instant};
 use x11rb::protocol::xproto::{
     ButtonIndex, ChangeWindowAttributesAux, ConfigureWindowAux, ConnectionExt, EventMask,
     InputFocus, MapState, ModMask, StackMode, Window,
@@ -370,6 +372,125 @@ impl WindowManager {
         let _ = self.retile();
         let _ = self.render_statusbar();
         let _ = self.context.flush();
+        Ok(())
+    }
+
+    /// Returns the PID associated with a client window via `_NET_WM_PID` if set.
+    pub fn get_client_pid(&self, window: Window) -> Option<u32> {
+        crate::x11::ewmh::get_wm_pid(
+            &self.context.connection,
+            window,
+            self.ewmh_atoms.net_wm_pid,
+        ).ok().flatten()
+    }
+
+    /// Closes all running application windows gracefully using ICCCM `WM_DELETE_WINDOW`,
+    /// waiting for clients to terminate, and falling back to forceful killing if they do not
+    /// exit within `timeout`.
+    pub fn close_all_clients(&mut self, timeout: Duration) -> Result<(), WmError> {
+        let mut all_windows: Vec<Window> = self.client_state.all_clients().to_vec();
+        if let Some(sp_win) = self.scratchpad.client {
+            if !all_windows.contains(&sp_win) {
+                all_windows.push(sp_win);
+            }
+        }
+
+        if all_windows.is_empty() {
+            return Ok(());
+        }
+
+        let mut pids: HashMap<Window, Option<u32>> = HashMap::new();
+        for &win in &all_windows {
+            pids.insert(win, self.get_client_pid(win));
+        }
+
+        // 1. Send graceful close request (WM_DELETE_WINDOW) to all client windows
+        for &win in &all_windows {
+            let _ = self.send_wm_delete(win);
+        }
+        let _ = self.context.flush();
+
+        // 2. Event polling wait loop
+        let start = Instant::now();
+        let my_pid = std::process::id();
+
+        while !self.client_state.is_empty() && start.elapsed() < timeout {
+            let _ = self.process_pending_events();
+            if self.client_state.is_empty() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+
+        // 3. Forceful kill fallback for any stubborn clients
+        let remaining: Vec<Window> = self.client_state.all_clients().to_vec();
+        if !remaining.is_empty() {
+            for &win in &remaining {
+                let _ = self.context.connection.kill_client(win);
+                if let Some(Some(pid)) = pids.get(&win) {
+                    if *pid != my_pid && *pid > 1 {
+                        unsafe {
+                            libc::kill(*pid as i32, libc::SIGTERM);
+                        }
+                    }
+                }
+            }
+            let _ = self.context.flush();
+
+            // Brief drain period (up to 300ms)
+            let drain_start = Instant::now();
+            while !self.client_state.is_empty() && drain_start.elapsed() < Duration::from_millis(300) {
+                let _ = self.process_pending_events();
+                if self.client_state.is_empty() {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+
+            // Final SIGKILL for remaining processes
+            for &win in &remaining {
+                if let Some(Some(pid)) = pids.get(&win) {
+                    if *pid != my_pid && *pid > 1 {
+                        unsafe {
+                            if libc::kill(*pid as i32, 0) == 0 {
+                                libc::kill(*pid as i32, libc::SIGKILL);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if self.scratchpad.client.is_some() {
+            self.scratchpad.clear_client();
+        }
+        self.client_state = ClientState::new();
+        for ws in self.workspace_manager.workspaces.values_mut() {
+            ws.clients.clear();
+            ws.focused_client = None;
+        }
+
+        Ok(())
+    }
+
+    /// Executes a full desktop environment shutdown:
+    /// 1. Closes all running applications gracefully via ICCCM `WM_DELETE_WINDOW`.
+    /// 2. Waits up to `timeout` (or `config.shutdown_timeout_ms`) for apps to exit.
+    /// 3. Forcefully terminates any unresponsive clients (`KillClient` / `SIGKILL`).
+    /// 4. Releases WM resources, destroys statusbar and launcher, clears root properties and grabs.
+    /// 5. Reverts focus and stops the main event loop.
+    pub fn perform_desktop_shutdown(
+        &mut self,
+        timeout: Option<Duration>,
+    ) -> Result<(), WmError> {
+        self.running = false;
+        let timeout_duration = timeout.unwrap_or_else(|| {
+            Duration::from_millis(self.config.shutdown_timeout_ms)
+        });
+
+        let _ = self.close_all_clients(timeout_duration);
+        self.perform_graceful_shutdown()?;
+
         Ok(())
     }
 

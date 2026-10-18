@@ -61,6 +61,7 @@ pub struct EwmhAtoms {
     pub net_wm_state_fullscreen: Atom,
     pub net_wm_state_above: Atom,
     pub net_close_window: Atom,
+    pub net_wm_pid: Atom,
     pub utf8_string: Atom,
 }
 
@@ -81,6 +82,7 @@ impl EwmhAtoms {
         let net_wm_state_fullscreen = conn.intern_atom(false, b"_NET_WM_STATE_FULLSCREEN")?;
         let net_wm_state_above = conn.intern_atom(false, b"_NET_WM_STATE_ABOVE")?;
         let net_close_window = conn.intern_atom(false, b"_NET_CLOSE_WINDOW")?;
+        let net_wm_pid = conn.intern_atom(false, b"_NET_WM_PID")?;
         let utf8_string = conn.intern_atom(false, b"UTF8_STRING")?;
 
         Ok(Self {
@@ -98,12 +100,13 @@ impl EwmhAtoms {
             net_wm_state_fullscreen: net_wm_state_fullscreen.reply()?.atom,
             net_wm_state_above: net_wm_state_above.reply()?.atom,
             net_close_window: net_close_window.reply()?.atom,
+            net_wm_pid: net_wm_pid.reply()?.atom,
             utf8_string: utf8_string.reply()?.atom,
         })
     }
 
     /// Returns the array of supported EWMH atoms to set on `_NET_SUPPORTED`.
-    pub fn supported_atoms(&self) -> [Atom; 14] {
+    pub fn supported_atoms(&self) -> [Atom; 15] {
         [
             self.net_supported,
             self.net_client_list,
@@ -119,6 +122,7 @@ impl EwmhAtoms {
             self.net_wm_state_fullscreen,
             self.net_wm_state_above,
             self.net_close_window,
+            self.net_wm_pid,
         ]
     }
 }
@@ -478,6 +482,28 @@ pub fn get_supporting_wm_check(
         root,
         atoms.net_supporting_wm_check,
         AtomEnum::WINDOW,
+        0,
+        1,
+    )?.reply();
+
+    if let Ok(prop) = reply
+        && let Some(mut val32) = prop.value32() {
+            return Ok(val32.next());
+        }
+    Ok(None)
+}
+
+/// Reads the application window's `_NET_WM_PID` property.
+pub fn get_wm_pid(
+    conn: &impl Connection,
+    window: Window,
+    net_wm_pid: Atom,
+) -> Result<Option<u32>, X11Error> {
+    let reply = conn.get_property(
+        false,
+        window,
+        net_wm_pid,
+        AtomEnum::CARDINAL,
         0,
         1,
     )?.reply();
