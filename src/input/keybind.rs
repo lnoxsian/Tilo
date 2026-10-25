@@ -27,6 +27,8 @@ pub const XK_SPACE: Keysym = 0x0020;
 pub const XK_DELETE: Keysym = 0xffff;
 pub const XK_COMMA: Keysym = 0x002c;
 pub const XK_PERIOD: Keysym = 0x002e;
+pub const XK_LESS: Keysym = 0x003c; // < (less than)
+pub const XK_GREATER: Keysym = 0x003e; // > (greater than)
 pub const XK_GRAVE: Keysym = 0x0060; // ` (grave accent / backtick)
 pub const XK_ASCIITILDE: Keysym = 0x007e; // ~ (tilde)
 
@@ -224,6 +226,8 @@ pub fn parse_keysym(name: &str) -> Option<Keysym> {
         "End" | "end" => Some(XK_END),
         "comma" | "," => Some(XK_COMMA),
         "period" | "." => Some(XK_PERIOD),
+        "less" | "<" => Some(XK_LESS),
+        "greater" | ">" => Some(XK_GREATER),
         "grave" | "`" => Some(XK_GRAVE),
         "asciitilde" | "~" | "tilde" => Some(XK_ASCIITILDE),
         "Num_Lock" | "NumLock" => Some(XK_NUM_LOCK),
@@ -350,9 +354,11 @@ pub fn default_keybindings() -> Vec<KeyBind> {
         KeyBind::new(MOD_SUPER | MOD_SHIFT, XK_7, Action::MoveToWorkspace(7)),
         KeyBind::new(MOD_SUPER | MOD_SHIFT, XK_8, Action::MoveToWorkspace(8)),
         KeyBind::new(MOD_SUPER | MOD_SHIFT, XK_9, Action::MoveToWorkspace(9)),
-        // Multi-Monitor Focus
+        // Multi-Monitor Focus (Mod + , / . and Mod + Shift + , / . i.e. Mod + < / >)
         KeyBind::new(MOD_SUPER, XK_COMMA, Action::FocusMonitorLeft),
         KeyBind::new(MOD_SUPER, XK_PERIOD, Action::FocusMonitorRight),
+        KeyBind::new(MOD_SUPER | MOD_SHIFT, XK_COMMA, Action::FocusMonitorLeft),
+        KeyBind::new(MOD_SUPER | MOD_SHIFT, XK_PERIOD, Action::FocusMonitorRight),
         // BSP Tile Resizing
         KeyBind::new(MOD_SUPER | MOD_CONTROL, XK_LEFT, Action::ResizeTile(Direction::Left)),
         KeyBind::new(MOD_SUPER | MOD_CONTROL, XK_RIGHT, Action::ResizeTile(Direction::Right)),

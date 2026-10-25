@@ -126,6 +126,8 @@ pub struct WindowManager {
     pub config: Config,
     /// Built-in statusbar instance if enabled.
     pub statusbar: Option<Statusbar>,
+    /// Built-in statusbar instances on secondary monitors.
+    pub secondary_statusbars: Vec<Statusbar>,
     /// Built-in application launcher instance if initialized.
     pub launcher: Option<crate::launcher::Launcher>,
     /// Dedicated floating scratchpad state (Phase 23).
@@ -185,13 +187,18 @@ impl WindowManager {
             context.screen_height as u32,
         );
         let _ = setup_randr_events(&context.connection, context.root_window);
-        if let Ok(randr_monitors) = query_monitors(
+        if let Ok(monitors) = query_monitors(
             &context.connection,
             context.root_window,
             context.screen_width as u32,
             context.screen_height as u32,
         ) {
-            let _ = monitor_manager.reconcile_monitors(randr_monitors);
+            println!(
+                "[INFO  tilo::wm] Detected {} monitor(s): {:?}",
+                monitors.len(),
+                monitors.iter().map(|m| format!("id={} {}x{}+{}+{} ws={}", m.id, m.width, m.height, m.x, m.y, m.workspace)).collect::<Vec<_>>()
+            );
+            let _ = monitor_manager.reconcile_monitors(monitors);
         }
 
         let mod_mask = parse_modifier(&config.mod_key).unwrap_or(MOD_SUPER);
@@ -217,6 +224,7 @@ impl WindowManager {
             supporting_window,
             monitor_manager,
             statusbar: None,
+            secondary_statusbars: Vec::new(),
             launcher: {
                 let mut l = crate::launcher::Launcher::new();
                 l.color_scheme = config.launcher_color_scheme();
@@ -263,7 +271,7 @@ impl WindowManager {
             );
         }
 
-        let old_bar_font = self.config.bar_font().to_string();
+        let _old_bar_font = self.config.bar_font().to_string();
         let old_launcher_font = self.config.launcher_font().to_string();
         self.config = config;
 
@@ -308,36 +316,11 @@ impl WindowManager {
 
         // Apply updated theme and modules to statusbar if active or toggle
         if self.config.statusbar {
-            if self.statusbar.is_none() {
-                if let Err(err) = self.enable_statusbar(24) {
-                    eprintln!("[WARN  tilo::wm] Failed to enable statusbar on config reload: {}", err);
-                }
-            } else if let Some(ref mut bar) = self.statusbar {
-                bar.color_scheme = self.config.bar_color_scheme();
-                bar.separator = self.config.bar_separator().to_string();
-                bar.reconfigure_modules(&self.config.bar_modules);
-                bar.set_workspace_tags(&self.config.workspace_tags);
-                let font_name = self.config.bar_font();
-                if bar.renderer.is_none() || font_name != old_bar_font {
-                    let screen = &self.context.connection.setup().roots[self.context.screen_num];
-                    if let Ok(new_renderer) = crate::render::Renderer::new(
-                        &self.context.connection,
-                        bar.window_id,
-                        bar.rect.width as u16,
-                        bar.rect.height as u16,
-                        screen.root_depth,
-                        font_name,
-                    ) {
-                        if let Some(old_renderer) = bar.renderer.take() {
-                            let _ = old_renderer.destroy(&self.context.connection);
-                        }
-                        bar.attach_renderer(new_renderer);
-                    }
-                }
-                let _ = bar.update_all();
-                let _ = self.render_statusbar();
+            let bar_height = self.statusbar.as_ref().map(|b| b.rect.height).unwrap_or(24);
+            if let Err(err) = self.enable_statusbar(bar_height) {
+                eprintln!("[WARN  tilo::wm] Failed to enable statusbar on config reload: {}", err);
             }
-        } else if self.statusbar.is_some() {
+        } else if self.statusbar.is_some() || !self.secondary_statusbars.is_empty() {
             let _ = self.disable_statusbar();
         }
 
@@ -468,8 +451,11 @@ impl WindowManager {
             }
 
             // Periodic statusbar update if statusbar is active
-            let timeout_ms = if let Some(ref mut bar) = self.statusbar {
-                let time_until_next = bar.time_until_next_update();
+            let timeout_ms = if self.statusbar.is_some() || !self.secondary_statusbars.is_empty() {
+                let mut time_until_next = self.statusbar.as_ref().map(|b| b.time_until_next_update()).unwrap_or(std::time::Duration::from_secs(1));
+                for b in &self.secondary_statusbars {
+                    time_until_next = time_until_next.min(b.time_until_next_update());
+                }
                 if time_until_next.is_zero() || last_status_update.elapsed() >= std::time::Duration::from_millis(1000) {
                     if self.update_statusbar() {
                         had_activity = true;
@@ -691,6 +677,9 @@ pub fn perform_graceful_shutdown(
 
     // 2. Remove statusbar
     if let Some(bar) = state.statusbar.take() {
+        let _ = bar.destroy(conn);
+    }
+    for bar in state.secondary_statusbars.drain(..) {
         let _ = bar.destroy(conn);
     }
 

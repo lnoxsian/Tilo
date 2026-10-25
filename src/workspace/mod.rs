@@ -14,12 +14,35 @@ use x11rb::protocol::xproto::Window;
 /// Represents a unique identifier for a workspace.
 pub type WorkspaceId = u32;
 
+/// Maps a monitor ID and 1-based display tag (1..=9) to an internal [`WorkspaceId`].
+#[inline]
+pub const fn monitor_workspace_id(mon_id: u32, tag: u32) -> WorkspaceId {
+    (mon_id * 10) + tag
+}
+
+/// Extracts the 1-based display tag (1..=9) from an internal [`WorkspaceId`].
+#[inline]
+pub const fn workspace_to_tag(ws_id: WorkspaceId) -> u32 {
+    let tag = ws_id % 10;
+    if tag == 0 {
+        1
+    } else {
+        tag
+    }
+}
+
+/// Extracts the owning monitor ID from an internal [`WorkspaceId`].
+#[inline]
+pub const fn workspace_to_monitor_id(ws_id: WorkspaceId) -> u32 {
+    ws_id / 10
+}
+
 /// Defines the state and layout of a single workspace.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Workspace {
-    /// Unique identifier for this workspace (e.g., 1-9).
+    /// Unique identifier for this workspace (e.g., 1-9 for mon 0, 11-19 for mon 1).
     pub id: WorkspaceId,
-    /// The name of the workspace, typically matching the ID as a string, but configurable.
+    /// The name of the workspace, typically matching the display tag as a string, but configurable.
     pub name: String,
     /// Ordered list of client windows currently managed in this workspace.
     pub clients: Vec<Window>,
@@ -36,7 +59,7 @@ impl Workspace {
     pub fn new(id: WorkspaceId) -> Self {
         Self {
             id,
-            name: id.to_string(),
+            name: workspace_to_tag(id).to_string(),
             clients: Vec::new(),
             focused_client: None,
             bsp_tree: crate::layout::BspTree::new(),

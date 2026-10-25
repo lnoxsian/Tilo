@@ -3,6 +3,7 @@
 use super::WindowManager;
 use crate::bar::{Statusbar, StatusbarError};
 use crate::layout::{LayoutType, Rect};
+use crate::workspace::WorkspaceId;
 use crate::x11::X11Error;
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::{
@@ -14,24 +15,39 @@ impl WindowManager {
         if let Some(old_bar) = self.statusbar.take() {
             let _ = old_bar.destroy(&self.context.connection);
         }
-        let rect = Rect::new(0, 0, self.context.screen_width as u32, height);
+        for old_sec in self.secondary_statusbars.drain(..) {
+            let _ = old_sec.destroy(&self.context.connection);
+        }
+
         let screen = &self.context.connection.setup().roots[self.context.screen_num];
         let bar_colors = self.config.bar_color_scheme();
-        let win_id = crate::bar::create_statusbar_window_with_color(&self.context.connection, screen, rect, bar_colors.bg)?;
+        let font_name = self.config.bar_font();
+
+        // 1. Primary monitor: full statusbar with all configured modules
+        let primary_mon = self.monitor_manager.monitors.iter().find(|m| m.is_primary)
+            .or_else(|| self.monitor_manager.monitors.first())
+            .cloned();
+        let (prim_x, prim_y, prim_w, prim_id, prim_ws) = if let Some(ref m) = primary_mon {
+            (m.x, m.y, m.width, m.id, m.workspace)
+        } else {
+            (0, 0, self.context.screen_width as u32, 0, self.current_workspace)
+        };
+        let prim_rect = Rect::new(prim_x, prim_y, prim_w, height);
+        let win_id = crate::bar::create_statusbar_window_with_color(&self.context.connection, screen, prim_rect, bar_colors.bg)?;
         let _ = self.cursor_manager.apply_window(&self.context.connection, win_id);
-        let mut bar = Statusbar::with_modules(win_id, rect, &self.config.bar_modules, bar_colors);
+        let mut bar = Statusbar::with_modules(win_id, prim_rect, &self.config.bar_modules, bar_colors);
         bar.separator = self.config.bar_separator().to_string();
         bar.set_workspace_tags(&self.config.workspace_tags);
-        let occupied = self.workspace_manager.occupied_workspaces();
-        bar.set_workspace(self.current_workspace, &occupied);
+        let prim_tag = crate::workspace::workspace_to_tag(prim_ws);
+        let occupied_prim = self.monitor_occupied_tags(prim_id);
+        bar.set_workspace(prim_tag, &occupied_prim);
 
         // Initialize and attach double-buffered renderer
-        let font_name = self.config.bar_font();
         match crate::render::Renderer::new(
             &self.context.connection,
             win_id,
-            rect.width as u16,
-            rect.height as u16,
+            prim_rect.width as u16,
+            prim_rect.height as u16,
             screen.root_depth,
             font_name,
         ) {
@@ -39,85 +55,195 @@ impl WindowManager {
                 bar.attach_renderer(renderer);
             }
             Err(err) => {
-                eprintln!("[WARN  tilo::wm] Failed to initialize statusbar renderer: {}", err);
+                eprintln!("[WARN  tilo::wm] Failed to initialize primary statusbar renderer: {}", err);
             }
         }
         let _ = bar.update_all();
-
         self.statusbar = Some(bar);
+
+        // 2. Secondary monitors: statusbars with all features minus hardware metrics
+        let monitors = self.monitor_manager.monitors.clone();
+        for m in &monitors {
+            if m.id == prim_id {
+                continue;
+            }
+            if let Ok(sec_bar) = self.create_secondary_statusbar(m, height) {
+                self.secondary_statusbars.push(sec_bar);
+            }
+        }
+
         let _ = self.render_statusbar();
         let _ = self.retile();
         Ok(win_id)
     }
 
-    /// Disables and destroys the built-in statusbar, releasing reserved screen space.
+    /// Creates and initializes a secondary statusbar for a non-primary monitor.
+    pub fn create_secondary_statusbar(
+        &self,
+        mon: &crate::monitor::Monitor,
+        height: u32,
+    ) -> Result<Statusbar, StatusbarError> {
+        let screen = &self.context.connection.setup().roots[self.context.screen_num];
+        let bar_colors = self.config.bar_color_scheme();
+        let font_name = self.config.bar_font();
+        let sec_modules: Vec<crate::bar::modules::BarModuleType> = self
+            .config
+            .bar_modules
+            .iter()
+            .copied()
+            .filter(|m| *m == crate::bar::modules::BarModuleType::Clock)
+            .collect();
+
+        let sec_rect = Rect::new(mon.x, mon.y, mon.width, height);
+        let sec_win = crate::bar::create_statusbar_window_with_color(
+            &self.context.connection,
+            screen,
+            sec_rect,
+            bar_colors.bg,
+        )?;
+        let _ = self.cursor_manager.apply_window(&self.context.connection, sec_win);
+        let mut sec_bar = Statusbar::with_modules(sec_win, sec_rect, &sec_modules, bar_colors);
+        sec_bar.separator = self.config.bar_separator().to_string();
+        sec_bar.set_workspace_tags(&self.config.workspace_tags);
+        let sec_tag = crate::workspace::workspace_to_tag(mon.workspace);
+        let occupied_sec = self.monitor_occupied_tags(mon.id);
+        sec_bar.set_workspace(sec_tag, &occupied_sec);
+        if let Ok(renderer) = crate::render::Renderer::new(
+            &self.context.connection,
+            sec_win,
+            sec_rect.width as u16,
+            sec_rect.height as u16,
+            screen.root_depth,
+            font_name,
+        ) {
+            sec_bar.attach_renderer(renderer);
+        }
+        let _ = sec_bar.update_all();
+        Ok(sec_bar)
+    }
+
+    /// Disables and destroys all built-in statusbars, releasing reserved screen space.
     pub fn disable_statusbar(&mut self) -> Result<(), X11Error> {
         if let Some(bar) = self.statusbar.take() {
             bar.destroy(&self.context.connection)?;
-            self.retile()?;
         }
+        for bar in self.secondary_statusbars.drain(..) {
+            let _ = bar.destroy(&self.context.connection);
+        }
+        self.retile()?;
         Ok(())
     }
 
     /// Updates all statusbar modules and re-renders if metrics or text changed.
     pub fn update_statusbar(&mut self) -> bool {
-        let changed = if let Some(ref mut bar) = self.statusbar {
+        let mut changed = if let Some(ref mut bar) = self.statusbar {
             bar.update_all()
         } else {
             false
         };
+        for bar in &mut self.secondary_statusbars {
+            if bar.update_all() {
+                changed = true;
+            }
+        }
         if changed {
             let _ = self.render_statusbar();
         }
         changed
     }
 
-    /// Redraws the statusbar UI using the attached renderer.
-    pub fn render_statusbar(&mut self) -> Result<(), StatusbarError> {
-        let current_ws = self.current_workspace;
-        let occupied = self.workspace_manager.occupied_workspaces();
-        let focused = self.focused_window();
-        let ws_layout = self.workspace_manager.get(current_ws).map(|ws| ws.layout).unwrap_or_default();
-        let layout_symbol = match focused {
+    /// Extracts window title, layout symbol, and tab info for a workspace.
+    pub fn workspace_display_info(
+        &self,
+        ws: WorkspaceId,
+    ) -> (String, &'static str, Option<Vec<crate::bar::tabs::TabInfo>>) {
+        let title = self
+            .workspace_focus
+            .focused_window_on(ws)
+            .and_then(|w| self.client_state.get_client(w))
+            .and_then(|c| c.title.as_deref())
+            .unwrap_or("")
+            .to_string();
+        let layout = self
+            .workspace_manager
+            .get(ws)
+            .map(|w| w.layout)
+            .unwrap_or(self.config.layout);
+        let focused = self.workspace_focus.focused_window_on(ws);
+        let layout_sym = match focused {
             Some(w) if self.client_state.get_client(w).map(|c| c.floating).unwrap_or(false) => "><>",
-            _ => ws_layout.symbol(),
+            _ => layout.symbol(),
         };
-        let fallback_title;
-        let title_str: &str = if let Some(w) = focused {
-            if let Some(c) = self.client_state.get_client(w) {
-                if let Some(ref t) = c.title {
-                    t.as_str()
-                } else {
-                    fallback_title = self.get_window_title(w);
-                    fallback_title.as_str()
-                }
-            } else {
-                fallback_title = self.get_window_title(w);
-                fallback_title.as_str()
-            }
-        } else {
-            ""
-        };
-        let tabs = if ws_layout == LayoutType::Tabbed {
-            Some(self.get_workspace_tabs(current_ws))
+        let tabs = if layout == LayoutType::Tabbed {
+            Some(self.get_workspace_tabs(ws))
         } else {
             None
         };
+        (title, layout_sym, tabs)
+    }
+
+    /// Redraws all active statusbar UIs (primary and secondary) using their attached renderers.
+    pub fn render_statusbar(&mut self) -> Result<(), StatusbarError> {
+        let primary_mon = self.monitor_manager.monitors.iter().find(|m| m.is_primary)
+            .or_else(|| self.monitor_manager.monitors.first())
+            .cloned();
+        let primary_id = primary_mon.as_ref().map(|m| m.id).unwrap_or(0);
+        let primary_ws = primary_mon.as_ref().map(|m| m.workspace).unwrap_or(self.current_workspace);
+
+        // 1. Render primary statusbar
+        let (primary_title, primary_layout_sym, primary_tabs) = self.workspace_display_info(primary_ws);
+        let primary_tag = crate::workspace::workspace_to_tag(primary_ws);
+        let occupied_prim = self.monitor_occupied_tags(primary_id);
+
         if let Some(ref mut bar) = self.statusbar {
-            bar.set_title(title_str);
+            bar.set_title(&primary_title);
+            bar.set_workspace(primary_tag, &occupied_prim);
             if let Err(err) = bar.render(
                 &self.context.connection,
-                current_ws,
-                &occupied,
-                layout_symbol,
-                title_str,
-                tabs.as_deref(),
+                primary_tag,
+                &occupied_prim,
+                primary_layout_sym,
+                &primary_title,
+                primary_tabs.as_deref(),
                 &self.config.tab_config,
             ) {
-                eprintln!("[WARN  tilo::wm] Statusbar render failed: {}", err);
-                return Err(err);
+                eprintln!("[WARN  tilo::wm] Primary statusbar render failed: {}", err);
             }
         }
+
+        // 2. Precompute info for secondary statusbars to avoid borrowing self while iterating iter_mut
+        let monitors = self.monitor_manager.monitors.clone();
+        let sec_info: Vec<_> = self.secondary_statusbars.iter().map(|bar| {
+            let mon = monitors.iter().find(|m| {
+                bar.rect.x >= m.x && (bar.rect.x as i32) < (m.x + m.width as i32)
+            });
+            let sec_mon_id = mon.map(|m| m.id).unwrap_or(1);
+            let sec_ws = mon.map(|m| m.workspace).unwrap_or(11);
+            let (sec_title, sec_layout_sym, sec_tabs) = self.workspace_display_info(sec_ws);
+            let sec_tag = crate::workspace::workspace_to_tag(sec_ws);
+            let occupied_sec = self.monitor_occupied_tags(sec_mon_id);
+
+            (sec_title, sec_layout_sym, sec_tabs, sec_tag, occupied_sec)
+        }).collect();
+
+        for (bar, (sec_title, sec_layout_sym, sec_tabs, sec_tag, occupied_sec)) in
+            self.secondary_statusbars.iter_mut().zip(sec_info.into_iter())
+        {
+            bar.set_title(&sec_title);
+            bar.set_workspace(sec_tag, &occupied_sec);
+            if let Err(err) = bar.render(
+                &self.context.connection,
+                sec_tag,
+                &occupied_sec,
+                sec_layout_sym,
+                &sec_title,
+                sec_tabs.as_deref(),
+                &self.config.tab_config,
+            ) {
+                eprintln!("[WARN  tilo::wm] Secondary statusbar render failed: {}", err);
+            }
+        }
+
         Ok(())
     }
 
@@ -138,8 +264,23 @@ impl WindowManager {
         }
     }
 
-    /// Opens the application launcher overlay with the given mode, centering it on the active monitor and grabbing keyboard.
+    /// Opens the application launcher overlay with the given mode, centering it on the monitor containing the mouse pointer and grabbing keyboard.
     pub fn open_launcher_with_mode(&mut self, mode: crate::launcher::LauncherMode) -> Result<(), StatusbarError> {
+        // Query pointer coordinates to target whichever monitor contains the mouse cursor
+        let target_mon_id = if let Ok(cookie) = self.context.connection.query_pointer(self.context.root_window)
+            && let Ok(reply) = cookie.reply()
+        {
+            self.monitor_manager.monitor_for_point(reply.root_x as i32, reply.root_y as i32).map(|m| m.id)
+        } else {
+            None
+        };
+
+        if let Some(mon_id) = target_mon_id {
+            if mon_id != self.monitor_manager.active_monitor_id {
+                let _ = self.activate_monitor(mon_id);
+            }
+        }
+
         let active_mon = self.monitor_manager.active_monitor().clone();
         let width = crate::launcher::LAUNCHER_WIDTH;
         let height = crate::launcher::LAUNCHER_HEIGHT;

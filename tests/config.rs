@@ -562,7 +562,7 @@ fn test_default_config_created_when_missing() {
     assert_eq!(config.layout, tilo::layout::LayoutType::Bsp);
     assert_eq!(config.theme.bg, 0x1a1b26);
     assert_eq!(config.theme.fg, 0xc0caf5);
-    assert_eq!(config.bindings.len(), 61);
+    assert_eq!(config.bindings.len(), 63);
 
     let _ = std::fs::remove_dir_all(&temp_dir);
 }

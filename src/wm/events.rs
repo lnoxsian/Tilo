@@ -66,7 +66,7 @@ impl WindowManager {
                 self.handle_client_message(&ev)?;
             }
             Event::ConfigureNotify(ev) => {
-                if ev.window == self.context.root_window || ev.event == self.context.root_window {
+                if ev.window == self.context.root_window {
                     let _ = self.refresh_monitors();
                 }
             }
@@ -75,10 +75,11 @@ impl WindowManager {
             }
             Event::Expose(ev) => {
                 if ev.count == 0 {
-                    if let Some(ref bar) = self.statusbar
-                        && ev.window == bar.window_id {
-                            let _ = self.render_statusbar();
-                        }
+                    let is_primary_bar = self.statusbar.as_ref().map(|b| ev.window == b.window_id).unwrap_or(false);
+                    let is_sec_bar = self.secondary_statusbars.iter().any(|b| ev.window == b.window_id);
+                    if is_primary_bar || is_sec_bar {
+                        let _ = self.render_statusbar();
+                    }
                     let is_launcher_expose = self
                         .launcher
                         .as_ref()
@@ -315,15 +316,19 @@ impl WindowManager {
             Action::Move(dir) => {
                 let _ = self.swap_in_direction(dir)?;
             }
-            Action::Workspace(ws) => {
-                self.switch_workspace(ws)?;
+            Action::Workspace(tag) => {
+                let active_mon = self.monitor_manager.active_monitor_id;
+                let target_ws = crate::workspace::monitor_workspace_id(active_mon, tag);
+                self.switch_workspace(target_ws)?;
             }
-            Action::MoveToWorkspace(ws) => {
+            Action::MoveToWorkspace(tag) => {
                 let win = self.focused_window()
                     .or_else(|| self.workspace_focus.focused_window_on(self.current_workspace))
                     .or_else(|| self.workspace_manager.get(self.current_workspace).and_then(|w| w.clients.first().copied()));
                 if let Some(win) = win {
-                    self.move_to_workspace(win, ws)?;
+                    let active_mon = self.monitor_manager.active_monitor_id;
+                    let target_ws = crate::workspace::monitor_workspace_id(active_mon, tag);
+                    self.move_to_workspace(win, target_ws)?;
                 }
             }
             Action::ToggleFloating => {
@@ -534,26 +539,52 @@ impl WindowManager {
     /// - Normal Left Click: focus clicked window and replay event to client.
     pub fn handle_button_press(&mut self, event: &ButtonPressEvent) -> Result<(), X11Error> {
         // Statusbar mouse interaction (Workspace clicks, Tab clicks, and wheel switching)
-        if let Some(ref bar) = self.statusbar
-            && event.event == bar.window_id
-        {
+        let hit_bar_info = if let Some(ref bar) = self.statusbar && bar.window_id == event.event {
+            let mon_id = self.monitor_manager.monitors.iter()
+                .find(|m| m.is_primary)
+                .or_else(|| self.monitor_manager.monitors.first())
+                .map(|m| m.id)
+                .unwrap_or(0);
+            Some((bar.workspace_rects.clone(), bar.tab_rects.clone(), bar.rect.height, mon_id))
+        } else if let Some(bar) = self.secondary_statusbars.iter().find(|b| b.window_id == event.event) {
+            let mon_id = self.monitor_manager.monitors.iter()
+                .find(|m| bar.rect.x >= m.x && (bar.rect.x as i32) < (m.x + m.width as i32))
+                .map(|m| m.id)
+                .unwrap_or_else(|| self.monitor_manager.active_monitor_id);
+            Some((bar.workspace_rects.clone(), bar.tab_rects.clone(), bar.rect.height, mon_id))
+        } else {
+            None
+        };
+
+        if let Some((workspace_rects, tab_rects, bar_height, hit_mon_id)) = hit_bar_info {
+            // Activate the monitor hosting this statusbar if not currently active
+            if hit_mon_id != self.monitor_manager.active_monitor_id {
+                self.activate_monitor(hit_mon_id)?;
+            }
+            let mon_ws = self
+                .monitor_manager
+                .get_monitor(hit_mon_id)
+                .map(|m| m.workspace)
+                .unwrap_or(self.current_workspace);
+
             let click_x = event.event_x as i32;
             let click_y = event.event_y as i32;
 
             // 1. Mouse wheel over workspace region (Scroll up -> prev workspace, Scroll down -> next workspace)
             if self.config.workspace_wheel_switch && (event.detail == 4 || event.detail == 5)
-                && let Some(first) = bar.workspace_rects.first()
-                && let Some(last) = bar.workspace_rects.last()
+                && let Some(first) = workspace_rects.first()
+                && let Some(last) = workspace_rects.last()
             {
                 let min_x = first.1.x;
                 let max_x = last.1.x + last.1.width as i32;
                 if click_x >= min_x && click_x <= max_x {
-                    let current = self.current_workspace;
-                    let target_ws = if event.detail == 4 {
-                        if current > 1 { current - 1 } else { 9 }
+                    let current_tag = crate::workspace::workspace_to_tag(mon_ws);
+                    let target_tag = if event.detail == 4 {
+                        if current_tag > 1 { current_tag - 1 } else { 9 }
                     } else {
-                        if current < 9 { current + 1 } else { 1 }
+                        if current_tag < 9 { current_tag + 1 } else { 1 }
                     };
+                    let target_ws = crate::workspace::monitor_workspace_id(hit_mon_id, target_tag);
                     self.switch_workspace(target_ws)?;
                     return Ok(());
                 }
@@ -561,15 +592,16 @@ impl WindowManager {
 
             // 2. Direct workspace number clicks (1..=9)
             if self.config.workspace_mouse {
-                for (idx, &(ws, rect)) in bar.workspace_rects.iter().enumerate() {
-                    let is_hit = if idx + 1 < bar.workspace_rects.len() {
-                        let next_x = bar.workspace_rects[idx + 1].1.x;
+                for (idx, &(tag, rect)) in workspace_rects.iter().enumerate() {
+                    let is_hit = if idx + 1 < workspace_rects.len() {
+                        let next_x = workspace_rects[idx + 1].1.x;
                         click_x >= rect.x && click_x < next_x
                     } else {
                         click_x >= rect.x && click_x < rect.x + rect.width as i32 + 4
                     };
 
-                    if is_hit && click_y >= 0 && click_y < bar.rect.height as i32 {
+                    if is_hit && click_y >= 0 && click_y < bar_height as i32 {
+                        let target_ws = crate::workspace::monitor_workspace_id(hit_mon_id, tag);
                         if event.detail == 1 {
                             let clean_modifiers = u16::from(event.state) & 0x00FF & !(self.input_manager.num_lock_mask | MOD_LOCK);
                             if clean_modifiers & MOD_SHIFT != 0 {
@@ -577,10 +609,10 @@ impl WindowManager {
                                     .or_else(|| self.workspace_focus.focused_window_on(self.current_workspace))
                                     .or_else(|| self.workspace_manager.get(self.current_workspace).and_then(|w| w.clients.first().copied()));
                                 if let Some(win) = win {
-                                    self.move_to_workspace(win, ws)?;
+                                    self.move_to_workspace(win, target_ws)?;
                                 }
                             } else {
-                                self.switch_workspace(ws)?;
+                                self.switch_workspace(target_ws)?;
                             }
                             return Ok(());
                         } else if event.detail == 3 {
@@ -588,7 +620,7 @@ impl WindowManager {
                                 .or_else(|| self.workspace_focus.focused_window_on(self.current_workspace))
                                 .or_else(|| self.workspace_manager.get(self.current_workspace).and_then(|w| w.clients.first().copied()));
                             if let Some(win) = win {
-                                self.move_to_workspace(win, ws)?;
+                                self.move_to_workspace(win, target_ws)?;
                             }
                             return Ok(());
                         }
@@ -598,8 +630,8 @@ impl WindowManager {
 
             // 3. Mouse wheel over tab region
             if self.config.tab_config.wheel_switch && (event.detail == 4 || event.detail == 5)
-                && let Some(first) = bar.tab_rects.first()
-                && let Some(last) = bar.tab_rects.last()
+                && let Some(first) = tab_rects.first()
+                && let Some(last) = tab_rects.last()
             {
                 let min_x = first.1.x;
                 let max_x = last.1.x + last.1.width as i32;
@@ -615,7 +647,7 @@ impl WindowManager {
 
             // 4. Direct tab pill clicks (Left click: focus, Middle click: close)
             if self.config.tab_config.mouse {
-                for &(win, rect) in &bar.tab_rects {
+                for &(win, rect) in &tab_rects {
                     if click_x >= rect.x
                         && click_x < rect.x + rect.width as i32
                         && click_y >= rect.y
@@ -640,6 +672,12 @@ impl WindowManager {
         } else if self.client_state.contains(event.event) {
             event.event
         } else {
+            // Click occurred on root / background window or unmanaged window
+            if let Some(mon) = self.monitor_manager.monitor_for_point(event.root_x as i32, event.root_y as i32) {
+                if mon.id != self.monitor_manager.active_monitor_id {
+                    let _ = self.activate_monitor(mon.id);
+                }
+            }
             let event_time = if event.time != 0 { event.time } else { x11rb::CURRENT_TIME };
             let _ = self.context.connection.allow_events(Allow::REPLAY_POINTER, event_time);
             let _ = self.context.flush();

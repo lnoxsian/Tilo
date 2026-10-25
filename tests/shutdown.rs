@@ -2,7 +2,7 @@ use std::process::{Child, Command};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
-use tilo::{perform_desktop_shutdown, perform_graceful_shutdown};
+use tilo::perform_graceful_shutdown;
 use tilo::rules::{RuleAction, RuleCondition, WindowRule};
 use tilo::wm::WindowManager;
 use tilo::x11::X11Context;

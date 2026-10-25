@@ -253,12 +253,6 @@ impl WindowManager {
                 let _ = update_net_wm_state_fullscreen(&self.context.connection, window, true, &self.ewmh_atoms);
             }
 
-            // Update statusbar occupied workspaces before retiling & focusing
-            if let Some(ref mut bar) = self.statusbar {
-                let occupied = self.workspace_manager.occupied_workspaces();
-                bar.set_workspace(self.current_workspace, &occupied);
-            }
-
             // Retile active workspace FIRST so the window is positioned before being mapped
             self.retile()?;
             self.map_client(window)?;
@@ -278,11 +272,7 @@ impl WindowManager {
                 let _ = update_net_wm_state_fullscreen(&self.context.connection, window, true, &self.ewmh_atoms);
             }
             let _ = self.set_wm_state(window, WmState::Withdrawn);
-
-            if let Some(ref mut bar) = self.statusbar {
-                let occupied = self.workspace_manager.occupied_workspaces();
-                bar.set_workspace(self.current_workspace, &occupied);
-            }
+            let _ = self.render_statusbar();
         }
 
         let is_focused = self.focused_window() == Some(window);
@@ -626,12 +616,6 @@ impl WindowManager {
         }
         let _ = self.update_ewmh_client_list();
         if removed.is_some() {
-            // Update status bar occupied workspace indicators
-            if let Some(ref mut bar) = self.statusbar {
-                let occupied = self.workspace_manager.occupied_workspaces();
-                bar.set_workspace(self.current_workspace, &occupied);
-            }
-
             // Only retile and shift focus if the destroyed window belonged to the current workspace
             if ws == self.current_workspace {
                 let _ = self.retile();
@@ -645,6 +629,8 @@ impl WindowManager {
                 }
             } else if self.focused_window() == Some(window) {
                 let _ = self.clear_focus();
+            } else {
+                let _ = self.render_statusbar();
             }
             #[cfg(target_os = "linux")]
             unsafe {

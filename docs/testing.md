@@ -117,7 +117,19 @@ sudo apt install xserver-xephyr x11-apps xterm
 | `mouse` | Statusbar mouse and tab interactions |
 | `theme` | Available theme presets |
 | `all` | Comprehensive showcase (default) |
+| `multi` | Multi-monitor dual-workspace showcase with separate screens |
 | `tour` | Guided step-by-step interactive tour |
+
+### Multi-Monitor Options
+
+Simulate multiple physical monitors as separate Xephyr windows on your desktop:
+
+```bash
+./scripts/run-xephyr.sh --dual-monitor            # 2 separate monitor windows (720p each)
+./scripts/run-xephyr.sh -m 2 -r 800x600           # 2 separate monitor windows (800x600 each)
+./scripts/run-xephyr.sh -m 3 --480p               # 3 separate monitor windows (480p each)
+./scripts/run-xephyr.sh --dual-monitor --demo multi # dual-monitor layout demo
+```
 
 ### Layout Option
 

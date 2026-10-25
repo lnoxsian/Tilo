@@ -66,7 +66,7 @@ impl Monitor {
         width: u32,
         height: u32,
     ) -> Self {
-        Self::new(id, x, y, width, height, id, true)
+        Self::new(id, x, y, width, height, crate::workspace::monitor_workspace_id(id, 1), true)
     }
 
     /// Returns the bounding [`Rect`] geometry of the monitor.
@@ -226,16 +226,12 @@ impl MonitorManager {
             }
         }
 
-        // Assign unused workspaces to brand new monitors
-        let mut next_ws = 1;
+        // Assign monitor-specific initial workspace (tag 1) to brand new monitors
         for new_m in &mut new_monitors {
             if new_m.workspace == 0 || assigned_workspaces.iter().filter(|&&w| w == new_m.workspace).count() > 1 {
-                while assigned_workspaces.contains(&next_ws) && next_ws <= 9 {
-                    next_ws += 1;
-                }
-                new_m.workspace = next_ws;
-                assigned_workspaces.push(next_ws);
-                next_ws += 1;
+                let init_ws = crate::workspace::monitor_workspace_id(new_m.id, 1);
+                new_m.workspace = init_ws;
+                assigned_workspaces.push(init_ws);
             }
         }
 
@@ -324,7 +320,6 @@ pub fn query_monitors(
 
     let mut monitors = Vec::new();
     let mut seen_crtcs = Vec::new();
-    let mut next_ws = 1;
 
     for (idx, &output) in outputs.iter().enumerate() {
         let output_info = match conn.randr_get_output_info(output, config_timestamp)?.reply() {
@@ -352,17 +347,42 @@ pub fn query_monitors(
         }
 
         let is_primary = output == primary_output || (primary_output == 0 && monitors.is_empty());
+        let init_ws = crate::workspace::monitor_workspace_id(idx as MonitorId, 1);
         let monitor = Monitor::new(
             idx as MonitorId,
             i32::from(crtc_info.x),
             i32::from(crtc_info.y),
             u32::from(crtc_info.width),
             u32::from(crtc_info.height),
-            next_ws,
+            init_ws,
             is_primary,
         );
         monitors.push(monitor);
-        next_ws += 1;
+    }
+
+    if monitors.len() <= 1 {
+        // Fallback to Xinerama (used by multi-screen Xephyr and legacy multi-head systems)
+        if let Ok(reply) = x11rb::protocol::xinerama::ConnectionExt::xinerama_is_active(conn)
+            && let Ok(active) = reply.reply()
+            && active.state != 0
+            && let Ok(screens_reply) = x11rb::protocol::xinerama::ConnectionExt::xinerama_query_screens(conn)
+            && let Ok(screens) = screens_reply.reply()
+            && screens.screen_info.len() > 1
+        {
+            monitors.clear();
+            for (idx, screen) in screens.screen_info.iter().enumerate() {
+                let init_ws = crate::workspace::monitor_workspace_id(idx as MonitorId, 1);
+                monitors.push(Monitor::new(
+                    idx as MonitorId,
+                    i32::from(screen.x_org),
+                    i32::from(screen.y_org),
+                    u32::from(screen.width),
+                    u32::from(screen.height),
+                    init_ws,
+                    idx == 0,
+                ));
+            }
+        }
     }
 
     if monitors.is_empty() {
@@ -472,12 +492,12 @@ mod tests {
         assert!(disconnected.is_empty());
         assert_eq!(mm.monitors.len(), 2);
         assert_eq!(mm.monitors[0].workspace, 1);
-        assert_eq!(mm.monitors[1].workspace, 2);
+        assert_eq!(mm.monitors[1].workspace, 11);
 
         // Simulate disconnecting the second monitor
         let single_mon = vec![Monitor::new(0, 0, 0, 1920, 1080, 1, true)];
         let disconnected = mm.reconcile_monitors(single_mon);
-        assert_eq!(disconnected, vec![(1, 2)]);
+        assert_eq!(disconnected, vec![(1, 11)]);
         assert_eq!(mm.monitors.len(), 1);
     }
 }

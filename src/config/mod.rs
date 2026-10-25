@@ -1614,6 +1614,8 @@ bind $mod+Shift+9           move_to_workspace 9
 # Multi-Monitor Navigation
 bind $mod+comma             focus_monitor left
 bind $mod+period            focus_monitor right
+bind $mod+Shift+comma       focus_monitor left
+bind $mod+Shift+period      focus_monitor right
 
 # BSP Tiling Controls
 bind $mod+Ctrl+Left         resize left

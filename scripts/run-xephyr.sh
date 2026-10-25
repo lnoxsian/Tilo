@@ -43,6 +43,7 @@ CUSTOM_CONFIG_FILE=""
 ACTIVE_LAYOUT="bsp"
 THEME_PRESET="tokyo-night"
 THEME_NAME="Tokyo Night"
+NUM_MONITORS=1
 
 # Theme colors (defaults to Tokyo Night)
 COLOR_BG="0x1a1b26"
@@ -253,8 +254,11 @@ ${C_BOLD}tilo Xephyr Test & Demo Harness${C_RESET}
 ${C_YELLOW}Usage:${C_RESET}
   $0 [options]
 
-${C_YELLOW}Resolution Options:${C_RESET}
+${C_YELLOW}Resolution & Multi-Monitor Options:${C_RESET}
   -r, --res <preset|WxH>   Resolution preset (1366x768, 1080p, 720p, 480p) or custom WxH
+  -m, --monitors [count]   Number of monitor windows to simulate in Xephyr (default: 2)
+  --dual-monitor           Simulate 2 separate monitor windows (Xinerama multi-head)
+  --multi-monitor          Alias for --dual-monitor
   --1366, --1366x768       Shortcut for 1366x768 (WXGA)
   --1080p, --1080          Shortcut for 1920x1080 (Full HD)
   --720p, --720            Shortcut for 1280x720 (HD, default)
@@ -313,6 +317,19 @@ while [[ $# -gt 0 ]]; do
                 echo -e "${C_RED}Error: --res requires a resolution argument.${C_RESET}" >&2
                 exit 1
             fi
+            ;;
+        -m|--monitors)
+            if [[ $# -ge 2 ]] && [[ "$2" =~ ^[0-9]+$ ]]; then
+                NUM_MONITORS="$2"
+                shift 2
+            else
+                NUM_MONITORS=2
+                shift 1
+            fi
+            ;;
+        --dual-monitor|--dual-monitors|--multi-monitor|--multi-monitors)
+            NUM_MONITORS=2
+            shift 1
             ;;
         --1366|--1366x768)
             parse_resolution "1366x768"
@@ -536,10 +553,23 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 # Start Xephyr server
-echo -e "${C_GREEN}--> Launching Xephyr on display ${XEPHYR_DISPLAY} (${SCREEN_SIZE}, preset: ${SCREEN_PRESET})...${C_RESET}"
+XEPHYR_SCREEN_ARGS=()
+if [[ ${NUM_MONITORS} -gt 1 ]]; then
+    IFS='x' read -r MON_W MON_H <<< "${SCREEN_SIZE}"
+    XEPHYR_SCREEN_ARGS+=("+xinerama" "-screen" "${SCREEN_SIZE}")
+    for (( i=1; i<NUM_MONITORS; i++ )); do
+        OFFSET_X=$(( i * MON_W ))
+        XEPHYR_SCREEN_ARGS+=("-origin" "${OFFSET_X},0" "-screen" "${SCREEN_SIZE}")
+    done
+    echo -e "${C_GREEN}--> Launching Xephyr multi-monitor (${NUM_MONITORS} separate windows, each ${SCREEN_SIZE}) on display ${XEPHYR_DISPLAY}...${C_RESET}"
+else
+    XEPHYR_SCREEN_ARGS+=("-screen" "${SCREEN_SIZE}")
+    echo -e "${C_GREEN}--> Launching Xephyr on display ${XEPHYR_DISPLAY} (${SCREEN_SIZE}, preset: ${SCREEN_PRESET})...${C_RESET}"
+fi
+
 "${XEPHYR_BIN}" "${XEPHYR_DISPLAY}" \
     -ac \
-    -screen "${SCREEN_SIZE}" \
+    "${XEPHYR_SCREEN_ARGS[@]}" \
     -title "tilo [Xephyr ${XEPHYR_DISPLAY}]" \
     -resizeable \
     -br \
@@ -803,6 +833,26 @@ run_demo() {
             echo " - Or Scroll mouse wheel over workspace numbers to cycle through workspaces!"
             ;;
 
+        multi|monitors|multimonitor)
+            set_layout bsp
+            echo -e "${C_CYAN}Demo: Multi-Monitor Dual-Workspace Setup${C_RESET}"
+            echo "1. Spawning master client (xclock) on Workspace 1"
+            launch_client xclock
+            sleep 0.25
+            echo "2. Spawning secondary client (xcalc)"
+            launch_client xcalc
+            sleep 0.25
+            echo ""
+            echo -e "${C_GREEN}Multi-Monitor Controls in Tilo:${C_RESET}"
+            echo "   * Move your mouse to either monitor window and press ${C_BOLD}Mod4 + d${C_RESET}:"
+            echo "     The application launcher opens centered on whichever monitor your cursor is on!"
+            echo "   * Press ${C_BOLD}Mod4 + period (.)${C_RESET} : Focus monitor to the right"
+            echo "   * Press ${C_BOLD}Mod4 + comma (,)${C_RESET}  : Focus monitor to the left"
+            echo "   * Press ${C_BOLD}Mod4 + Shift + period (.)${C_RESET} : Move focused window to right monitor"
+            echo "   * Press ${C_BOLD}Mod4 + Shift + comma (,)${C_RESET}  : Move focused window to left monitor"
+            echo "   * Press ${C_BOLD}Mod4 + Shift + 1..9${C_RESET} : Move focused window directly to target workspace"
+            ;;
+
         theme|themes)
             echo -e "${C_CYAN}Available Theme Presets:${C_RESET}"
             echo "  - tokyo-night  : Tokyo Night (default)"
@@ -955,6 +1005,11 @@ show_session_info() {
     echo -e "${C_BOLD}Xephyr Session Info:${C_RESET}"
     echo -e "  Display    : ${C_GREEN}${XEPHYR_DISPLAY}${C_RESET}"
     echo -e "  Resolution : ${C_GREEN}${SCREEN_SIZE}${C_RESET} (Preset: ${SCREEN_PRESET})"
+    if [[ ${NUM_MONITORS} -gt 1 ]]; then
+        echo -e "  Monitors   : ${C_GREEN}${NUM_MONITORS} separate windows${C_RESET} (Xinerama multi-head)"
+    else
+        echo -e "  Monitors   : 1 window"
+    fi
     echo -e "  Layout     : ${C_CYAN}${ACTIVE_LAYOUT}${C_RESET}"
     echo -e "  Theme      : ${C_CYAN}${THEME_NAME}${C_RESET} (Preset: ${THEME_PRESET})"
     echo -e "  Config     : ${C_GRAY}${SESSION_CONFIG_FILE}${C_RESET}"
@@ -968,7 +1023,8 @@ show_help() {
     echo -e "  ${C_CYAN}launcher / app${C_RESET}       Toggle application launcher (SIGUSR1)"
     echo -e "  ${C_CYAN}layout <type>${C_RESET}        Switch layout (bsp, master, grid, tabbed, monocle, etc.)"
     echo -e "  ${C_CYAN}theme [preset]${C_RESET}       Switch theme (tokyo-night, catppuccin, nord, gruvbox, dracula, solarized)"
-    echo -e "  ${C_CYAN}demo <mode>${C_RESET}          Run demo (single, master, stack, grid, tabbed, bsp, rotate, scratchpad, mouse, workspaces, all, tour)"
+    echo -e "  ${C_CYAN}demo <mode>${C_RESET}          Run demo (single, master, stack, grid, tabbed, bsp, rotate, multi, scratchpad, mouse, workspaces, all, tour)"
+    echo -e "  ${C_CYAN}multi / monitors${C_RESET}     Show multi-monitor controls and test demo"
     echo -e "  ${C_CYAN}grid / tabbed / bsp${C_RESET}  Direct shortcuts to new layout demos"
     echo -e "  ${C_CYAN}rotate / scratchpad${C_RESET}  Direct shortcuts to master rotation & scratchpad demos"
     echo -e "  ${C_CYAN}mouse${C_RESET}                Show statusbar mouse interaction guide"
@@ -1140,6 +1196,9 @@ while true; do
             ;;
         workspaces|ws)
             run_demo workspaces
+            ;;
+        multi|monitors|multimonitor)
+            run_demo multi
             ;;
         all)
             run_demo all
