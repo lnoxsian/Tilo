@@ -615,40 +615,30 @@ impl Launcher {
         let w = self.rect.width as u16;
         let h = self.rect.height as u16;
 
-        // 1. Fill entire bar background
+        // 1. Fill entire bar background (no border)
         renderer.fill_rect(conn, renderer.pixmap, 0, 0, w, h, self.color_scheme.bg)?;
-
-        // 2. Draw 1px bottom border outline for crisp separation
-        let border_color = self.border_color.unwrap_or(self.color_scheme.border);
-        if h > 1 {
-            renderer.fill_rect(conn, renderer.pixmap, 0, (h - 1) as i16, w, 1, border_color)?;
-        }
 
         let baseline = renderer.vertical_center_baseline();
 
-        // 3. Prompt box pill on the left
-        let prompt_text = if self.mode == LauncherMode::Exit {
-            "Exit:"
+        // 2. Prompt prefix ('> ' like spotlight)
+        let prompt_prefix = if self.mode == LauncherMode::Exit {
+            "Exit > "
         } else {
-            "dmenu:"
+            "> "
         };
-        let prompt_text_w = renderer.text_width(prompt_text);
-        let prompt_pad = 8u16;
-        let prompt_box_w = prompt_text_w + (prompt_pad * 2);
-
-        // Fill prompt background with active_bg and draw text with active_fg (dwm dmenu style)
-        renderer.fill_rect(conn, renderer.pixmap, 0, 0, prompt_box_w, h, self.color_scheme.active_bg)?;
+        let start_x = 12i16;
+        let prefix_width = renderer.text_width(prompt_prefix);
         renderer.draw_text(
             conn,
             renderer.pixmap,
-            prompt_pad as i16,
+            start_x,
             baseline,
-            prompt_text,
-            self.color_scheme.active_fg,
+            prompt_prefix,
+            self.color_scheme.active_bg,
         )?;
 
-        // 4. Query text & cursor
-        let input_start_x = prompt_box_w + 8;
+        // 3. Query text & cursor
+        let input_start_x = start_x as u16 + prefix_width;
         let query_w = renderer.text_width(&self.query);
         // Reserve stable input width so items don't jitter horizontally while typing
         let input_box_w = (w / 4).max(query_w + 24).min(w.saturating_sub(input_start_x) / 2);

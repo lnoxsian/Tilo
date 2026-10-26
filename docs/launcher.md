@@ -46,7 +46,7 @@ Aliases: `launcher_style spotlight | dmenu`.
 | Width | Full width of active monitor |
 | Height | Matches statusbar height (default 24 pixels) |
 | Position | Overlays top of active monitor (directly over status bar) |
-| Layout | Horizontal prompt, search input, and candidate pills with `<` and `>` overflow indicators |
+| Layout | Seamless borderless bar with prompt `> `, search input, and candidate pills with `<` and `>` overflow indicators |
 | Input ownership | Grabs keyboard while visible |
 
 While visible, the launcher owns all keyboard input. Normal WM keybindings resume after the launcher closes.
