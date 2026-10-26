@@ -282,10 +282,22 @@ impl WindowManager {
         }
 
         let active_mon = self.monitor_manager.active_monitor().clone();
-        let width = crate::launcher::LAUNCHER_WIDTH;
-        let height = crate::launcher::LAUNCHER_HEIGHT;
-        let x = (active_mon.x + (active_mon.width as i32 - width as i32) / 2).max(active_mon.x) as i16;
-        let y = (active_mon.y + (active_mon.height as i32 - height as i32) / 3).max(active_mon.y) as i16;
+        let (width, height, x, y) = match self.config.launcher_position {
+            crate::launcher::LauncherPosition::Spotlight => {
+                let width = crate::launcher::LAUNCHER_WIDTH;
+                let height = crate::launcher::LAUNCHER_HEIGHT;
+                let x = (active_mon.x + (active_mon.width as i32 - width as i32) / 2).max(active_mon.x) as i16;
+                let y = (active_mon.y + (active_mon.height as i32 - height as i32) / 3).max(active_mon.y) as i16;
+                (width, height, x, y)
+            }
+            crate::launcher::LauncherPosition::Dmenu => {
+                let height = self.statusbar.as_ref().map(|b| b.rect.height as u16).unwrap_or(24);
+                let width = active_mon.width as u16;
+                let x = active_mon.x as i16;
+                let y = active_mon.y as i16;
+                (width, height, x, y)
+            }
+        };
         let rect = Rect::new(x as i32, y as i32, width as u32, height as u32);
 
         let screen = &self.context.connection.setup().roots[self.context.screen_num];
@@ -295,6 +307,7 @@ impl WindowManager {
         let launcher = self
             .launcher
             .get_or_insert_with(crate::launcher::Launcher::new);
+        launcher.position = self.config.launcher_position;
         launcher.color_scheme = launcher_colors;
         launcher.border_color = Some(self.config.launcher_border_color());
         launcher.refresh_if_needed();
@@ -326,7 +339,7 @@ impl WindowManager {
                 }
             }
         } else {
-            // Reposition window if active monitor changed
+            // Reposition and resize window if active monitor or mode changed
             let _ = self.context.connection.configure_window(
                 launcher.window_id,
                 &x11rb::protocol::xproto::ConfigureWindowAux::new()
@@ -335,6 +348,15 @@ impl WindowManager {
                     .width(width as u32)
                     .height(height as u32),
             );
+            if let Some(ref mut renderer) = launcher.renderer {
+                let _ = renderer.resize(
+                    &self.context.connection,
+                    launcher.window_id,
+                    width,
+                    height,
+                    screen.root_depth,
+                );
+            }
         }
 
         // Map and raise
@@ -462,73 +484,7 @@ impl WindowManager {
                     let _ = self.render_launcher();
                 }
                 crate::launcher::LauncherAction::Execute => {
-                    let mut power_action: Option<String> = None;
-                    let mut cmd_to_spawn: Option<String> = None;
-
-                    if let Some(ref launcher) = self.launcher {
-                        if launcher.mode == crate::launcher::LauncherMode::Exit {
-                            let results = launcher.all_filtered_results();
-                            let selected = results.get(launcher.selected_index).cloned()
-                                .unwrap_or_else(|| launcher.query.trim().to_string());
-                            power_action = Some(selected);
-                        } else {
-                            let results = launcher.all_filtered_results();
-                            let trimmed = launcher.query.trim();
-                            let candidate = if trimmed.is_empty() {
-                                results.get(launcher.selected_index).map(|s| launcher.command_for(s))
-                            } else if let Some(selected) = results.get(launcher.selected_index) {
-                                let sel_cmd = launcher.command_for(selected);
-                                if !trimmed.contains(' ') {
-                                    Some(sel_cmd)
-                                } else {
-                                    let first_word = trimmed.split_whitespace().next().unwrap_or("");
-                                    let sel_binary = sel_cmd.split_whitespace().next().unwrap_or(&sel_cmd);
-                                    let sel_bin_name = std::path::Path::new(sel_binary)
-                                        .file_name()
-                                        .and_then(|n| n.to_str())
-                                        .unwrap_or(sel_binary);
-
-                                    if trimmed.eq_ignore_ascii_case(selected) {
-                                        Some(sel_cmd)
-                                    } else if first_word.eq_ignore_ascii_case(selected)
-                                        || first_word.eq_ignore_ascii_case(sel_binary)
-                                        || first_word.eq_ignore_ascii_case(sel_bin_name)
-                                    {
-                                        let args_part = &trimmed[first_word.len()..];
-                                        Some(format!("{}{}", sel_cmd, args_part))
-                                    } else if trimmed.to_lowercase().starts_with(&selected.to_lowercase())
-                                        && trimmed.len() > selected.len()
-                                        && trimmed[selected.len()..].starts_with(' ')
-                                    {
-                                        let args_part = &trimmed[selected.len()..];
-                                        Some(format!("{}{}", sel_cmd, args_part))
-                                    } else {
-                                        Some(sel_cmd)
-                                    }
-                                }
-                            } else {
-                                Some(trimmed.to_string())
-                            };
-
-                            if let Some(ref c) = candidate {
-                                let c_lower = c.trim().to_lowercase();
-                                if c_lower == "logout" || c_lower == "reboot" || c_lower == "poweroff" || c_lower == "shutdown" {
-                                    power_action = Some(c.clone());
-                                } else {
-                                    cmd_to_spawn = candidate;
-                                }
-                            }
-                        }
-                    }
-
-                    let _ = self.close_launcher();
-
-                    if let Some(action) = power_action {
-                        self.execute_power_action(&action);
-                    } else if let Some(cmd) = cmd_to_spawn
-                        && let Err(e) = crate::launcher::spawn_app(&cmd) {
-                            eprintln!("[WARN  tilo::launcher] {}", e);
-                        }
+                    self.execute_launcher_selection()?;
                 }
                 other => {
                     if let Some(ref mut launcher) = self.launcher {
@@ -538,6 +494,88 @@ impl WindowManager {
                 }
             }
         }
+        Ok(())
+    }
+
+    /// Executes the currently selected item or typed query in the launcher, and closes the overlay.
+    pub fn execute_launcher_selection(&mut self) -> Result<(), X11Error> {
+        let mut power_action: Option<String> = None;
+        let mut cmd_to_spawn: Option<String> = None;
+
+        if let Some(ref launcher) = self.launcher {
+            if launcher.mode == crate::launcher::LauncherMode::Exit {
+                let results = launcher.all_filtered_results();
+                let selected = results
+                    .get(launcher.selected_index)
+                    .cloned()
+                    .unwrap_or_else(|| launcher.query.trim().to_string());
+                power_action = Some(selected);
+            } else {
+                let results = launcher.all_filtered_results();
+                let trimmed = launcher.query.trim();
+                let candidate = if trimmed.is_empty() {
+                    results
+                        .get(launcher.selected_index)
+                        .map(|s| launcher.command_for(s))
+                } else if let Some(selected) = results.get(launcher.selected_index) {
+                    let sel_cmd = launcher.command_for(selected);
+                    if !trimmed.contains(' ') {
+                        Some(sel_cmd)
+                    } else {
+                        let first_word = trimmed.split_whitespace().next().unwrap_or("");
+                        let sel_binary = sel_cmd.split_whitespace().next().unwrap_or(&sel_cmd);
+                        let sel_bin_name = std::path::Path::new(sel_binary)
+                            .file_name()
+                            .and_then(|n| n.to_str())
+                            .unwrap_or(sel_binary);
+
+                        if trimmed.eq_ignore_ascii_case(selected) {
+                            Some(sel_cmd)
+                        } else if first_word.eq_ignore_ascii_case(selected)
+                            || first_word.eq_ignore_ascii_case(sel_binary)
+                            || first_word.eq_ignore_ascii_case(sel_bin_name)
+                        {
+                            let args_part = &trimmed[first_word.len()..];
+                            Some(format!("{}{}", sel_cmd, args_part))
+                        } else if trimmed.to_lowercase().starts_with(&selected.to_lowercase())
+                            && trimmed.len() > selected.len()
+                            && trimmed[selected.len()..].starts_with(' ')
+                        {
+                            let args_part = &trimmed[selected.len()..];
+                            Some(format!("{}{}", sel_cmd, args_part))
+                        } else {
+                            Some(sel_cmd)
+                        }
+                    }
+                } else {
+                    Some(trimmed.to_string())
+                };
+
+                if let Some(ref c) = candidate {
+                    let c_lower = c.trim().to_lowercase();
+                    if c_lower == "logout"
+                        || c_lower == "reboot"
+                        || c_lower == "poweroff"
+                        || c_lower == "shutdown"
+                    {
+                        power_action = Some(c.clone());
+                    } else {
+                        cmd_to_spawn = candidate;
+                    }
+                }
+            }
+        }
+
+        let _ = self.close_launcher();
+
+        if let Some(action) = power_action {
+            self.execute_power_action(&action);
+        } else if let Some(cmd) = cmd_to_spawn
+            && let Err(e) = crate::launcher::spawn_app(&cmd)
+        {
+            eprintln!("[WARN  tilo::launcher] {}", e);
+        }
+
         Ok(())
     }
 

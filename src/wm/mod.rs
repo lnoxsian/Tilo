@@ -324,19 +324,46 @@ impl WindowManager {
             let _ = self.disable_statusbar();
         }
 
-        // Apply updated theme to launcher if initialized
+        // Apply updated theme and position to launcher if initialized
         if let Some(ref mut launcher) = self.launcher {
+            launcher.position = self.config.launcher_position;
             launcher.color_scheme = self.config.launcher_color_scheme();
             launcher.border_color = Some(self.config.launcher_border_color());
             if launcher.visible && launcher.window_id != 0 {
+                let active_mon = self.monitor_manager.active_monitor().clone();
+                let (width, height, x, y) = match self.config.launcher_position {
+                    crate::launcher::LauncherPosition::Spotlight => {
+                        let width = crate::launcher::LAUNCHER_WIDTH;
+                        let height = crate::launcher::LAUNCHER_HEIGHT;
+                        let x = (active_mon.x + (active_mon.width as i32 - width as i32) / 2).max(active_mon.x) as i16;
+                        let y = (active_mon.y + (active_mon.height as i32 - height as i32) / 3).max(active_mon.y) as i16;
+                        (width, height, x, y)
+                    }
+                    crate::launcher::LauncherPosition::Dmenu => {
+                        let height = self.statusbar.as_ref().map(|b| b.rect.height as u16).unwrap_or(24);
+                        let width = active_mon.width as u16;
+                        let x = active_mon.x as i16;
+                        let y = active_mon.y as i16;
+                        (width, height, x, y)
+                    }
+                };
+                launcher.rect = crate::layout::Rect::new(x as i32, y as i32, width as u32, height as u32);
+                let _ = self.context.connection.configure_window(
+                    launcher.window_id,
+                    &x11rb::protocol::xproto::ConfigureWindowAux::new()
+                        .x(x as i32)
+                        .y(y as i32)
+                        .width(width as u32)
+                        .height(height as u32),
+                );
                 let font_name = self.config.launcher_font();
+                let screen = &self.context.connection.setup().roots[self.context.screen_num];
                 if launcher.renderer.is_none() || font_name != old_launcher_font {
-                    let screen = &self.context.connection.setup().roots[self.context.screen_num];
                     if let Ok(new_renderer) = crate::render::Renderer::new(
                         &self.context.connection,
                         launcher.window_id,
-                        crate::launcher::LAUNCHER_WIDTH,
-                        crate::launcher::LAUNCHER_HEIGHT,
+                        width,
+                        height,
                         screen.root_depth,
                         font_name,
                     ) {
@@ -345,6 +372,14 @@ impl WindowManager {
                         }
                         launcher.attach_renderer(new_renderer);
                     }
+                } else if let Some(ref mut renderer) = launcher.renderer {
+                    let _ = renderer.resize(
+                        &self.context.connection,
+                        launcher.window_id,
+                        width,
+                        height,
+                        screen.root_depth,
+                    );
                 }
                 let _ = launcher.render(&self.context.connection);
             } else if !launcher.visible && launcher.window_id != 0 {

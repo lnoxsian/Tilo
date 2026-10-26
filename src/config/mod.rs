@@ -8,6 +8,7 @@
 
 pub mod theme;
 pub use theme::*;
+pub use crate::launcher::LauncherPosition;
 
 use crate::autostart::AutostartCmd;
 use crate::bar::BarModuleType;
@@ -109,6 +110,8 @@ pub struct Config {
     pub workspace_tags: Vec<String>,
     /// Whether the built-in statusbar is enabled (default: true).
     pub statusbar: bool,
+    /// Visual layout and position of the application launcher ('spotlight' or 'dmenu', default: spotlight).
+    pub launcher_position: LauncherPosition,
 }
 
 impl Config {
@@ -196,6 +199,7 @@ impl Default for Config {
             ],
             workspace_tags: (1..=9).map(|i| i.to_string()).collect(),
             statusbar: true,
+            launcher_position: LauncherPosition::Spotlight,
         }
     }
 }
@@ -715,6 +719,25 @@ fn parse_line(
             }
             let words: Vec<String> = line[1..].iter().map(|t| token_to_string(t)).collect();
             config.theme.launcher_font = Some(words.join(" "));
+        }
+        "launcher_position" | "launcher_style" => {
+            if line.len() < 2 {
+                return Err(ConfigError::ParseError {
+                    line: line_number,
+                    message: format!("Directive '{}' requires a position argument ('spotlight' or 'dmenu')", directive),
+                });
+            }
+            let val = token_to_string(line[1]).to_lowercase();
+            match val.as_str() {
+                "spotlight" => config.launcher_position = LauncherPosition::Spotlight,
+                "dmenu" => config.launcher_position = LauncherPosition::Dmenu,
+                _ => {
+                    return Err(ConfigError::InvalidValue {
+                        line: line_number,
+                        value: format!("Unknown launcher position '{}'. Supported: 'spotlight', 'dmenu'", val),
+                    });
+                }
+            }
         }
         "inner_gap" => {
             if line.len() < 2 {
@@ -1486,6 +1509,7 @@ border_urgent #ff0000
 # bar_separator " | "
 
 # Launcher overrides:
+# launcher_position spotlight       # Choices: spotlight (centered window) or dmenu (dwm-style top bar menu)
 # launcher_bg #1a1b26
 # launcher_fg #c0caf5
 # launcher_selected_bg #7aa2f7
@@ -2287,5 +2311,32 @@ bar_workspace_icon 4 
         let input_bar_enabled = "bar_enabled disable\n";
         let cfg4 = parse(&tokenize(input_bar_enabled).unwrap()).unwrap();
         assert!(!cfg4.statusbar);
+    }
+
+    #[test]
+    fn test_parse_launcher_position_directives() {
+        // Default is spotlight
+        let cfg_default = parse(&tokenize("").unwrap()).unwrap();
+        assert_eq!(cfg_default.launcher_position, LauncherPosition::Spotlight);
+
+        // Directive launcher_position dmenu
+        let cfg_dmenu = parse(&tokenize("launcher_position dmenu\n").unwrap()).unwrap();
+        assert_eq!(cfg_dmenu.launcher_position, LauncherPosition::Dmenu);
+
+        // Directive launcher_position spotlight
+        let cfg_spotlight = parse(&tokenize("launcher_position spotlight\n").unwrap()).unwrap();
+        assert_eq!(cfg_spotlight.launcher_position, LauncherPosition::Spotlight);
+
+        // Alias launcher_style dmenu
+        let cfg_style = parse(&tokenize("launcher_style dmenu\n").unwrap()).unwrap();
+        assert_eq!(cfg_style.launcher_position, LauncherPosition::Dmenu);
+
+        // Case insensitivity
+        let cfg_case = parse(&tokenize("launcher_position DMenu\n").unwrap()).unwrap();
+        assert_eq!(cfg_case.launcher_position, LauncherPosition::Dmenu);
+
+        // Invalid value returns ConfigError::InvalidValue
+        let err = parse(&tokenize("launcher_position invalid_mode\n").unwrap());
+        assert!(err.is_err());
     }
 }

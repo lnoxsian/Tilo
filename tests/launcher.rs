@@ -4,7 +4,7 @@ use tilo::input::KeyboardMapping;
 use tilo::keybind::{default_keybindings, Action, MOD_CONTROL, MOD_SHIFT, XK_Q};
 use tilo::launcher::{
     filter_executables, handle_launcher_keypress, scan_desktop_dirs, scan_path_from, spawn_app,
-    Launcher, LauncherAction, LauncherMode,
+    Launcher, LauncherAction, LauncherMode, LauncherPosition,
 };
 use tilo::wm::WindowManager;
 use tilo::x11::X11Context;
@@ -431,5 +431,46 @@ fn test_launcher_scrolling_and_execution_beyond_top_8() {
     // Verify command resolution for item at index 15
     let selected = launcher.all_filtered_results().get(launcher.selected_index).cloned();
     assert_eq!(selected, Some("app_15".to_string()));
+}
+
+#[test]
+fn test_launcher_position_spotlight_vs_dmenu() {
+    if !Command::new("which")
+        .arg("Xephyr")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+    {
+        return;
+    }
+
+    if let Some(server) = XephyrServer::start(178) {
+        let wm_ctx = X11Context::connect_to(Some(&server.display))
+            .expect("WM context connect failed");
+        assert!(wm_ctx.become_wm().is_ok());
+
+        let mut wm = WindowManager::new_with_config(wm_ctx, tilo::config::Config::default())
+            .expect("Failed to create WM");
+
+        // 1. By default, launcher is Spotlight
+        assert_eq!(wm.config.launcher_position, LauncherPosition::Spotlight);
+        wm.open_launcher().expect("open_launcher should succeed");
+        let l = wm.launcher.as_ref().unwrap();
+        assert_eq!(l.position, LauncherPosition::Spotlight);
+        assert_eq!(l.rect.width, tilo::launcher::LAUNCHER_WIDTH as u32);
+        assert_eq!(l.rect.height, tilo::launcher::LAUNCHER_HEIGHT as u32);
+        wm.close_launcher().expect("close_launcher should succeed");
+
+        // 2. Switch to Dmenu
+        wm.config.launcher_position = LauncherPosition::Dmenu;
+        wm.open_launcher().expect("open_launcher in dmenu should succeed");
+        let l_dmenu = wm.launcher.as_ref().unwrap();
+        assert_eq!(l_dmenu.position, LauncherPosition::Dmenu);
+        let active_mon = wm.monitor_manager.active_monitor().clone();
+        assert_eq!(l_dmenu.rect.width, active_mon.width);
+        assert_eq!(l_dmenu.rect.x, active_mon.x);
+        assert_eq!(l_dmenu.rect.y, active_mon.y);
+        wm.close_launcher().expect("close_launcher should succeed");
+    }
 }
 

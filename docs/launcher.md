@@ -19,13 +19,34 @@ kill -USR1 "$(pidof tilo)"
 
 ---
 
-## Window
+## Window & Styles
+
+Tilo supports two distinct launcher styles via the `launcher_position` configuration directive:
+
+| Style | Directive | Description |
+|---|---|---|
+| **Spotlight** (Default) | `launcher_position spotlight` | Centered floating window (560×256 px) with query prompt and vertical suggestions list. |
+| **Dmenu** | `launcher_position dmenu` | Single-line horizontal menu overlaying directly over the top status bar across the full width of the monitor (dwm dmenu style) with prompt pill and `<` / `>` pagination. |
+
+Aliases: `launcher_style spotlight | dmenu`.
+
+### Window Properties (Spotlight)
 
 | Property | Value |
 |---|---|
 | Width | 560 pixels |
-| Maximum visible results | 8 |
+| Maximum visible results | 8 (vertical) |
 | Position | Centered on the active monitor |
+| Input ownership | Grabs keyboard while visible |
+
+### Window Properties (Dmenu)
+
+| Property | Value |
+|---|---|
+| Width | Full width of active monitor |
+| Height | Matches statusbar height (default 24 pixels) |
+| Position | Overlays top of active monitor (directly over status bar) |
+| Layout | Horizontal prompt, search input, and candidate pills with `<` and `>` overflow indicators |
 | Input ownership | Grabs keyboard while visible |
 
 While visible, the launcher owns all keyboard input. Normal WM keybindings resume after the launcher closes.
@@ -133,6 +154,7 @@ A configured `spawn` keybinding **does** use `sh -c`, so shell syntax is availab
 The launcher inherits global palette colors and can be overridden with `launcher_` prefixed directives:
 
 ```
+launcher_position dmenu      # or spotlight (default)
 launcher_bg #1a1b26
 launcher_fg #c0caf5
 launcher_active_bg #7aa2f7   # highlighted selection background

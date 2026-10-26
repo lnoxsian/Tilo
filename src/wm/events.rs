@@ -538,6 +538,51 @@ impl WindowManager {
     /// - Mod + Right Click: focus and drag window to resize.
     /// - Normal Left Click: focus clicked window and replay event to client.
     pub fn handle_button_press(&mut self, event: &ButtonPressEvent) -> Result<(), X11Error> {
+        // Launcher mouse interaction (Wheel scroll, item click, or click outside to dismiss)
+        if let Some(ref launcher) = self.launcher && launcher.visible {
+            if event.event == launcher.window_id {
+                if event.detail == 4 {
+                    if let Some(ref mut l) = self.launcher {
+                        crate::launcher::update_launcher_state(l, crate::launcher::LauncherAction::SelectPrevious);
+                    }
+                    let _ = self.render_launcher();
+                    return Ok(());
+                } else if event.detail == 5 {
+                    if let Some(ref mut l) = self.launcher {
+                        crate::launcher::update_launcher_state(l, crate::launcher::LauncherAction::SelectNext);
+                    }
+                    let _ = self.render_launcher();
+                    return Ok(());
+                } else if event.detail == 1 {
+                    let click_x = event.event_x as i32;
+                    let click_y = event.event_y as i32;
+                    let mut clicked_index = None;
+                    if let Some(ref l) = self.launcher {
+                        for &(idx, rect) in &l.item_rects {
+                            if click_x >= rect.x
+                                && click_x < rect.x + rect.width as i32
+                                && click_y >= rect.y
+                                && click_y < rect.y + rect.height as i32
+                            {
+                                clicked_index = Some(idx);
+                                break;
+                            }
+                        }
+                    }
+                    if let Some(idx) = clicked_index {
+                        if let Some(ref mut l) = self.launcher {
+                            l.selected_index = idx;
+                        }
+                        self.execute_launcher_selection()?;
+                    }
+                    return Ok(());
+                }
+            } else {
+                let _ = self.close_launcher();
+                return Ok(());
+            }
+        }
+
         // Statusbar mouse interaction (Workspace clicks, Tab clicks, and wheel switching)
         let hit_bar_info = if let Some(ref bar) = self.statusbar && bar.window_id == event.event {
             let mon_id = self.monitor_manager.monitors.iter()

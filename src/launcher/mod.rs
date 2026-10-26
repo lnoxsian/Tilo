@@ -64,6 +64,16 @@ pub enum LauncherMode {
     Exit,
 }
 
+/// Visual style and positioning for the application launcher overlay.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LauncherPosition {
+    /// Centered overlay window with vertical suggestion list (default).
+    #[default]
+    Spotlight,
+    /// Full-width horizontal menu overlaying the status/title bar like dwm dmenu.
+    Dmenu,
+}
+
 /// Core configuration and state for the application launcher.
 #[derive(Debug)]
 pub struct Launcher {
@@ -83,6 +93,8 @@ pub struct Launcher {
     pub visible: bool,
     /// Operating mode of the launcher (App search or Exit menu).
     pub mode: LauncherMode,
+    /// Visual style and screen position (Spotlight or Dmenu).
+    pub position: LauncherPosition,
     /// The geometric bounds of the launcher window.
     pub rect: Rect,
     /// Double-buffered graphics renderer.
@@ -101,6 +113,14 @@ pub struct Launcher {
     pub last_path_var: String,
     /// Per-directory incremental cache.
     pub dir_cache: HashMap<PathBuf, DirCacheEntry>,
+    /// Cached filtered results for the active query and mode.
+    pub filtered_cache: Vec<String>,
+    /// Query string corresponding to `filtered_cache`.
+    pub filtered_cache_query: String,
+    /// Launcher mode corresponding to `filtered_cache`.
+    pub filtered_cache_mode: LauncherMode,
+    /// Hit rectangles for visible items on screen for mouse interaction.
+    pub item_rects: Vec<(usize, Rect)>,
 }
 
 impl Launcher {
@@ -118,6 +138,7 @@ impl Launcher {
             scroll_offset: 0,
             visible: false,
             mode: LauncherMode::App,
+            position: LauncherPosition::Spotlight,
             rect: Rect::new(0, 0, LAUNCHER_WIDTH as u32, LAUNCHER_HEIGHT as u32),
             renderer: None,
             color_scheme: ColorScheme::default(),
@@ -127,6 +148,10 @@ impl Launcher {
             monitored_dirs: Vec::new(),
             last_path_var: String::new(),
             dir_cache: HashMap::new(),
+            filtered_cache: Vec::new(),
+            filtered_cache_query: String::new(),
+            filtered_cache_mode: LauncherMode::App,
+            item_rects: Vec::new(),
         }
     }
 
@@ -219,6 +244,7 @@ impl Launcher {
 
         self.executable_cache = sorted;
         self.app_commands = app_commands;
+        self.invalidate_cache();
 
         let count = self.all_filtered_results().len();
         self.adjust_scroll(count, LAUNCHER_MAX_RESULTS);
@@ -312,8 +338,36 @@ impl Launcher {
         scored.into_iter().map(|(_, name)| name).collect()
     }
 
+    /// Ensures `filtered_cache` is populated for the current query and mode.
+    pub fn ensure_filtered_cache(&mut self) {
+        if self.filtered_cache_query != self.query
+            || self.filtered_cache_mode != self.mode
+            || (self.filtered_cache.is_empty() && (!self.executable_cache.is_empty() || self.mode == LauncherMode::Exit))
+        {
+            self.filtered_cache = if self.mode == LauncherMode::Exit {
+                Self::filter_exit_options(&self.query)
+            } else {
+                filter_executables(&self.executable_cache, &self.query, usize::MAX)
+            };
+            self.filtered_cache_query = self.query.clone();
+            self.filtered_cache_mode = self.mode;
+        }
+    }
+
+    /// Invalidates the filtered executable query cache.
+    pub fn invalidate_cache(&mut self) {
+        self.filtered_cache_query.clear();
+        self.filtered_cache.clear();
+    }
+
     /// Returns the top filtered executable results matching the current query.
     pub fn filtered_results(&self, max_results: usize) -> Vec<String> {
+        if !self.filtered_cache.is_empty()
+            && self.filtered_cache_query == self.query
+            && self.filtered_cache_mode == self.mode
+        {
+            return self.filtered_cache.iter().take(max_results).cloned().collect();
+        }
         if self.mode == LauncherMode::Exit {
             Self::filter_exit_options(&self.query)
         } else {
@@ -323,6 +377,12 @@ impl Launcher {
 
     /// Returns all filtered executable results matching the current query without truncation.
     pub fn all_filtered_results(&self) -> Vec<String> {
+        if !self.filtered_cache.is_empty()
+            && self.filtered_cache_query == self.query
+            && self.filtered_cache_mode == self.mode
+        {
+            return self.filtered_cache.clone();
+        }
         if self.mode == LauncherMode::Exit {
             Self::filter_exit_options(&self.query)
         } else {
@@ -363,11 +423,22 @@ impl Launcher {
             return Ok(());
         }
 
-        let all_results = self.all_filtered_results();
-        let total_count = all_results.len();
+        self.ensure_filtered_cache();
+
+        match self.position {
+            LauncherPosition::Spotlight => self.render_spotlight(conn),
+            LauncherPosition::Dmenu => self.render_dmenu(conn),
+        }
+    }
+
+    /// Renders the launcher UI in centered floating Spotlight mode.
+    pub fn render_spotlight(&mut self, conn: &impl Connection) -> Result<(), StatusbarError> {
+        let total_count = self.filtered_cache.len();
 
         // Keep selected index within valid bounds and adjust scroll window
         self.adjust_scroll(total_count, LAUNCHER_MAX_RESULTS);
+
+        let all_results = &self.filtered_cache;
 
         let renderer = self.renderer.as_ref().unwrap();
 
@@ -473,10 +544,12 @@ impl Launcher {
             &[][..]
         };
 
+        self.item_rects.clear();
         for (idx, item) in visible_slice.iter().enumerate() {
             let item_index = self.scroll_offset + idx;
             let is_selected = item_index == self.selected_index;
             let item_baseline = cur_y + 18;
+            self.item_rects.push((item_index, Rect::new(8, cur_y as i32, w.saturating_sub(16) as u32, row_height as u32)));
 
             if is_selected {
                 // Highlight row background
@@ -531,6 +604,233 @@ impl Launcher {
         }
 
         // 6. Blit completed double-buffer pixmap sub-area to launcher window
+        renderer.flush_area_to_window(conn, self.window_id, w, h)?;
+
+        Ok(())
+    }
+
+    /// Renders the launcher UI in horizontal top-bar mode (dwm dmenu style).
+    pub fn render_dmenu(&mut self, conn: &impl Connection) -> Result<(), StatusbarError> {
+        let renderer = self.renderer.as_ref().unwrap();
+        let w = self.rect.width as u16;
+        let h = self.rect.height as u16;
+
+        // 1. Fill entire bar background
+        renderer.fill_rect(conn, renderer.pixmap, 0, 0, w, h, self.color_scheme.bg)?;
+
+        // 2. Draw 1px bottom border outline for crisp separation
+        let border_color = self.border_color.unwrap_or(self.color_scheme.border);
+        if h > 1 {
+            renderer.fill_rect(conn, renderer.pixmap, 0, (h - 1) as i16, w, 1, border_color)?;
+        }
+
+        let baseline = renderer.vertical_center_baseline();
+
+        // 3. Prompt box pill on the left
+        let prompt_text = if self.mode == LauncherMode::Exit {
+            "Exit:"
+        } else {
+            "dmenu:"
+        };
+        let prompt_text_w = renderer.text_width(prompt_text);
+        let prompt_pad = 8u16;
+        let prompt_box_w = prompt_text_w + (prompt_pad * 2);
+
+        // Fill prompt background with active_bg and draw text with active_fg (dwm dmenu style)
+        renderer.fill_rect(conn, renderer.pixmap, 0, 0, prompt_box_w, h, self.color_scheme.active_bg)?;
+        renderer.draw_text(
+            conn,
+            renderer.pixmap,
+            prompt_pad as i16,
+            baseline,
+            prompt_text,
+            self.color_scheme.active_fg,
+        )?;
+
+        // 4. Query text & cursor
+        let input_start_x = prompt_box_w + 8;
+        let query_w = renderer.text_width(&self.query);
+        // Reserve stable input width so items don't jitter horizontally while typing
+        let input_box_w = (w / 4).max(query_w + 24).min(w.saturating_sub(input_start_x) / 2);
+
+        if !self.query.is_empty() {
+            renderer.draw_text(
+                conn,
+                renderer.pixmap,
+                input_start_x as i16,
+                baseline,
+                &self.query,
+                self.color_scheme.fg,
+            )?;
+        } else if self.mode == LauncherMode::Exit {
+            renderer.draw_text(
+                conn,
+                renderer.pixmap,
+                input_start_x as i16 + 4,
+                baseline,
+                "Select action: Logout, Reboot, Poweroff...",
+                self.color_scheme.inactive_fg,
+            )?;
+        }
+
+        // Draw cursor bar
+        let byte_offset = self.query.char_indices().nth(self.cursor_position).map(|(i, _)| i).unwrap_or(self.query.len());
+        let cursor_offset = renderer.text_width(&self.query[..byte_offset]);
+        let cursor_x = input_start_x as i16 + cursor_offset as i16;
+        let cursor_y = (h.saturating_sub(16)) as i16 / 2;
+        let cursor_h = 16u16.min(h);
+        renderer.fill_rect(
+            conn,
+            renderer.pixmap,
+            cursor_x,
+            cursor_y,
+            2,
+            cursor_h,
+            self.color_scheme.active_bg,
+        )?;
+
+        // 5. Horizontal items layout
+        let items_start_x = input_start_x + input_box_w + 8;
+        let avail_w = w.saturating_sub(items_start_x + 8);
+        let total_count = self.filtered_cache.len();
+
+        self.item_rects.clear();
+
+        if total_count == 0 {
+            if !self.query.is_empty() {
+                let notice = if self.mode == LauncherMode::Exit {
+                    format!("Unknown action: '{}' (options: Logout, Reboot, Poweroff)", self.query)
+                } else {
+                    format!("Run: '{}'", self.query)
+                };
+                renderer.draw_text(
+                    conn,
+                    renderer.pixmap,
+                    items_start_x as i16,
+                    baseline,
+                    &notice,
+                    self.color_scheme.active_bg,
+                )?;
+            }
+        } else {
+            if self.selected_index >= total_count {
+                self.selected_index = total_count - 1;
+            }
+
+            let left_ind = "< ";
+            let left_ind_w = renderer.text_width(left_ind) + 6;
+            let right_ind = " >";
+            let right_ind_w = renderer.text_width(right_ind) + 6;
+            let item_pad = 8u16;
+
+            // Adjust scroll_offset dynamically so selected_index is always visible
+            if self.selected_index < self.scroll_offset {
+                self.scroll_offset = self.selected_index;
+            }
+
+            // Check if selected_index fits starting from self.scroll_offset
+            let mut fits = true;
+            let mut used_w = if self.scroll_offset > 0 { left_ind_w } else { 0 };
+            for idx in self.scroll_offset..=self.selected_index {
+                let item_w = renderer.text_width(&self.filtered_cache[idx]) + (item_pad * 2);
+                let needed = used_w + item_w + if idx + 1 < total_count { right_ind_w } else { 0 };
+                if needed > avail_w {
+                    fits = false;
+                    break;
+                }
+                used_w += item_w;
+            }
+
+            if !fits {
+                // Shift scroll_offset forward so selected_index fits
+                let sel_w = renderer.text_width(&self.filtered_cache[self.selected_index]) + (item_pad * 2);
+                let mut backwards_used = sel_w + right_ind_w;
+                let mut new_offset = self.selected_index;
+                while new_offset > 0 {
+                    let prev_idx = new_offset - 1;
+                    let prev_w = renderer.text_width(&self.filtered_cache[prev_idx]) + (item_pad * 2);
+                    let needed = backwards_used + prev_w + if prev_idx > 0 { left_ind_w } else { 0 };
+                    if needed <= avail_w {
+                        backwards_used += prev_w;
+                        new_offset = prev_idx;
+                    } else {
+                        break;
+                    }
+                }
+                self.scroll_offset = new_offset;
+            }
+
+            // Render visible items
+            let mut cur_x = items_start_x as i16;
+            if self.scroll_offset > 0 {
+                renderer.draw_text(
+                    conn,
+                    renderer.pixmap,
+                    cur_x,
+                    baseline,
+                    left_ind,
+                    self.color_scheme.inactive_fg,
+                )?;
+                cur_x += left_ind_w as i16;
+            }
+
+            for idx in self.scroll_offset..total_count {
+                let item_name = &self.filtered_cache[idx];
+                let item_text_w = renderer.text_width(item_name);
+                let item_w = item_text_w + (item_pad * 2);
+                let has_next = idx + 1 < total_count;
+                let needed_end = (cur_x as u16) + item_w + if has_next { right_ind_w } else { 0 };
+
+                if needed_end > w.saturating_sub(4) && idx > self.selected_index {
+                    // Cannot fit remaining items, draw right overflow indicator
+                    renderer.draw_text(
+                        conn,
+                        renderer.pixmap,
+                        cur_x + 4,
+                        baseline,
+                        right_ind,
+                        self.color_scheme.inactive_fg,
+                    )?;
+                    break;
+                }
+
+                self.item_rects.push((idx, Rect::new(cur_x as i32, 0, item_w as u32, h as u32)));
+
+                if idx == self.selected_index {
+                    // Highlight selected item with active_bg pill
+                    renderer.fill_rect(
+                        conn,
+                        renderer.pixmap,
+                        cur_x,
+                        0,
+                        item_w,
+                        h,
+                        self.color_scheme.active_bg,
+                    )?;
+                    renderer.draw_text(
+                        conn,
+                        renderer.pixmap,
+                        cur_x + item_pad as i16,
+                        baseline,
+                        item_name,
+                        self.color_scheme.active_fg,
+                    )?;
+                } else {
+                    renderer.draw_text(
+                        conn,
+                        renderer.pixmap,
+                        cur_x + item_pad as i16,
+                        baseline,
+                        item_name,
+                        self.color_scheme.fg,
+                    )?;
+                }
+
+                cur_x += item_w as i16;
+            }
+        }
+
+        // 6. Blit completed double-buffer pixmap to window
         renderer.flush_area_to_window(conn, self.window_id, w, h)?;
 
         Ok(())
@@ -674,6 +974,7 @@ pub fn update_launcher_state(launcher: &mut Launcher, action: LauncherAction) {
             launcher.cursor_position += 1;
             launcher.selected_index = 0;
             launcher.scroll_offset = 0;
+            launcher.ensure_filtered_cache();
         }
         LauncherAction::DeleteChar => {
             if launcher.cursor_position > 0 {
@@ -683,6 +984,7 @@ pub fn update_launcher_state(launcher: &mut Launcher, action: LauncherAction) {
                     launcher.cursor_position = char_idx;
                     launcher.selected_index = 0;
                     launcher.scroll_offset = 0;
+                    launcher.ensure_filtered_cache();
                 }
             }
         }
@@ -706,6 +1008,7 @@ pub fn update_launcher_state(launcher: &mut Launcher, action: LauncherAction) {
                 launcher.cursor_position = i;
                 launcher.selected_index = 0;
                 launcher.scroll_offset = 0;
+                launcher.ensure_filtered_cache();
             }
         }
         LauncherAction::DeleteLine => {
@@ -716,6 +1019,7 @@ pub fn update_launcher_state(launcher: &mut Launcher, action: LauncherAction) {
             launcher.cursor_position = 0;
             launcher.selected_index = 0;
             launcher.scroll_offset = 0;
+            launcher.ensure_filtered_cache();
         }
         LauncherAction::MoveToStart => {
             launcher.cursor_position = 0;
@@ -724,39 +1028,44 @@ pub fn update_launcher_state(launcher: &mut Launcher, action: LauncherAction) {
             launcher.cursor_position = launcher.query.chars().count();
         }
         LauncherAction::MoveCursorLeft => {
-            if launcher.query.is_empty() {
-                // When search query is empty, Left arrow explores previous binary like dmenu!
-                let count = launcher.all_filtered_results().len();
+            if launcher.cursor_position > 0 {
+                launcher.cursor_position -= 1;
+            } else if launcher.position == LauncherPosition::Dmenu || launcher.query.is_empty() {
+                // In dmenu mode (or when search query is empty), Left arrow explores previous binary!
+                launcher.ensure_filtered_cache();
+                let count = launcher.filtered_cache.len();
                 if count > 0 {
                     if launcher.selected_index == 0 {
                         launcher.selected_index = count - 1;
                     } else {
                         launcher.selected_index -= 1;
                     }
-                    launcher.adjust_scroll(count, LAUNCHER_MAX_RESULTS);
+                    if launcher.position == LauncherPosition::Spotlight {
+                        launcher.adjust_scroll(count, LAUNCHER_MAX_RESULTS);
+                    }
                 }
-            } else {
-                launcher.cursor_position = launcher.cursor_position.saturating_sub(1);
             }
         }
         LauncherAction::MoveCursorRight => {
-            if launcher.query.is_empty() {
-                // When search query is empty, Right arrow explores next binary like dmenu!
-                let count = launcher.all_filtered_results().len();
+            let len = launcher.query.chars().count();
+            if launcher.cursor_position < len {
+                launcher.cursor_position += 1;
+            } else if launcher.position == LauncherPosition::Dmenu || launcher.query.is_empty() {
+                // In dmenu mode (or when search query is empty), Right arrow explores next binary!
+                launcher.ensure_filtered_cache();
+                let count = launcher.filtered_cache.len();
                 if count > 0 {
                     launcher.selected_index = (launcher.selected_index + 1) % count;
-                    launcher.adjust_scroll(count, LAUNCHER_MAX_RESULTS);
-                }
-            } else {
-                let len = launcher.query.chars().count();
-                if launcher.cursor_position < len {
-                    launcher.cursor_position += 1;
+                    if launcher.position == LauncherPosition::Spotlight {
+                        launcher.adjust_scroll(count, LAUNCHER_MAX_RESULTS);
+                    }
                 }
             }
         }
         LauncherAction::AutoComplete => {
-            let results = launcher.all_filtered_results();
-            if let Some(selected) = results.get(launcher.selected_index) {
+            launcher.ensure_filtered_cache();
+            let results = &launcher.filtered_cache;
+            if let Some(selected) = results.get(launcher.selected_index).cloned() {
                 let trimmed = launcher.query.trim_start();
                 if let Some(space_idx) = trimmed.find(' ') {
                     let args = &trimmed[space_idx..];
@@ -767,38 +1076,51 @@ pub fn update_launcher_state(launcher: &mut Launcher, action: LauncherAction) {
                 launcher.cursor_position = launcher.query.chars().count();
                 launcher.selected_index = 0;
                 launcher.scroll_offset = 0;
+                launcher.ensure_filtered_cache();
             }
         }
         LauncherAction::SelectNext => {
-            let count = launcher.all_filtered_results().len();
+            launcher.ensure_filtered_cache();
+            let count = launcher.filtered_cache.len();
             if count > 0 {
                 launcher.selected_index = (launcher.selected_index + 1) % count;
-                launcher.adjust_scroll(count, LAUNCHER_MAX_RESULTS);
+                if launcher.position == LauncherPosition::Spotlight {
+                    launcher.adjust_scroll(count, LAUNCHER_MAX_RESULTS);
+                }
             }
         }
         LauncherAction::SelectPrevious => {
-            let count = launcher.all_filtered_results().len();
+            launcher.ensure_filtered_cache();
+            let count = launcher.filtered_cache.len();
             if count > 0 {
                 if launcher.selected_index == 0 {
                     launcher.selected_index = count - 1;
                 } else {
                     launcher.selected_index -= 1;
                 }
-                launcher.adjust_scroll(count, LAUNCHER_MAX_RESULTS);
+                if launcher.position == LauncherPosition::Spotlight {
+                    launcher.adjust_scroll(count, LAUNCHER_MAX_RESULTS);
+                }
             }
         }
         LauncherAction::PageDown => {
-            let count = launcher.all_filtered_results().len();
+            launcher.ensure_filtered_cache();
+            let count = launcher.filtered_cache.len();
             if count > 0 {
                 launcher.selected_index = (launcher.selected_index + LAUNCHER_MAX_RESULTS).min(count - 1);
-                launcher.adjust_scroll(count, LAUNCHER_MAX_RESULTS);
+                if launcher.position == LauncherPosition::Spotlight {
+                    launcher.adjust_scroll(count, LAUNCHER_MAX_RESULTS);
+                }
             }
         }
         LauncherAction::PageUp => {
-            let count = launcher.all_filtered_results().len();
+            launcher.ensure_filtered_cache();
+            let count = launcher.filtered_cache.len();
             if count > 0 {
                 launcher.selected_index = launcher.selected_index.saturating_sub(LAUNCHER_MAX_RESULTS);
-                launcher.adjust_scroll(count, LAUNCHER_MAX_RESULTS);
+                if launcher.position == LauncherPosition::Spotlight {
+                    launcher.adjust_scroll(count, LAUNCHER_MAX_RESULTS);
+                }
             }
         }
         LauncherAction::Refresh => {
@@ -1421,5 +1743,67 @@ Exec=link
         assert_eq!(launcher.query, "program09 ");
         assert_eq!(launcher.selected_index, 0);
         assert_eq!(launcher.scroll_offset, 0);
+    }
+
+    #[test]
+    fn test_dmenu_edge_arrow_navigation() {
+        let mut launcher = Launcher::new();
+        launcher.position = LauncherPosition::Dmenu;
+        launcher.executable_cache = vec![
+            "alacritty".to_string(),
+            "firefox".to_string(),
+            "foot".to_string(),
+            "xterm".to_string(),
+        ];
+        launcher.query = "f".to_string();
+        launcher.cursor_position = 1;
+        launcher.selected_index = 0;
+
+        // When cursor is at the end (position 1 in query "f"):
+        // MoveCursorRight should advance selected_index (next item) in dmenu mode!
+        update_launcher_state(&mut launcher, LauncherAction::MoveCursorRight);
+        assert_eq!(launcher.selected_index, 1);
+        assert_eq!(launcher.cursor_position, 1);
+
+        update_launcher_state(&mut launcher, LauncherAction::MoveCursorRight);
+        // Wraps or selects next matching item
+        assert_eq!(launcher.cursor_position, 1);
+
+        // Move cursor left into the text:
+        update_launcher_state(&mut launcher, LauncherAction::MoveCursorLeft);
+        assert_eq!(launcher.cursor_position, 0);
+
+        // Pressing Left again when cursor is at 0 should select previous item!
+        update_launcher_state(&mut launcher, LauncherAction::MoveCursorLeft);
+        assert_eq!(launcher.cursor_position, 0);
+    }
+
+    #[test]
+    fn test_launcher_filtered_cache_memoization() {
+        let mut launcher = Launcher::new();
+        launcher.executable_cache = vec![
+            "firefox".to_string(),
+            "foot".to_string(),
+            "alacritty".to_string(),
+        ];
+        launcher.query = "f".to_string();
+        launcher.cursor_position = 1;
+        launcher.ensure_filtered_cache();
+        assert_eq!(launcher.filtered_cache.len(), 2);
+        assert_eq!(launcher.filtered_cache_query, "f");
+
+        // Navigating with SelectNext should NOT invalidate cache
+        update_launcher_state(&mut launcher, LauncherAction::SelectNext);
+        assert_eq!(launcher.selected_index, 1);
+        assert_eq!(launcher.filtered_cache_query, "f");
+        assert_eq!(launcher.filtered_cache.len(), 2);
+
+        // Typing characters updates cache
+        update_launcher_state(&mut launcher, LauncherAction::InsertChar('o'));
+        update_launcher_state(&mut launcher, LauncherAction::InsertChar('t'));
+        assert_eq!(launcher.query, "fot");
+        assert_eq!(launcher.filtered_cache_query, "fot");
+        assert_eq!(launcher.filtered_cache.len(), 1);
+        assert_eq!(launcher.filtered_cache[0], "foot");
     }
 }
