@@ -3,7 +3,7 @@
 use std::collections::{HashMap, HashSet};
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use std::process::Command;
 use crate::statusbar::{StatusbarError, TiloError};
 
 /// Scans a single binary directory for executable files.
@@ -338,11 +338,11 @@ pub fn spawn_app(app_name: &str) -> Result<u32, TiloError> {
     let binary = &args[0];
     let binary_args = &args[1..];
 
-    let child = Command::new(binary)
-        .args(binary_args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
+    let mut cmd = Command::new(binary);
+    cmd.args(binary_args);
+    crate::process::configure_detached_command(&mut cmd);
+
+    let child = cmd
         .spawn()
         .map_err(|e| StatusbarError::SpawnError(format!("Failed to spawn '{}': {}", app_name, e)))?;
 

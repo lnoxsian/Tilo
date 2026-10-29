@@ -300,10 +300,7 @@ impl WindowManager {
     pub fn execute_action(&mut self, action: Action) -> Result<(), X11Error> {
         match action {
             Action::Spawn(cmd) => {
-                let _ = std::process::Command::new("sh")
-                    .arg("-c")
-                    .arg(&cmd)
-                    .spawn();
+                let _ = crate::process::spawn_detached_shell(&cmd);
             }
             Action::Close => {
                 if let Some(win) = self.focused_window() {

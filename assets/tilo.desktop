@@ -5,6 +5,7 @@ Exec=tilo
 TryExec=tilo
 Icon=tilo
 Type=Application
+DesktopNames=tilo
 Categories=System;
 Keywords=wm;tiling;windowmanager;window;manager;x11;
 X-LightDM-DesktopName=tilo

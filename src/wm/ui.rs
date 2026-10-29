@@ -588,17 +588,13 @@ impl WindowManager {
             }
             "reboot" | "restart" => {
                 let _ = self.perform_desktop_shutdown(None);
-                let _ = std::process::Command::new("systemctl")
-                    .arg("reboot")
-                    .spawn()
-                    .or_else(|_| std::process::Command::new("reboot").spawn());
+                let _ = crate::process::spawn_detached_app("systemctl", &["reboot".to_string()])
+                    .or_else(|_| crate::process::spawn_detached_app("reboot", &[]));
             }
             "poweroff" | "power off" | "shutdown" => {
                 let _ = self.perform_desktop_shutdown(None);
-                let _ = std::process::Command::new("systemctl")
-                    .arg("poweroff")
-                    .spawn()
-                    .or_else(|_| std::process::Command::new("poweroff").spawn());
+                let _ = crate::process::spawn_detached_app("systemctl", &["poweroff".to_string()])
+                    .or_else(|_| crate::process::spawn_detached_app("poweroff", &[]));
             }
             other => {
                 eprintln!("[WARN  tilo::wm] Unknown power action: {}", other);

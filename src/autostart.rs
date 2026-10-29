@@ -6,7 +6,7 @@
 //! - Non-crashing error handling (spawning failures are logged as warnings).
 //! - Automatic process reaping (`SIGCHLD` ignore) to prevent zombie processes.
 
-use std::process::{Command, Stdio};
+use std::process::Command;
 use thiserror::Error;
 
 /// Represents a single autostart command configuration.
@@ -78,11 +78,11 @@ pub fn spawn_command(cmd: &AutostartCmd) -> Result<u32, AutostartError> {
         ));
     }
 
-    let child = Command::new(&cmd.program)
-        .args(&cmd.args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
+    let mut command = Command::new(&cmd.program);
+    command.args(&cmd.args);
+    crate::process::configure_detached_command(&mut command);
+
+    let child = command
         .spawn()
         .map_err(|e| AutostartError::SpawnFailed(cmd.program.clone(), e))?;
 

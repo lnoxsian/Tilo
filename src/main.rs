@@ -2,6 +2,8 @@ use tilo::wm::WindowManager;
 use tilo::x11::{X11Context, X11Error};
 
 fn main() {
+    tilo::session::init_desktop_session();
+
     let ctx = match X11Context::new() {
         Ok(ctx) => {
             println!("[INFO  tilo::x11] Connected to X11 server.");
