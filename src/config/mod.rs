@@ -112,6 +112,9 @@ pub struct Config {
     pub statusbar: bool,
     /// Visual layout and position of the application launcher ('spotlight' or 'dmenu', default: spotlight).
     pub launcher_position: LauncherPosition,
+    /// Whether moving the mouse over a window focuses it automatically (default: false).
+    /// When false (the default), windows are focused by clicking them (click-to-focus).
+    pub focus_on_hover: bool,
 }
 
 impl Config {
@@ -200,6 +203,7 @@ impl Default for Config {
             workspace_tags: (1..=9).map(|i| i.to_string()).collect(),
             statusbar: true,
             launcher_position: LauncherPosition::Spotlight,
+            focus_on_hover: false,
         }
     }
 }
@@ -912,6 +916,15 @@ fn parse_line(
             let val = token_to_string(line[1]).to_lowercase();
             config.workspace_wheel_switch = val == "true" || val == "1" || val == "yes";
         }
+        "focus_on_hover" | "focus_follows_mouse" | "focus_hover" | "focus_mouse" => {
+            if line.len() < 2 {
+                return Err(ConfigError::ParseError {
+                    line: line_number,
+                    message: format!("Directive '{}' requires 'true' or 'false'", directive),
+                });
+            }
+            config.focus_on_hover = token_to_bool(line[1], line_number, directive)?;
+        }
         "shutdown_timeout" | "shutdown_timeout_ms" => {
             if line.len() < 2 {
                 return Err(ConfigError::ParseError {
@@ -1223,6 +1236,18 @@ fn token_to_color(token: &Token, line: usize, directive: &str) -> Result<u32, Co
     }
 }
 
+fn token_to_bool(token: &Token, line: usize, _directive: &str) -> Result<bool, ConfigError> {
+    let s = token_to_string(token).to_lowercase();
+    match s.as_str() {
+        "true" | "1" | "yes" | "on" | "enable" | "enabled" => Ok(true),
+        "false" | "0" | "no" | "off" | "disable" | "disabled" => Ok(false),
+        _ => Err(ConfigError::InvalidValue {
+            line,
+            value: s,
+        }),
+    }
+}
+
 fn parse_action(tokens: &[&Token], line: usize, config: &Config) -> Result<Action, ConfigError> {
     if tokens.is_empty() {
         return Err(ConfigError::ParseError {
@@ -1528,6 +1553,11 @@ workspace_mouse true
 
 # Enable mouse wheel scrolling over workspace tags to cycle workspaces.
 workspace_wheel_switch true
+
+# --- Focus Policy ---
+# Automatically focus window when mouse hovers over it (focus follows mouse / sloppy focus).
+# Options: false (click-to-focus, default), true (focus-on-hover)
+focus_on_hover false
 
 # --- Workspace Identifiers / Tags ---
 # Custom display labels or Nerd Font icons for workspaces 1 through 9.
@@ -2015,6 +2045,7 @@ bind $mod+1 select_tab 1
 
         assert!(config.workspace_mouse);
         assert!(config.workspace_wheel_switch);
+        assert!(!config.focus_on_hover);
 
         assert!(!config.tab_config.show_index);
         assert_eq!(config.tab_config.max_width, 200);
@@ -2338,5 +2369,46 @@ bar_workspace_icon 4 
         // Invalid value returns ConfigError::InvalidValue
         let err = parse(&tokenize("launcher_position invalid_mode\n").unwrap());
         assert!(err.is_err());
+    }
+
+    #[test]
+    fn test_parse_focus_on_hover() {
+        let input_default = "";
+        let cfg_default = parse(&tokenize(input_default).unwrap()).unwrap();
+        assert!(!cfg_default.focus_on_hover, "focus_on_hover must be false by default");
+
+        let input_false = "focus_on_hover false\n";
+        let cfg_false = parse(&tokenize(input_false).unwrap()).unwrap();
+        assert!(!cfg_false.focus_on_hover);
+
+        let input_true = "focus_on_hover true\n";
+        let cfg_true = parse(&tokenize(input_true).unwrap()).unwrap();
+        assert!(cfg_true.focus_on_hover);
+
+        let input_alias1 = "focus_follows_mouse yes\n";
+        let cfg_alias1 = parse(&tokenize(input_alias1).unwrap()).unwrap();
+        assert!(cfg_alias1.focus_on_hover);
+
+        let input_alias2 = "focus_hover 1\n";
+        let cfg_alias2 = parse(&tokenize(input_alias2).unwrap()).unwrap();
+        assert!(cfg_alias2.focus_on_hover);
+
+        let input_alias3 = "focus_mouse on\n";
+        let cfg_alias3 = parse(&tokenize(input_alias3).unwrap()).unwrap();
+        assert!(cfg_alias3.focus_on_hover);
+    }
+
+    #[test]
+    fn test_parse_focus_on_hover_missing_arg() {
+        let input_err = "focus_on_hover\n";
+        let err = parse(&tokenize(input_err).unwrap());
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn test_parse_focus_on_hover_invalid_value() {
+        let input_err = "focus_on_hover not_a_boolean\n";
+        let err = parse(&tokenize(input_err).unwrap());
+        assert!(matches!(err, Err(ConfigError::InvalidValue { .. })));
     }
 }

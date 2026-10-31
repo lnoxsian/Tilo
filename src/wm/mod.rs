@@ -203,6 +203,13 @@ impl WindowManager {
 
         let mod_mask = parse_modifier(&config.mod_key).unwrap_or(MOD_SUPER);
         let mouse_bindings = crate::mouse::default_mouse_bindings(mod_mask);
+        let _ = crate::mouse::update_client_button_grabs(
+            &context.connection,
+            context.root_window,
+            &mouse_bindings,
+            input_manager.num_lock_mask,
+            true,
+        );
 
         let cursor_manager = crate::cursor::CursorManager::new(&context.connection, context.screen_num);
         let _ = cursor_manager.apply_root(&context.connection, context.root_window);
@@ -260,6 +267,13 @@ impl WindowManager {
 
         let mod_mask = parse_modifier(&config.mod_key).unwrap_or(MOD_SUPER);
         self.mouse_bindings = crate::mouse::default_mouse_bindings(mod_mask);
+        let _ = crate::mouse::update_client_button_grabs(
+            &self.context.connection,
+            self.context.root_window,
+            &self.mouse_bindings,
+            self.input_manager.num_lock_mask,
+            true,
+        );
         let focused = self.focused_window();
         for &win in self.client_state.all_clients() {
             let _ = crate::mouse::update_client_button_grabs(

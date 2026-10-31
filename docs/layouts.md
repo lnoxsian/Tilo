@@ -61,7 +61,7 @@ Each workspace owns a persistent BSP tree. Windows are leaves; splits are interi
 - `Mod+v` — preselect vertical split for the next window
 - `Mod+b` — preselect horizontal split for the next window
 
-**Resize:** `Mod+Ctrl+Left/Right/Up/Down` adjusts the split ratio of the focused pane by approximately `0.05`. Ratios are clamped to `0.05..=0.95`.
+**Resize:** `Mod+Ctrl+Left/Right/Up/Down` adjusts the split ratio of the focused pane by approximately `0.05`. Ratios are clamped to `0.05..=0.95`. Alternatively, hold `Mod` and Right-Click drag on any tiled window to resize the adjacent split boundary dynamically with 1:1 mouse tracking.
 
 **Move:** Swaps two leaf nodes in the tree.
 

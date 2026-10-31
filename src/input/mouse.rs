@@ -3,7 +3,7 @@
 //! Implements Phase 24 of Plan.md:
 //! - Optional mouse interaction without compromising keyboard-first workflow.
 //! - `Mod + Left Click`: Focus and drag to move floating windows.
-//! - `Mod + Right Click`: Focus and drag to resize floating windows.
+//! - `Mod + Right Click`: Focus and drag to resize floating or tiled windows.
 //! - Grabs mouse button combinations on client windows.
 //! - Tracks pointer drag states via [`MouseAction`].
 
@@ -44,6 +44,8 @@ pub enum MouseAction {
         start_x: i32,
         start_y: i32,
         initial_rect: crate::layout::Rect,
+        click_x: i32,
+        click_y: i32,
     },
 }
 
@@ -235,15 +237,16 @@ pub fn update_client_button_grabs(
     // 1. Ungrab all existing buttons first to prevent stale grabs
     let _ = conn.ungrab_button(ButtonIndex::ANY, window, ModMask::ANY);
 
-    let mut modifier_masks = vec![0u16, MOD_LOCK];
-    if num_lock_mask != 0 {
-        modifier_masks.push(num_lock_mask);
-        modifier_masks.push(num_lock_mask | MOD_LOCK);
-    }
+    let (masks, count) = if num_lock_mask != 0 {
+        ([0u16, MOD_LOCK, num_lock_mask, num_lock_mask | MOD_LOCK], 4)
+    } else {
+        ([0u16, MOD_LOCK, 0, 0], 2)
+    };
+    let modifier_masks = &masks[..count];
 
     // 2. Always grab configured Mod + Button shortcuts in ASYNC mode
     for b in bindings {
-        for &m in &modifier_masks {
+        for &m in modifier_masks {
             let mask = b.modifiers | m;
             let _ = conn.grab_button(
                 false,
@@ -261,7 +264,7 @@ pub fn update_client_button_grabs(
 
     // 3. For unfocused windows, grab Button 1 without Mod in SYNC mode for click-to-focus
     if !focused {
-        for &m in &modifier_masks {
+        for &m in modifier_masks {
             let _ = conn.grab_button(
                 false,
                 window,

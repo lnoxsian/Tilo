@@ -167,6 +167,22 @@ impl BspNode {
         }
     }
 
+    /// Resizes the ancestor split of `target` matching `target_split` dynamically based on pointer drag.
+    pub fn resize_pane_by_pointer(
+        &mut self,
+        target: Window,
+        delta: i32,
+        target_split: SplitType,
+        initial_rect: Rect,
+        click_coord: i32,
+    ) -> bool {
+        if let Some(highest) = self.find_highest_split_mut(target, target_split) {
+            highest.adjust_linear_leaf_by_pointer(target, delta, target_split, initial_rect, click_coord)
+        } else {
+            false
+        }
+    }
+
     /// Finds a mutable reference to the highest continuous ancestor split of `target_split` containing `target`.
     fn find_highest_split_mut(&mut self, target: Window, target_split: SplitType) -> Option<&mut BspNode> {
         if !self.contains(target) {
@@ -232,6 +248,89 @@ impl BspNode {
             units[target_idx].1 -= actual;
             units[neighbor_idx].1 += actual;
         }
+
+        self.apply_split_unit_weights(target_split, &units);
+        true
+    }
+
+    /// Adjusts linear units for pointer drag:
+    /// - Divider selection is edge-aware based on `click_coord` and window position.
+    /// - Pointer movement moves the divider in the exact pointer direction (+X/+Y moves right/down, -X/-Y moves left/up).
+    /// - Scaling is 1:1 pixel accurate relative to the split container's dimensions.
+    fn adjust_linear_leaf_by_pointer(
+        &mut self,
+        target: Window,
+        delta: i32,
+        target_split: SplitType,
+        initial_rect: Rect,
+        click_coord: i32,
+    ) -> bool {
+        if delta == 0 {
+            return false;
+        }
+
+        let mut units = Vec::new();
+        self.collect_split_units(target_split, 1.0, &mut units);
+
+        if units.len() < 2 {
+            return false;
+        }
+
+        let target_idx = match units.iter().position(|(wins, _)| wins.contains(&target)) {
+            Some(i) => i,
+            None => return false,
+        };
+
+        let divider_idx = if units.len() == 2 || target_idx == 0 {
+            0
+        } else if target_idx == units.len() - 1 {
+            units.len() - 2
+        } else {
+            let (rect_start, rect_dim) = match target_split {
+                SplitType::Horizontal => (initial_rect.x, initial_rect.width),
+                SplitType::Vertical => (initial_rect.y, initial_rect.height),
+            };
+            let center = rect_start + (rect_dim as i32 / 2);
+            if click_coord >= center {
+                target_idx
+            } else {
+                target_idx - 1
+            }
+        };
+
+        let target_weight = units[target_idx].1;
+        if target_weight <= 0.001 {
+            return false;
+        }
+
+        let initial_dim = match target_split {
+            SplitType::Horizontal => initial_rect.width,
+            SplitType::Vertical => initial_rect.height,
+        };
+        if initial_dim == 0 {
+            return false;
+        }
+
+        let total_span = (initial_dim as f32 / target_weight).max(1.0);
+        let delta_weight = delta as f32 / total_span;
+
+        let min_weight = 0.05;
+        let actual = if delta_weight > 0.0 {
+            let max_delta = (units[divider_idx + 1].1 - min_weight).max(0.0);
+            delta_weight.min(max_delta)
+        } else if delta_weight < 0.0 {
+            let max_delta = (units[divider_idx].1 - min_weight).max(0.0);
+            -(-delta_weight).min(max_delta)
+        } else {
+            0.0
+        };
+
+        if actual.abs() <= 0.00001 {
+            return false;
+        }
+
+        units[divider_idx].1 += actual;
+        units[divider_idx + 1].1 -= actual;
 
         self.apply_split_unit_weights(target_split, &units);
         true
@@ -508,24 +607,56 @@ impl BspTree {
         }
     }
 
-    /// Dynamically resizes a window's split during mouse drag.
-    pub fn resize_by_pointer(&mut self, window: Window, delta_x: i32, delta_y: i32, initial_rect: Rect) -> bool {
+    /// Dynamically resizes a window's split during mouse drag with edge and click position awareness.
+    pub fn resize_by_pointer_at(
+        &mut self,
+        window: Window,
+        delta_x: i32,
+        delta_y: i32,
+        initial_rect: Rect,
+        click_x: i32,
+        click_y: i32,
+    ) -> bool {
+        if delta_x == 0 && delta_y == 0 {
+            return false;
+        }
+
         let mut handled = false;
         if let Some(ref mut root) = self.root {
-            if initial_rect.width > 0 && delta_x != 0 {
-                let frac = delta_x as f32 / initial_rect.width as f32;
-                if root.resize_pane(window, frac, SplitType::Horizontal) {
-                    handled = true;
-                }
+            let left_dist = (click_x - initial_rect.x).abs();
+            let right_dist = (click_x - (initial_rect.x + initial_rect.width as i32)).abs();
+            let top_dist = (click_y - initial_rect.y).abs();
+            let bottom_dist = (click_y - (initial_rect.y + initial_rect.height as i32)).abs();
+
+            let h_boundary_dist = left_dist.min(right_dist);
+            let v_boundary_dist = top_dist.min(bottom_dist);
+
+            let allow_h = h_boundary_dist <= 50 || v_boundary_dist > 50;
+            let allow_v = v_boundary_dist <= 50 || h_boundary_dist > 50;
+
+            if allow_h
+                && initial_rect.width > 0
+                && delta_x != 0
+                && root.resize_pane_by_pointer(window, delta_x, SplitType::Horizontal, initial_rect, click_x)
+            {
+                handled = true;
             }
-            if initial_rect.height > 0 && delta_y != 0 {
-                let frac = delta_y as f32 / initial_rect.height as f32;
-                if root.resize_pane(window, frac, SplitType::Vertical) {
-                    handled = true;
-                }
+            if allow_v
+                && initial_rect.height > 0
+                && delta_y != 0
+                && root.resize_pane_by_pointer(window, delta_y, SplitType::Vertical, initial_rect, click_y)
+            {
+                handled = true;
             }
         }
         handled
+    }
+
+    /// Dynamically resizes a window's split during mouse drag (defaults click position to center).
+    pub fn resize_by_pointer(&mut self, window: Window, delta_x: i32, delta_y: i32, initial_rect: Rect) -> bool {
+        let cx = initial_rect.x + (initial_rect.width as i32 / 2);
+        let cy = initial_rect.y + (initial_rect.height as i32 / 2);
+        self.resize_by_pointer_at(window, delta_x, delta_y, initial_rect, cx, cy)
     }
 
     /// Calculates bounding rectangles for all windows in the tree.

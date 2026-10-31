@@ -8,8 +8,8 @@ use tilo::wm::WindowManager;
 use tilo::x11::X11Context;
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::{
-    ButtonPressEvent, ButtonReleaseEvent, ConnectionExt as _, CreateWindowAux, EventMask,
-    KeyButMask, Motion, MotionNotifyEvent, WindowClass,
+    ButtonPressEvent, ButtonReleaseEvent, ConnectionExt as _, CreateWindowAux, EnterNotifyEvent,
+    EventMask, KeyButMask, Motion, MotionNotifyEvent, NotifyDetail, NotifyMode, WindowClass,
 };
 
 struct XephyrServer {
@@ -465,27 +465,28 @@ fn test_tiled_window_mouse_drag_resize_in_xephyr() {
     let ctx = X11Context::connect_to(Some(":150")).expect("Connect to Xephyr");
     let mut wm = WindowManager::new_with_config(ctx, Config::default()).expect("Create WM");
 
-    let screen = &wm.context.connection.setup().roots[wm.context.screen_num];
+    let root_depth = wm.context.connection.setup().roots[wm.context.screen_num].root_depth;
+    let root_visual = wm.context.connection.setup().roots[wm.context.screen_num].root_visual;
     let w1 = wm.context.connection.generate_id().unwrap();
     let w2 = wm.context.connection.generate_id().unwrap();
 
     wm.context.connection.create_window(
-        screen.root_depth,
+        root_depth,
         w1,
         wm.context.root_window,
         0, 0, 200, 200, 0,
         WindowClass::INPUT_OUTPUT,
-        screen.root_visual,
+        root_visual,
         &CreateWindowAux::new().event_mask(EventMask::STRUCTURE_NOTIFY),
     ).unwrap();
 
     wm.context.connection.create_window(
-        screen.root_depth,
+        root_depth,
         w2,
         wm.context.root_window,
         0, 0, 200, 200, 0,
         WindowClass::INPUT_OUTPUT,
-        screen.root_visual,
+        root_visual,
         &CreateWindowAux::new().event_mask(EventMask::STRUCTURE_NOTIFY),
     ).unwrap();
 
@@ -554,7 +555,429 @@ fn test_tiled_window_mouse_drag_resize_in_xephyr() {
     // Window 1 should now be wider than its initial geometry
     let geom1_after = wm.context.connection.get_geometry(w1).unwrap().reply().unwrap();
     assert!(geom1_after.width > geom1_before.width, "Tiled window 1 width must have grown");
+
+    // Next: Initiate Mod + Right Click on w2 (the right window) and drag 80 pixels to the left
+    let geom2_before = wm.context.connection.get_geometry(w2).unwrap().reply().unwrap();
+    let press_w2 = ButtonPressEvent {
+        response_type: 4,
+        detail: 3,
+        sequence: 4,
+        time: 40,
+        root: wm.context.root_window,
+        event: w2,
+        child: 0,
+        root_x: geom2_before.x + (geom2_before.width / 2) as i16,
+        root_y: geom2_before.y + (geom2_before.height / 2) as i16,
+        event_x: (geom2_before.width / 2) as i16,
+        event_y: (geom2_before.height / 2) as i16,
+        state: KeyButMask::from(MOD_SUPER),
+        same_screen: true,
+    };
+    wm.handle_button_press(&press_w2).unwrap();
+    assert!(matches!(wm.mouse_action, MouseAction::ResizingTiled { .. }));
+
+    // Drag pointer 80 pixels to the left (-80px)
+    let motion_w2 = MotionNotifyEvent {
+        response_type: 6,
+        detail: Motion::NORMAL,
+        sequence: 5,
+        time: 50,
+        root: wm.context.root_window,
+        event: wm.context.root_window,
+        child: w2,
+        root_x: press_w2.root_x - 80,
+        root_y: press_w2.root_y,
+        event_x: press_w2.root_x - 80,
+        event_y: press_w2.root_y,
+        state: KeyButMask::from(MOD_SUPER) | KeyButMask::BUTTON3,
+        same_screen: true,
+    };
+    wm.handle_motion_notify(&motion_w2).unwrap();
+
+    let release_w2 = ButtonReleaseEvent {
+        response_type: 5,
+        detail: 3,
+        sequence: 6,
+        time: 60,
+        root: wm.context.root_window,
+        event: wm.context.root_window,
+        child: 0,
+        root_x: motion_w2.root_x,
+        root_y: motion_w2.root_y,
+        event_x: motion_w2.root_x,
+        event_y: motion_w2.root_y,
+        state: KeyButMask::from(MOD_SUPER),
+        same_screen: true,
+    };
+    wm.handle_button_release(&release_w2).unwrap();
+    assert!(!wm.mouse_action.is_active());
+
+    // Window 2 should now have expanded to the left, so its width is greater than geom2_before
+    let geom2_after = wm.context.connection.get_geometry(w2).unwrap().reply().unwrap();
+    assert!(geom2_after.width > geom2_before.width, "Tiled window 2 width must have grown after leftward drag");
+
+    // Add window 3 to create a MasterStack with Master (w1) and Stack (w2 top, w3 bottom)
+    let w3 = wm.context.connection.generate_id().unwrap();
+    wm.context.connection.create_window(
+        root_depth,
+        w3,
+        wm.context.root_window,
+        0, 0, 200, 200, 0,
+        WindowClass::INPUT_OUTPUT,
+        root_visual,
+        &CreateWindowAux::new().event_mask(EventMask::STRUCTURE_NOTIFY),
+    ).unwrap();
+    wm.manage_window(w3).unwrap();
+    wm.retile().unwrap();
+
+    let geom_w2_init = wm.context.connection.get_geometry(w2).unwrap().reply().unwrap();
+    let geom_w3_init = wm.context.connection.get_geometry(w3).unwrap().reply().unwrap();
+
+    // Drag w2 down vertically (+60px)
+    let press_v = ButtonPressEvent {
+        response_type: 4,
+        detail: 3,
+        sequence: 7,
+        time: 70,
+        root: wm.context.root_window,
+        event: w2,
+        child: 0,
+        root_x: geom_w2_init.x + (geom_w2_init.width / 2) as i16,
+        root_y: geom_w2_init.y + (geom_w2_init.height / 2) as i16,
+        event_x: (geom_w2_init.width / 2) as i16,
+        event_y: (geom_w2_init.height / 2) as i16,
+        state: KeyButMask::from(MOD_SUPER),
+        same_screen: true,
+    };
+    wm.handle_button_press(&press_v).unwrap();
+
+    let motion_v = MotionNotifyEvent {
+        response_type: 6,
+        detail: Motion::NORMAL,
+        sequence: 8,
+        time: 80,
+        root: wm.context.root_window,
+        event: wm.context.root_window,
+        child: w2,
+        root_x: press_v.root_x,
+        root_y: press_v.root_y + 60,
+        event_x: press_v.root_x,
+        event_y: press_v.root_y + 60,
+        state: KeyButMask::from(MOD_SUPER) | KeyButMask::BUTTON3,
+        same_screen: true,
+    };
+    wm.handle_motion_notify(&motion_v).unwrap();
+
+    let release_v = ButtonReleaseEvent {
+        response_type: 5,
+        detail: 3,
+        sequence: 9,
+        time: 90,
+        root: wm.context.root_window,
+        event: wm.context.root_window,
+        child: 0,
+        root_x: motion_v.root_x,
+        root_y: motion_v.root_y,
+        event_x: motion_v.root_x,
+        event_y: motion_v.root_y,
+        state: KeyButMask::from(MOD_SUPER),
+        same_screen: true,
+    };
+    wm.handle_button_release(&release_v).unwrap();
+
+    let geom_w2_post = wm.context.connection.get_geometry(w2).unwrap().reply().unwrap();
+    let geom_w3_post = wm.context.connection.get_geometry(w3).unwrap().reply().unwrap();
+
+    assert!(geom_w2_post.height > geom_w2_init.height, "Stack top window (w2) height must have increased");
+    assert!(geom_w3_post.height < geom_w3_init.height, "Stack bottom window (w3) height must have decreased");
 }
 
+#[test]
+fn test_tiled_boundary_split_click_resize_in_xephyr() {
+    let _server = match XephyrServer::start(151) {
+        Some(s) => s,
+        None => {
+            eprintln!("Xephyr not available on :151, skipping test");
+            return;
+        }
+    };
 
+    let ctx = X11Context::connect_to(Some(":151")).expect("Connect to Xephyr");
+    let mut wm = WindowManager::new_with_config(ctx, Config::default()).expect("Create WM");
+
+    let root_depth = wm.context.connection.setup().roots[wm.context.screen_num].root_depth;
+    let root_visual = wm.context.connection.setup().roots[wm.context.screen_num].root_visual;
+    let w1 = wm.context.connection.generate_id().unwrap();
+    let w2 = wm.context.connection.generate_id().unwrap();
+
+    wm.context.connection.create_window(
+        root_depth,
+        w1,
+        wm.context.root_window,
+        0, 0, 200, 200, 0,
+        WindowClass::INPUT_OUTPUT,
+        root_visual,
+        &CreateWindowAux::new().event_mask(EventMask::STRUCTURE_NOTIFY),
+    ).unwrap();
+
+    wm.context.connection.create_window(
+        root_depth,
+        w2,
+        wm.context.root_window,
+        0, 0, 200, 200, 0,
+        WindowClass::INPUT_OUTPUT,
+        root_visual,
+        &CreateWindowAux::new().event_mask(EventMask::STRUCTURE_NOTIFY),
+    ).unwrap();
+
+    wm.manage_window(w1).unwrap();
+    wm.manage_window(w2).unwrap();
+    wm.retile().unwrap();
+
+    let geom1_before = wm.context.connection.get_geometry(w1).unwrap().reply().unwrap();
+    let geom2_before = wm.context.connection.get_geometry(w2).unwrap().reply().unwrap();
+
+    // The boundary gap between w1 and w2 on the root window
+    let split_boundary_x = ((geom1_before.x + geom1_before.width as i16) + geom2_before.x) / 2;
+    let split_boundary_y = geom1_before.y + (geom1_before.height / 2) as i16;
+
+    // Simulate Mod + Right Click directly in the boundary gap on the root window
+    let press_boundary = ButtonPressEvent {
+        response_type: 4,
+        detail: 3, // Right click
+        sequence: 1,
+        time: 10,
+        root: wm.context.root_window,
+        event: wm.context.root_window,
+        child: 0,
+        root_x: split_boundary_x,
+        root_y: split_boundary_y,
+        event_x: split_boundary_x,
+        event_y: split_boundary_y,
+        state: KeyButMask::from(MOD_SUPER),
+        same_screen: true,
+    };
+
+    wm.handle_button_press(&press_boundary).unwrap();
+    assert!(
+        matches!(wm.mouse_action, MouseAction::ResizingTiled { .. }),
+        "Mod + Right Click in split boundary gap must initiate ResizingTiled"
+    );
+
+    // Drag pointer 70 pixels to the right (+70px)
+    let motion = MotionNotifyEvent {
+        response_type: 6,
+        detail: Motion::NORMAL,
+        sequence: 2,
+        time: 20,
+        root: wm.context.root_window,
+        event: wm.context.root_window,
+        child: 0,
+        root_x: split_boundary_x + 70,
+        root_y: split_boundary_y,
+        event_x: split_boundary_x + 70,
+        event_y: split_boundary_y,
+        state: KeyButMask::from(MOD_SUPER) | KeyButMask::BUTTON3,
+        same_screen: true,
+    };
+    wm.handle_motion_notify(&motion).unwrap();
+
+    // Release mouse button
+    let release = ButtonReleaseEvent {
+        response_type: 5,
+        detail: 3,
+        sequence: 3,
+        time: 30,
+        root: wm.context.root_window,
+        event: wm.context.root_window,
+        child: 0,
+        root_x: motion.root_x,
+        root_y: motion.root_y,
+        event_x: motion.root_x,
+        event_y: motion.root_y,
+        state: KeyButMask::from(MOD_SUPER),
+        same_screen: true,
+    };
+    wm.handle_button_release(&release).unwrap();
+    assert!(!wm.mouse_action.is_active());
+
+    // Window 1 should now be wider and Window 2 should be narrower
+    let geom1_after = wm.context.connection.get_geometry(w1).unwrap().reply().unwrap();
+    let geom2_after = wm.context.connection.get_geometry(w2).unwrap().reply().unwrap();
+
+    assert!(geom1_after.width > geom1_before.width, "Left window (w1) must grow when dragging boundary right");
+    assert!(geom2_after.width < geom2_before.width, "Right window (w2) must shrink when dragging boundary right");
+}
+
+#[test]
+fn test_focus_on_hover_in_xephyr() {
+    let _server = match XephyrServer::start(152) {
+        Some(s) => s,
+        None => {
+            eprintln!("Xephyr not available on :152, skipping test");
+            return;
+        }
+    };
+
+    let ctx = X11Context::connect_to(Some(":152")).expect("Connect to Xephyr");
+    let mut wm = WindowManager::new_with_config(ctx, Config::default()).expect("Create WM");
+
+    // Verify default config has focus_on_hover disabled (click-to-focus)
+    assert!(!wm.config.focus_on_hover, "focus_on_hover must be false by default");
+
+    let root_depth = wm.context.connection.setup().roots[wm.context.screen_num].root_depth;
+    let root_visual = wm.context.connection.setup().roots[wm.context.screen_num].root_visual;
+    let w1 = wm.context.connection.generate_id().unwrap();
+    let w2 = wm.context.connection.generate_id().unwrap();
+
+    wm.context.connection.create_window(
+        root_depth,
+        w1,
+        wm.context.root_window,
+        0, 0, 200, 200, 0,
+        WindowClass::INPUT_OUTPUT,
+        root_visual,
+        &CreateWindowAux::new().event_mask(EventMask::STRUCTURE_NOTIFY),
+    ).unwrap();
+
+    wm.context.connection.create_window(
+        root_depth,
+        w2,
+        wm.context.root_window,
+        0, 0, 200, 200, 0,
+        WindowClass::INPUT_OUTPUT,
+        root_visual,
+        &CreateWindowAux::new().event_mask(EventMask::STRUCTURE_NOTIFY),
+    ).unwrap();
+
+    wm.manage_window(w1).unwrap();
+    wm.manage_window(w2).unwrap();
+    wm.retile().unwrap();
+
+    // 1. Explicitly focus w1
+    wm.focus_client(w1).unwrap();
+    assert_eq!(wm.focused_window(), Some(w1));
+
+    // 2. Default behavior (click-to-focus): EnterNotify on w2 must NOT change focus
+    let enter_w2 = EnterNotifyEvent {
+        response_type: 7,
+        detail: NotifyDetail::NONLINEAR,
+        sequence: 1,
+        time: 10,
+        root: wm.context.root_window,
+        event: w2,
+        child: 0,
+        root_x: 500,
+        root_y: 200,
+        event_x: 50,
+        event_y: 50,
+        state: KeyButMask::from(0u16),
+        mode: NotifyMode::NORMAL,
+        same_screen_focus: 1,
+    };
+    wm.handle_enter_notify(&enter_w2).unwrap();
+    assert_eq!(
+        wm.focused_window(),
+        Some(w1),
+        "With focus_on_hover=false (default), EnterNotify must not change focus"
+    );
+
+    // 3. Click-to-focus: clicking w2 focuses it
+    let click_w2 = ButtonPressEvent {
+        response_type: 4,
+        detail: 1, // Left click
+        sequence: 2,
+        time: 20,
+        root: wm.context.root_window,
+        event: w2,
+        child: 0,
+        root_x: 500,
+        root_y: 200,
+        event_x: 50,
+        event_y: 50,
+        state: KeyButMask::from(0u16),
+        same_screen: true,
+    };
+    wm.handle_button_press(&click_w2).unwrap();
+    assert_eq!(
+        wm.focused_window(),
+        Some(w2),
+        "Clicking w2 must focus it under click-to-focus policy"
+    );
+
+    // 4. Enable focus_on_hover
+    wm.config.focus_on_hover = true;
+
+    // 5. EnterNotify on w1: must now immediately focus w1
+    let enter_w1 = EnterNotifyEvent {
+        response_type: 7,
+        detail: NotifyDetail::NONLINEAR,
+        sequence: 3,
+        time: 30,
+        root: wm.context.root_window,
+        event: w1,
+        child: 0,
+        root_x: 100,
+        root_y: 200,
+        event_x: 50,
+        event_y: 50,
+        state: KeyButMask::from(0u16),
+        mode: NotifyMode::NORMAL,
+        same_screen_focus: 1,
+    };
+    wm.handle_enter_notify(&enter_w1).unwrap();
+    assert_eq!(
+        wm.focused_window(),
+        Some(w1),
+        "With focus_on_hover=true, EnterNotify on w1 must focus it immediately"
+    );
+
+    // 6. EnterNotify on w2: must immediately focus w2
+    wm.handle_enter_notify(&enter_w2).unwrap();
+    assert_eq!(
+        wm.focused_window(),
+        Some(w2),
+        "With focus_on_hover=true, EnterNotify on w2 must focus it immediately"
+    );
+
+    // 7. Drag isolation: active mouse_action must suppress hover focus
+    wm.mouse_action = MouseAction::Moving {
+        window: w2,
+        start_x: 500,
+        start_y: 200,
+        start_win_x: 400,
+        start_win_y: 100,
+    };
+    wm.handle_enter_notify(&enter_w1).unwrap();
+    assert_eq!(
+        wm.focused_window(),
+        Some(w2),
+        "EnterNotify must not switch focus while a mouse drag is active"
+    );
+    wm.mouse_action = MouseAction::None;
+
+    // 8. Event filtering: NotifyMode::GRAB must not switch focus
+    let grab_ev = EnterNotifyEvent {
+        mode: NotifyMode::GRAB,
+        ..enter_w1
+    };
+    wm.handle_enter_notify(&grab_ev).unwrap();
+    assert_eq!(
+        wm.focused_window(),
+        Some(w2),
+        "EnterNotify with NotifyMode::GRAB must be ignored"
+    );
+
+    // 9. Event filtering: NotifyDetail::INFERIOR must not switch focus
+    let inferior_ev = EnterNotifyEvent {
+        detail: NotifyDetail::INFERIOR,
+        ..enter_w1
+    };
+    wm.handle_enter_notify(&inferior_ev).unwrap();
+    assert_eq!(
+        wm.focused_window(),
+        Some(w2),
+        "EnterNotify with NotifyDetail::INFERIOR must be ignored"
+    );
+}
 

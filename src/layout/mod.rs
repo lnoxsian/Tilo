@@ -44,6 +44,13 @@ impl Rect {
             && self.y < other.y + other.height as i32
             && self.y + self.height as i32 > other.y
     }
+
+    /// Returns the Manhattan distance from a point `(px, py)` to the nearest edge of the rectangle (0 if inside).
+    pub fn distance_to_point(&self, px: i32, py: i32) -> i32 {
+        let dx = (self.x - px).max(0).max(px - (self.x + self.width as i32));
+        let dy = (self.y - py).max(0).max(py - (self.y + self.height as i32));
+        dx + dy
+    }
 }
 
 /// Configuration settings for the layout engine.
@@ -951,5 +958,178 @@ mod tests {
         let mut tree = BspTree::new();
         tree.rebuild_for_layout(LayoutType::Grid, &[1, 2, 3, 4], 0.5);
         assert_eq!(tree.windows(), vec![1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn test_pointer_resize_two_windows_left_and_right() {
+        let screen = Rect::new(0, 0, 1200, 800);
+        let config = LayoutConfig {
+            master_ratio: 0.50,
+            inner_gap: 0,
+            outer_gap: 0,
+            border_width: 0,
+        };
+
+        let mut tree = BspTree::new();
+        tree.rebuild_for_layout(LayoutType::MasterStack, &[1, 2], 0.50);
+        let rects_init = tree.calculate_rects(&screen, &config);
+        let r1_init = rects_init.iter().find(|(w, _)| *w == 1).unwrap().1;
+        let r2_init = rects_init.iter().find(|(w, _)| *w == 2).unwrap().1;
+        assert_eq!(r1_init.width, 600);
+        assert_eq!(r2_init.width, 600);
+
+        // 1. Drag Window 1 right (+60px) -> Window 1 grows, Window 2 shrinks
+        assert!(tree.resize_by_pointer(1, 60, 0, r1_init));
+        let rects_post1 = tree.calculate_rects(&screen, &config);
+        let r1_p1 = rects_post1.iter().find(|(w, _)| *w == 1).unwrap().1;
+        let r2_p1 = rects_post1.iter().find(|(w, _)| *w == 2).unwrap().1;
+        assert_eq!(r1_p1.width, 660);
+        assert_eq!(r2_p1.width, 540);
+
+        // 2. Drag Window 2 right (+60px) -> Divider continues moving right: Window 1 grows to 720, Window 2 shrinks to 480
+        assert!(tree.resize_by_pointer(2, 60, 0, r2_p1));
+        let rects_post2 = tree.calculate_rects(&screen, &config);
+        let r1_p2 = rects_post2.iter().find(|(w, _)| *w == 1).unwrap().1;
+        let r2_p2 = rects_post2.iter().find(|(w, _)| *w == 2).unwrap().1;
+        assert_eq!(r1_p2.width, 720);
+        assert_eq!(r2_p2.width, 480);
+
+        // 3. Drag Window 2 left (-120px) -> Divider moves left: Window 1 shrinks to 600, Window 2 grows to 600
+        assert!(tree.resize_by_pointer(2, -120, 0, r2_p2));
+        let rects_post3 = tree.calculate_rects(&screen, &config);
+        let r1_p3 = rects_post3.iter().find(|(w, _)| *w == 1).unwrap().1;
+        let r2_p3 = rects_post3.iter().find(|(w, _)| *w == 2).unwrap().1;
+        assert_eq!(r1_p3.width, 600);
+        assert_eq!(r2_p3.width, 600);
+    }
+
+    #[test]
+    fn test_pointer_resize_three_columns_edge_aware() {
+        let screen = Rect::new(0, 0, 1200, 800);
+        let config = LayoutConfig {
+            master_ratio: 0.50,
+            inner_gap: 0,
+            outer_gap: 0,
+            border_width: 0,
+        };
+
+        let mut tree = BspTree::new();
+        tree.rebuild_for_layout(LayoutType::Vertical, &[1, 2, 3], 0.50);
+        let rects_init = tree.calculate_rects(&screen, &config);
+        let r1_init = rects_init.iter().find(|(w, _)| *w == 1).unwrap().1;
+        let r2_init = rects_init.iter().find(|(w, _)| *w == 2).unwrap().1;
+        let r3_init = rects_init.iter().find(|(w, _)| *w == 3).unwrap().1;
+        assert_eq!(r1_init.width, 400);
+        assert_eq!(r2_init.width, 400);
+        assert_eq!(r3_init.width, 400);
+
+        // 1. Click in left half of Window 2 (x = 500, center is 600) and drag +40px right:
+        // Adjusts Divider 0 (between 1 and 2): Window 1 grows, Window 2 shrinks, Window 3 strictly unchanged
+        assert!(tree.resize_by_pointer_at(2, 40, 0, r2_init, 500, 400));
+        let rects_p1 = tree.calculate_rects(&screen, &config);
+        let r1_p1 = rects_p1.iter().find(|(w, _)| *w == 1).unwrap().1;
+        let r2_p1 = rects_p1.iter().find(|(w, _)| *w == 2).unwrap().1;
+        let r3_p1 = rects_p1.iter().find(|(w, _)| *w == 3).unwrap().1;
+        assert_eq!(r1_p1.width, 440);
+        assert_eq!(r2_p1.width, 360);
+        assert_eq!(r3_p1.width, 400);
+
+        // 2. Click in right half of Window 2 (x = 700, center is 600) and drag +40px right:
+        // Adjusts Divider 1 (between 2 and 3): Window 2 grows, Window 3 shrinks, Window 1 strictly unchanged
+        assert!(tree.resize_by_pointer_at(2, 40, 0, r2_p1, 700, 400));
+        let rects_p2 = tree.calculate_rects(&screen, &config);
+        let r1_p2 = rects_p2.iter().find(|(w, _)| *w == 1).unwrap().1;
+        let r2_p2 = rects_p2.iter().find(|(w, _)| *w == 2).unwrap().1;
+        let r3_p2 = rects_p2.iter().find(|(w, _)| *w == 3).unwrap().1;
+        assert_eq!(r1_p2.width, 440);
+        assert_eq!(r2_p2.width, 400);
+        assert_eq!(r3_p2.width, 360);
+    }
+
+    #[test]
+    fn test_pointer_resize_master_stack_vertical_and_isolation() {
+        let screen = Rect::new(0, 0, 1200, 800);
+        let config = LayoutConfig {
+            master_ratio: 0.50,
+            inner_gap: 0,
+            outer_gap: 0,
+            border_width: 0,
+        };
+
+        let mut tree = BspTree::new();
+        tree.rebuild_for_layout(LayoutType::MasterStack, &[1, 2, 3], 0.50);
+        let rects_init = tree.calculate_rects(&screen, &config);
+        let r1_init = rects_init.iter().find(|(w, _)| *w == 1).unwrap().1;
+        let r2_init = rects_init.iter().find(|(w, _)| *w == 2).unwrap().1;
+        let r3_init = rects_init.iter().find(|(w, _)| *w == 3).unwrap().1;
+        assert_eq!(r1_init.width, 600);
+        assert_eq!(r2_init.height, 400);
+        assert_eq!(r3_init.height, 400);
+
+        // 1. Dragging Master (Window 1) vertically does NOT affect stack windows (no vertical split)
+        assert!(!tree.resize_by_pointer(1, 0, 50, r1_init));
+        let rects_no_change = tree.calculate_rects(&screen, &config);
+        assert_eq!(rects_no_change.iter().find(|(w, _)| *w == 2).unwrap().1.height, 400);
+        assert_eq!(rects_no_change.iter().find(|(w, _)| *w == 3).unwrap().1.height, 400);
+
+        // 2. Dragging Stack Top (Window 2) down (+80px) increases Window 2 height and decreases Window 3 height
+        assert!(tree.resize_by_pointer(2, 0, 80, r2_init));
+        let rects_v = tree.calculate_rects(&screen, &config);
+        let r1_v = rects_v.iter().find(|(w, _)| *w == 1).unwrap().1;
+        let r2_v = rects_v.iter().find(|(w, _)| *w == 2).unwrap().1;
+        let r3_v = rects_v.iter().find(|(w, _)| *w == 3).unwrap().1;
+        assert_eq!(r1_v.width, 600, "Master width must remain strictly unchanged");
+        assert_eq!(r2_v.height, 480);
+        assert_eq!(r3_v.height, 320);
+    }
+
+    #[test]
+    fn test_pointer_resize_grid_layout_2d() {
+        let screen = Rect::new(0, 0, 1000, 1000);
+        let config = LayoutConfig {
+            master_ratio: 0.50,
+            inner_gap: 0,
+            outer_gap: 0,
+            border_width: 0,
+        };
+
+        let mut tree = BspTree::new();
+        tree.rebuild_for_layout(LayoutType::Grid, &[1, 2, 3, 4], 0.50);
+        let rects_init = tree.calculate_rects(&screen, &config);
+        let r1_init = rects_init.iter().find(|(w, _)| *w == 1).unwrap().1;
+        assert_eq!(r1_init.width, 500);
+        assert_eq!(r1_init.height, 500);
+
+        // Resize Window 1 both horizontally (+50px) and vertically (+60px)
+        assert!(tree.resize_by_pointer(1, 50, 60, r1_init));
+        let rects_p = tree.calculate_rects(&screen, &config);
+        let r1_p = rects_p.iter().find(|(w, _)| *w == 1).unwrap().1;
+        let r2_p = rects_p.iter().find(|(w, _)| *w == 2).unwrap().1;
+        let r3_p = rects_p.iter().find(|(w, _)| *w == 3).unwrap().1;
+
+        assert_eq!(r1_p.width, 550);
+        assert_eq!(r2_p.width, 450);
+        assert_eq!(r1_p.height, 560);
+        assert_eq!(r3_p.height, 440);
+    }
+
+    #[test]
+    fn test_rect_distance_to_point() {
+        let rect = Rect::new(100, 100, 200, 150);
+
+        // Point inside the rectangle
+        assert_eq!(rect.distance_to_point(150, 150), 0);
+        assert_eq!(rect.distance_to_point(100, 100), 0); // on corner
+        assert_eq!(rect.distance_to_point(300, 250), 0); // on opposite corner
+
+        // Orthogonal offsets
+        assert_eq!(rect.distance_to_point(50, 150), 50); // left
+        assert_eq!(rect.distance_to_point(350, 150), 50); // right
+        assert_eq!(rect.distance_to_point(150, 50), 50); // top
+        assert_eq!(rect.distance_to_point(150, 300), 50); // bottom
+
+        // Diagonal offset (Manhattan distance: dx + dy)
+        assert_eq!(rect.distance_to_point(80, 80), 20 + 20); // 40
+        assert_eq!(rect.distance_to_point(320, 270), 20 + 20); // 40
     }
 }

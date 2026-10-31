@@ -10,8 +10,9 @@ use crate::layout::{LayoutType, Rect};
 use crate::x11::X11Error;
 use x11rb::protocol::xproto::{
     Allow, AtomEnum, ButtonPressEvent, ButtonReleaseEvent, ClientMessageEvent,
-    ConfigWindow, ConfigureRequestEvent, ConfigureWindowAux, ConnectionExt, EventMask,
-    GrabMode, KeyPressEvent, MotionNotifyEvent, PropertyNotifyEvent, Window,
+    ConfigWindow, ConfigureRequestEvent, ConfigureWindowAux, ConnectionExt, EnterNotifyEvent,
+    EventMask, GrabMode, KeyPressEvent, MotionNotifyEvent, NotifyDetail, NotifyMode,
+    PropertyNotifyEvent, Window,
 };
 use x11rb::protocol::Event;
 
@@ -60,6 +61,9 @@ impl WindowManager {
             }
             Event::ButtonRelease(ev) => {
                 self.handle_button_release(&ev)?;
+            }
+            Event::EnterNotify(ev) => {
+                self.handle_enter_notify(&ev)?;
             }
             Event::ClientMessage(ev) => {
                 self.stats.client_messages += 1;
@@ -709,28 +713,61 @@ impl WindowManager {
             return Ok(());
         }
 
+        let event_time = if event.time != 0 { event.time } else { x11rb::CURRENT_TIME };
+        let clean_modifiers = u16::from(event.state) & 0x00FF & !(self.input_manager.num_lock_mask | MOD_LOCK);
+        let matching_action = self.mouse_bindings.iter().find(|b| {
+            b.button == event.detail && b.modifiers == clean_modifiers
+        }).map(|b| b.action_type);
+
+        let current_ws = self.workspace_manager.current_id();
+        let mon_id = self.monitor_manager.monitor_for_point(event.root_x as i32, event.root_y as i32)
+            .map(|m| m.id)
+            .unwrap_or(self.monitor_manager.active_monitor_id);
+
+        let mut pairs: Option<Vec<(Window, Rect)>> = None;
         let window = if self.client_state.contains(event.child) {
             event.child
         } else if self.client_state.contains(event.event) {
             event.event
+        } else if matching_action == Some(crate::mouse::MouseActionType::Resize) {
+            // Click occurred in the gap or on the boundary between splits on the root window
+            let usable_rect = {
+                let mon = self.monitor_manager.get_monitor(mon_id).unwrap_or_else(|| self.monitor_manager.active_monitor());
+                self.usable_rect_for_monitor(mon)
+            };
+            let ws_pairs = self.get_workspace_window_geometries(current_ws, &usable_rect);
+            let click_p = (event.root_x as i32, event.root_y as i32);
+            let closest_win = ws_pairs
+                .iter()
+                .map(|&(w, rect)| (w, rect.distance_to_point(click_p.0, click_p.1)))
+                .min_by_key(|&(_, dist)| dist);
+
+            let res = if let Some((w, dist)) = closest_win && dist <= 80 {
+                Some(w)
+            } else {
+                None
+            };
+            pairs = Some(ws_pairs);
+
+            if let Some(w) = res {
+                w
+            } else {
+                if mon_id != self.monitor_manager.active_monitor_id {
+                    let _ = self.activate_monitor(mon_id);
+                }
+                let _ = self.context.connection.allow_events(Allow::REPLAY_POINTER, event_time);
+                let _ = self.context.flush();
+                return Ok(());
+            }
         } else {
             // Click occurred on root / background window or unmanaged window
-            if let Some(mon) = self.monitor_manager.monitor_for_point(event.root_x as i32, event.root_y as i32) {
-                if mon.id != self.monitor_manager.active_monitor_id {
-                    let _ = self.activate_monitor(mon.id);
-                }
+            if mon_id != self.monitor_manager.active_monitor_id {
+                let _ = self.activate_monitor(mon_id);
             }
-            let event_time = if event.time != 0 { event.time } else { x11rb::CURRENT_TIME };
             let _ = self.context.connection.allow_events(Allow::REPLAY_POINTER, event_time);
             let _ = self.context.flush();
             return Ok(());
         };
-
-        let event_time = if event.time != 0 { event.time } else { x11rb::CURRENT_TIME };
-        let clean_modifiers = u16::from(event.state) & 0x00FF & !(self.input_manager.num_lock_mask | MOD_LOCK);
-        let matching_binding = self.mouse_bindings.iter().find(|b| {
-            b.button == event.detail && b.modifiers == clean_modifiers
-        });
 
         let is_floating = self
             .client_state
@@ -738,7 +775,7 @@ impl WindowManager {
             .map(|c| c.is_floating() && !c.is_fullscreen())
             .unwrap_or(false);
 
-        match matching_binding.map(|b| b.action_type) {
+        match matching_action {
             Some(crate::mouse::MouseActionType::Move) => {
                 let _ = self.focus_client(window);
                 let _ = self.raise_window(window);
@@ -781,17 +818,39 @@ impl WindowManager {
                 let _ = self.raise_window(window);
 
                 if !is_floating {
-                    let (win_x, win_y, win_w, win_h) = if let Some(reply) = self.context.connection.get_geometry(window).ok().and_then(|c| c.reply().ok()) {
-                        (reply.x as i32, reply.y as i32, reply.width as u32, reply.height as u32)
-                    } else {
-                        (0, 0, 400, 300)
-                    };
+                    if let Some(ws) = self.workspace_manager.get(current_ws)
+                        && (ws.layout == LayoutType::Monocle || ws.layout == LayoutType::Tabbed || ws.layout == LayoutType::Stacked)
+                    {
+                        self.context.flush()?;
+                        return Ok(());
+                    }
+
+                    let initial_rect = pairs
+                        .get_or_insert_with(|| {
+                            let usable_rect = {
+                                let mon = self.monitor_manager.get_monitor(mon_id).unwrap_or_else(|| self.monitor_manager.active_monitor());
+                                self.usable_rect_for_monitor(mon)
+                            };
+                            self.get_workspace_window_geometries(current_ws, &usable_rect)
+                        })
+                        .iter()
+                        .find(|(w, _)| *w == window)
+                        .map(|(_, r)| *r)
+                        .unwrap_or_else(|| {
+                            if let Some(reply) = self.context.connection.get_geometry(window).ok().and_then(|c| c.reply().ok()) {
+                                Rect::new(reply.x as i32, reply.y as i32, reply.width as u32, reply.height as u32)
+                            } else {
+                                Rect::new(0, 0, 400, 300)
+                            }
+                        });
 
                     self.mouse_action = crate::mouse::MouseAction::ResizingTiled {
                         window,
                         start_x: event.root_x as i32,
                         start_y: event.root_y as i32,
-                        initial_rect: Rect::new(win_x, win_y, win_w, win_h),
+                        initial_rect,
+                        click_x: event.root_x as i32,
+                        click_y: event.root_y as i32,
                     };
 
                     let _ = self.context.connection.grab_pointer(
@@ -890,18 +949,25 @@ impl WindowManager {
                 start_x,
                 start_y,
                 initial_rect,
+                click_x,
+                click_y,
             } => {
                 let delta_x = event.root_x as i32 - start_x;
                 let delta_y = event.root_y as i32 - start_y;
+                if delta_x == 0 && delta_y == 0 {
+                    return Ok(());
+                }
                 self.mouse_action = crate::mouse::MouseAction::ResizingTiled {
                     window,
                     start_x: event.root_x as i32,
                     start_y: event.root_y as i32,
                     initial_rect,
+                    click_x,
+                    click_y,
                 };
                 let current_ws = self.workspace_manager.current_id();
                 if let Some(ws) = self.workspace_manager.get_mut(current_ws)
-                    && ws.bsp_tree.resize_by_pointer(window, delta_x, delta_y, initial_rect) {
+                    && ws.bsp_tree.resize_by_pointer_at(window, delta_x, delta_y, initial_rect, click_x, click_y) {
                         if ws.layout.is_master()
                             && let Some(r) = ws.bsp_tree.master_ratio_for_layout(ws.layout) {
                                 self.layout_config.master_ratio = r;
@@ -922,6 +988,53 @@ impl WindowManager {
             self.context.flush()?;
             self.mouse_action = crate::mouse::MouseAction::None;
         }
+        Ok(())
+    }
+
+    /// Handles pointer enter notify events on windows (focus-on-hover / sloppy focus).
+    pub fn handle_enter_notify(&mut self, event: &EnterNotifyEvent) -> Result<(), X11Error> {
+        if !self.config.focus_on_hover {
+            return Ok(());
+        }
+
+        // Do not change focus while mouse drag or resize is active
+        if self.mouse_action.is_active() {
+            return Ok(());
+        }
+
+        // Ignore synthetic or grab/ungrab crossing events
+        if event.mode != NotifyMode::NORMAL {
+            return Ok(());
+        }
+
+        // Ignore transitions crossing between a client and its own child windows
+        if event.detail == NotifyDetail::INFERIOR {
+            return Ok(());
+        }
+
+        let window = if self.client_state.contains(event.event) {
+            event.event
+        } else if self.client_state.contains(event.child) {
+            event.child
+        } else {
+            return Ok(());
+        };
+
+        if self.focused_window() == Some(window) {
+            return Ok(());
+        }
+
+        if let Some(client) = self.client_state.get_client(window) {
+            if !client.mapped {
+                return Ok(());
+            }
+        } else {
+            return Ok(());
+        }
+
+        self.focus_client(window)?;
+        self.context.flush()?;
+
         Ok(())
     }
 

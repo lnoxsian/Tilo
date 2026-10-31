@@ -45,6 +45,7 @@ Parse errors report a line number and message. Invalid configurations during hot
 | Tab max width | `160` px |
 | Tab click | enabled |
 | Tab wheel | enabled |
+| Focus on hover | disabled (`false`, click-to-focus) |
 
 ---
 
@@ -180,7 +181,7 @@ If **any** `bind` directive is present, it completely replaces the built-in defa
 | `set_scratchpad` | — | Designate focused window as scratchpad |
 | `focus_monitor` | `left`/`right` | Focus adjacent monitor |
 | `move_to_monitor` | `left`/`right` | Send window to adjacent monitor |
-| `resize` | `left`/`right`/`up`/`down` | Resize floating window |
+| `resize` | `left`/`right`/`up`/`down` | Resize focused tiled pane or floating window |
 | `split` | `vertical`/`horizontal` | Preselect BSP split direction |
 | `cycle_layout` | — | Cycle to next layout |
 | `rotate_master` | — | Rotate master orientation |
@@ -376,6 +377,24 @@ tab_max_width 160              # maximum tab pill width in pixels
 tab_mouse true                 # click tab pills to focus; middle-click to close
 tab_wheel_switch true          # scroll over tabs to cycle
 ```
+
+---
+
+## Focus Policy
+
+```
+# Focus window when mouse hovers over it (default: false / click-to-focus)
+focus_on_hover false
+```
+
+Controls whether window focus follows the mouse pointer.
+
+| Directive | Default | Description |
+|---|---|---|
+| `focus_on_hover` | `false` | When `false`, click-to-focus is used (clicking a window or using keyboard focus shortcuts is required). When `true`, moving the mouse pointer over a window automatically gives it focus. |
+
+Accepted aliases: `focus_follows_mouse`, `focus_hover`, `focus_mouse`.
+Accepts booleans: `true`/`false`, `yes`/`no`, `1`/`0`, `on`/`off`.
 
 ---
 
