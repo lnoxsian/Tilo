@@ -115,6 +115,9 @@ pub struct Config {
     /// Whether moving the mouse over a window focuses it automatically (default: false).
     /// When false (the default), windows are focused by clicking them (click-to-focus).
     pub focus_on_hover: bool,
+    /// Optional command used to lock the screen (e.g. "i3lock -c 000000", "betterlockscreen -l").
+    /// When None (the default), screen locking is disabled and omitted from the power/exit launcher.
+    pub lock_command: Option<String>,
 }
 
 impl Config {
@@ -204,6 +207,7 @@ impl Default for Config {
             statusbar: true,
             launcher_position: LauncherPosition::Spotlight,
             focus_on_hover: false,
+            lock_command: None,
         }
     }
 }
@@ -304,9 +308,13 @@ pub fn tokenize(content: &str) -> Result<Vec<Token>, ConfigError> {
         }
 
         line_has_tokens = true;
-        // Attempt integer parse
+        // Attempt integer parse (keep words with leading zeroes as Word to preserve formatting like "000000")
         if let Ok(num) = buffer.parse::<u32>() {
-            tokens.push(Token::Number(num));
+            if buffer.len() > 1 && buffer.starts_with('0') {
+                tokens.push(Token::Word(buffer));
+            } else {
+                tokens.push(Token::Number(num));
+            }
         } else if buffer.contains('.') {
             // Attempt float parse if it contains a decimal point
             if let Ok(flt) = buffer.parse::<f32>() {
@@ -856,6 +864,27 @@ fn parse_line(
                 config.autostart.push(cmd);
             }
         }
+        "lock_cmd" | "lock_command" | "screenlock" | "screen_lock" => {
+            if line.len() < 2 {
+                return Err(ConfigError::ParseError {
+                    line: line_number,
+                    message: "Directive 'lock_cmd' requires a command argument or 'none'".to_string(),
+                });
+            }
+            let words: Vec<String> = line[1..].iter().map(|t| token_to_string(t)).collect();
+            let raw_cmd = words.join(" ");
+            let trimmed = raw_cmd.trim();
+            if trimmed.is_empty()
+                || trimmed.eq_ignore_ascii_case("none")
+                || trimmed.eq_ignore_ascii_case("disabled")
+                || trimmed.eq_ignore_ascii_case("off")
+                || trimmed.eq_ignore_ascii_case("false")
+            {
+                config.lock_command = None;
+            } else {
+                config.lock_command = Some(trimmed.to_string());
+            }
+        }
         "tab_show_index" | "show_tab_index" => {
             if line.len() < 2 {
                 return Err(ConfigError::ParseError {
@@ -1359,6 +1388,7 @@ fn parse_action(tokens: &[&Token], line: usize, config: &Config) -> Result<Actio
         "exit_menu" | "powermenu" | "power_menu" => Ok(Action::ExitMenu),
         "exit" => Ok(Action::Exit),
         "quit" | "shutdown" => Ok(Action::Quit),
+        "lock" | "screenlock" | "screen_lock" => Ok(Action::Lock),
         "resize" | "resize_tile" => {
             if tokens.len() < 2 {
                 return Err(ConfigError::ParseError {
@@ -1594,6 +1624,11 @@ tab_mouse true
 
 # Enable mouse wheel scrolling over tabs to cycle windows.
 tab_wheel_switch true
+
+# --- Screen Lock Command (Optional) ---
+# Command used to lock the screen (e.g. i3lock -c 000000, betterlockscreen -l, slock).
+# Disabled by default. When configured, a 'Lock' action appears in the exit launcher (Mod+Shift+q / powermenu).
+# lock_cmd i3lock -c 000000
 
 # --- Autostart Applications ---
 # Execute external applications and daemons when tilo starts.
@@ -2046,6 +2081,7 @@ bind $mod+1 select_tab 1
         assert!(config.workspace_mouse);
         assert!(config.workspace_wheel_switch);
         assert!(!config.focus_on_hover);
+        assert_eq!(config.lock_command, None);
 
         assert!(!config.tab_config.show_index);
         assert_eq!(config.tab_config.max_width, 200);

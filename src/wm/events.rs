@@ -376,6 +376,15 @@ impl WindowManager {
             Action::Quit => {
                 let _ = self.perform_desktop_shutdown(None);
             }
+            Action::Lock => {
+                if let Some(ref lock_cmd) = self.config.lock_command {
+                    if let Err(e) = crate::launcher::spawn_app(lock_cmd) {
+                        eprintln!("[WARN  tilo::wm] Failed to spawn lock command '{}': {}", lock_cmd, e);
+                    }
+                } else {
+                    eprintln!("[WARN  tilo::wm] Lock action invoked but no lock_command is configured.");
+                }
+            }
             Action::ResizeTile(dir) => {
                 let current_ws = self.workspace_manager.current_id();
                 let focused = self.focused_window()

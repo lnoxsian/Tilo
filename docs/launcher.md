@@ -61,10 +61,11 @@ Searches `$PATH` for executable files and symlinks. Supports fuzzy matching on b
 
 ### Exit Mode
 
-Shows three fixed power actions:
+Shows power and session actions (with `Lock` dynamically included when `lock_cmd` is configured in `config`):
 
 | Label | Aliases | Action |
 |---|---|---|
+| `Lock` | `screenlock`, `lockscreen` | Launch configured screen locker (shown when `lock_cmd` is set) |
 | `Logout` | `exit`, `quit` | Exit tilo |
 | `Reboot` | `restart` | System reboot |
 | `Poweroff` | `shutdown` | System shutdown |

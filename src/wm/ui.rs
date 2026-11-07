@@ -310,6 +310,7 @@ impl WindowManager {
         launcher.position = self.config.launcher_position;
         launcher.color_scheme = launcher_colors;
         launcher.border_color = Some(self.config.launcher_border_color());
+        launcher.show_lock = self.config.lock_command.is_some();
         launcher.refresh_if_needed();
         launcher.rect = rect;
 
@@ -396,6 +397,8 @@ impl WindowManager {
         launcher.cursor_position = 0;
         launcher.selected_index = 0;
         launcher.scroll_offset = 0;
+        launcher.show_lock = self.config.lock_command.is_some();
+        launcher.invalidate_cache();
 
         let _ = launcher.render(&self.context.connection);
         self.context.flush()?;
@@ -583,6 +586,15 @@ impl WindowManager {
     pub fn execute_power_action(&mut self, action_name: &str) {
         let lower = action_name.trim().to_lowercase();
         match lower.as_str() {
+            "lock" | "screenlock" | "lockscreen" | "screen_lock" => {
+                if let Some(ref lock_cmd) = self.config.lock_command {
+                    if let Err(e) = crate::launcher::spawn_app(lock_cmd) {
+                        eprintln!("[WARN  tilo::wm] Failed to spawn lock command '{}': {}", lock_cmd, e);
+                    }
+                } else {
+                    eprintln!("[WARN  tilo::wm] Screen lock invoked but no lock_command is configured.");
+                }
+            }
             "logout" | "exit" | "quit" => {
                 let _ = self.perform_desktop_shutdown(None);
             }

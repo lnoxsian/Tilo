@@ -121,6 +121,8 @@ pub struct Launcher {
     pub filtered_cache_mode: LauncherMode,
     /// Hit rectangles for visible items on screen for mouse interaction.
     pub item_rects: Vec<(usize, Rect)>,
+    /// Whether screen locking is enabled and presented in Exit mode options.
+    pub show_lock: bool,
 }
 
 impl Launcher {
@@ -152,6 +154,7 @@ impl Launcher {
             filtered_cache_query: String::new(),
             filtered_cache_mode: LauncherMode::App,
             item_rects: Vec::new(),
+            show_lock: false,
         }
     }
 
@@ -307,14 +310,23 @@ impl Launcher {
 
     /// Filters the power/exit menu options based on user query.
     pub fn filter_exit_options(query: &str) -> Vec<String> {
-        let options = ["Logout", "Reboot", "Poweroff"];
+        Self::filter_exit_options_with_lock(query, false)
+    }
+
+    /// Filters the power/exit menu options based on user query, optionally including screen lock.
+    pub fn filter_exit_options_with_lock(query: &str, show_lock: bool) -> Vec<String> {
+        let options: &[&str] = if show_lock {
+            &["Lock", "Logout", "Reboot", "Poweroff"]
+        } else {
+            &["Logout", "Reboot", "Poweroff"]
+        };
         let trimmed = query.trim();
         if trimmed.is_empty() {
             return options.iter().map(|s| s.to_string()).collect();
         }
 
         let mut scored: Vec<(i32, String)> = Vec::new();
-        for opt in &options {
+        for opt in options {
             let opt_lower = opt.to_lowercase();
             let q_lower = trimmed.to_lowercase();
             if opt_lower == q_lower {
@@ -327,6 +339,7 @@ impl Launcher {
                 || (q_lower == "quit" && *opt == "Logout")
                 || (q_lower == "exit" && *opt == "Logout")
                 || (q_lower == "restart" && *opt == "Reboot")
+                || ((q_lower == "screenlock" || q_lower == "lockscreen" || q_lower == "screen_lock") && *opt == "Lock")
             {
                 scored.push((900, opt.to_string()));
             } else if let Some(score) = fuzzy_match(opt, trimmed) {
@@ -345,7 +358,7 @@ impl Launcher {
             || (self.filtered_cache.is_empty() && (!self.executable_cache.is_empty() || self.mode == LauncherMode::Exit))
         {
             self.filtered_cache = if self.mode == LauncherMode::Exit {
-                Self::filter_exit_options(&self.query)
+                Self::filter_exit_options_with_lock(&self.query, self.show_lock)
             } else {
                 filter_executables(&self.executable_cache, &self.query, usize::MAX)
             };
@@ -369,7 +382,7 @@ impl Launcher {
             return self.filtered_cache.iter().take(max_results).cloned().collect();
         }
         if self.mode == LauncherMode::Exit {
-            Self::filter_exit_options(&self.query)
+            Self::filter_exit_options_with_lock(&self.query, self.show_lock)
         } else {
             filter_executables(&self.executable_cache, &self.query, max_results)
         }
@@ -384,7 +397,7 @@ impl Launcher {
             return self.filtered_cache.clone();
         }
         if self.mode == LauncherMode::Exit {
-            Self::filter_exit_options(&self.query)
+            Self::filter_exit_options_with_lock(&self.query, self.show_lock)
         } else {
             filter_executables(&self.executable_cache, &self.query, usize::MAX)
         }
@@ -485,7 +498,11 @@ impl Launcher {
         let prefix_width = renderer.text_width(prompt_prefix);
         let query_text = if self.query.is_empty() {
             if self.mode == LauncherMode::Exit {
-                "Select action: Logout, Reboot, Poweroff..."
+                if self.show_lock {
+                    "Select action: Lock, Logout, Reboot, Poweroff..."
+                } else {
+                    "Select action: Logout, Reboot, Poweroff..."
+                }
             } else {
                 "Type application name..."
             }
@@ -589,7 +606,12 @@ impl Launcher {
         // If no results and query is non-empty, indicate notice / direct command execution mode
         if total_count == 0 && !self.query.is_empty() {
             let notice = if self.mode == LauncherMode::Exit {
-                format!("Unknown action: '{}' (options: Logout, Reboot, Poweroff)", self.query)
+                let opts = if self.show_lock {
+                    "Lock, Logout, Reboot, Poweroff"
+                } else {
+                    "Logout, Reboot, Poweroff"
+                };
+                format!("Unknown action: '{}' (options: {})", self.query, opts)
             } else {
                 format!("Run: '{}'", self.query)
             };
@@ -653,12 +675,17 @@ impl Launcher {
                 self.color_scheme.fg,
             )?;
         } else if self.mode == LauncherMode::Exit {
+            let placeholder = if self.show_lock {
+                "Select action: Lock, Logout, Reboot, Poweroff..."
+            } else {
+                "Select action: Logout, Reboot, Poweroff..."
+            };
             renderer.draw_text(
                 conn,
                 renderer.pixmap,
                 input_start_x as i16 + 4,
                 baseline,
-                "Select action: Logout, Reboot, Poweroff...",
+                placeholder,
                 self.color_scheme.inactive_fg,
             )?;
         }
@@ -689,7 +716,12 @@ impl Launcher {
         if total_count == 0 {
             if !self.query.is_empty() {
                 let notice = if self.mode == LauncherMode::Exit {
-                    format!("Unknown action: '{}' (options: Logout, Reboot, Poweroff)", self.query)
+                    let opts = if self.show_lock {
+                        "Lock, Logout, Reboot, Poweroff"
+                    } else {
+                        "Logout, Reboot, Poweroff"
+                    };
+                    format!("Unknown action: '{}' (options: {})", self.query, opts)
                 } else {
                     format!("Run: '{}'", self.query)
                 };

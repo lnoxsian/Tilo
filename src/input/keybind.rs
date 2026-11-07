@@ -131,6 +131,8 @@ pub enum Action {
     Exit,
     /// Gracefully shutdown and exit the window manager immediately (Phase 32).
     Quit,
+    /// Launch the configured external screen locker application.
+    Lock,
     /// Resize the focused tile along a direction by a delta (e.g. 0.05).
     ResizeTile(Direction),
     /// Preselect the split orientation for the next tiled window.

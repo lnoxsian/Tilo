@@ -366,6 +366,42 @@ fn test_exit_menu_options_and_filtering() {
 }
 
 #[test]
+fn test_exit_menu_with_lock_enabled() {
+    let mut launcher = Launcher::new();
+    launcher.mode = LauncherMode::Exit;
+    launcher.show_lock = true;
+
+    // 1. When query is empty and show_lock is true, Lock is listed first
+    let options = launcher.filtered_results(8);
+    assert_eq!(options, vec!["Lock", "Logout", "Reboot", "Poweroff"]);
+
+    // 2. Direct search for lock
+    launcher.query = "lock".to_string();
+    launcher.invalidate_cache();
+    assert_eq!(launcher.filtered_results(8), vec!["Lock"]);
+
+    // 3. Synonym search: screenlock, lockscreen
+    launcher.query = "screenlock".to_string();
+    launcher.invalidate_cache();
+    assert_eq!(launcher.filtered_results(8), vec!["Lock"]);
+
+    launcher.query = "lockscreen".to_string();
+    launcher.invalidate_cache();
+    assert_eq!(launcher.filtered_results(8), vec!["Lock"]);
+
+    // 4. Searching for shutdown still matches Poweroff
+    launcher.query = "shutdown".to_string();
+    launcher.invalidate_cache();
+    assert_eq!(launcher.filtered_results(8), vec!["Poweroff"]);
+
+    // 5. When show_lock is disabled, Lock disappears
+    launcher.show_lock = false;
+    launcher.query.clear();
+    launcher.invalidate_cache();
+    assert_eq!(launcher.filtered_results(8), vec!["Logout", "Reboot", "Poweroff"]);
+}
+
+#[test]
 fn test_mod4_shift_q_keybinding_and_cancel() {
     // 1. Default keybindings should include Mod4+Shift+Q -> Action::Exit
     let binds = default_keybindings();

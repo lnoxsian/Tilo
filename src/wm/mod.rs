@@ -343,6 +343,8 @@ impl WindowManager {
             launcher.position = self.config.launcher_position;
             launcher.color_scheme = self.config.launcher_color_scheme();
             launcher.border_color = Some(self.config.launcher_border_color());
+            launcher.show_lock = self.config.lock_command.is_some();
+            launcher.invalidate_cache();
             if launcher.visible && launcher.window_id != 0 {
                 let active_mon = self.monitor_manager.active_monitor().clone();
                 let (width, height, x, y) = match self.config.launcher_position {

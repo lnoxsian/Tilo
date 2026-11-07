@@ -398,6 +398,31 @@ Accepts booleans: `true`/`false`, `yes`/`no`, `1`/`0`, `on`/`off`.
 
 ---
 
+## Screen Locker
+
+```
+lock_cmd i3lock -c 000000
+lock_cmd "betterlockscreen -l dim"
+lock_cmd slock
+lock_cmd none    # disables screen locking (default)
+```
+
+Configures an external screen locking application. By default, it is disabled (`None`).
+
+| Directive | Default | Description |
+|---|---|---|
+| `lock_cmd` | *(disabled)* | External screen locker command to execute. Aliases: `lock_command`, `screenlock`, `screen_lock`. Set to `none`, `off`, `disabled`, or `false` to disable. |
+
+When configured:
+- A **`Lock`** option is dynamically displayed in the exit/power menu overlay (`Mod+Shift+q` / `exit_menu`).
+- The locker can also be mapped directly to a key shortcut using the `lock` action:
+  ```
+  bind $mod+l lock
+  ```
+- Triggering `Lock` closes the launcher overlay (releasing all input grabs) and spawns the locker as a detached process without closing windows or terminating the desktop session.
+
+---
+
 ## Autostart Directives
 
 ```

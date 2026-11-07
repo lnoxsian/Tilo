@@ -600,5 +600,50 @@ fn test_create_default_config_if_missing_xdg() {
     let _ = std::fs::remove_dir_all(&temp_dir);
 }
 
+#[test]
+fn test_parse_lock_command_directives() {
+    // 1. Default configuration has no lock_command
+    let default_cfg = Config::default();
+    assert_eq!(default_cfg.lock_command, None);
+
+    // 2. lock_cmd directive
+    let input_1 = "lock_cmd i3lock -c 000000\n";
+    let tokens_1 = tokenize(input_1).unwrap();
+    let cfg_1 = parse(&tokens_1).unwrap();
+    assert_eq!(cfg_1.lock_command, Some("i3lock -c 000000".to_string()));
+
+    // 3. lock_command with quotes
+    let input_2 = "lock_command \"betterlockscreen -l dim\"\n";
+    let tokens_2 = tokenize(input_2).unwrap();
+    let cfg_2 = parse(&tokens_2).unwrap();
+    assert_eq!(cfg_2.lock_command, Some("betterlockscreen -l dim".to_string()));
+
+    // 4. screenlock synonym
+    let input_3 = "screenlock slock\n";
+    let tokens_3 = tokenize(input_3).unwrap();
+    let cfg_3 = parse(&tokens_3).unwrap();
+    assert_eq!(cfg_3.lock_command, Some("slock".to_string()));
+
+    // 5. Explicitly disabling via none / disabled
+    let input_4 = "lock_cmd i3lock\nlock_cmd none\n";
+    let tokens_4 = tokenize(input_4).unwrap();
+    let cfg_4 = parse(&tokens_4).unwrap();
+    assert_eq!(cfg_4.lock_command, None);
+
+    let input_5 = "lock_command disabled\n";
+    let tokens_5 = tokenize(input_5).unwrap();
+    let cfg_5 = parse(&tokens_5).unwrap();
+    assert_eq!(cfg_5.lock_command, None);
+}
+
+#[test]
+fn test_parse_lock_action_keybinding() {
+    let input = "bind Mod4+l lock\n";
+    let tokens = tokenize(input).unwrap();
+    let cfg = parse(&tokens).unwrap();
+    assert_eq!(cfg.bindings.len(), 1);
+    assert_eq!(cfg.bindings[0].action, Action::Lock);
+}
+
 
 
