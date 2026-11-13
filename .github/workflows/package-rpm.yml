@@ -6,10 +6,13 @@ on:
 permissions:
   contents: read
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   package-rpm:
     name: Package .rpm (${{ matrix.rpm_arch }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
@@ -25,7 +28,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install packaging tools
         run: |
@@ -56,7 +59,7 @@ jobs:
           sha256sum *.rpm > "tilo_${{ matrix.rpm_arch }}.rpm.sha256"
 
       - name: Upload RPM package artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: tilo-rpm-${{ matrix.rpm_arch }}
           path: dist/artifacts/*
