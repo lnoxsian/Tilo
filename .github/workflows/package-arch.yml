@@ -59,10 +59,14 @@ jobs:
           tar -czf dist/artifacts/tilo-${VERSION}-PKGBUILD.tar.gz -C dist/artifacts PKGBUILD
 
           cd dist/artifacts
-          sha256sum * > SHA256SUMS
+          for f in *; do
+            if [ -f "$f" ] && [ "$f" != "SHA256SUMS" ]; then
+              sha256sum "$f"
+            fi
+          done > SHA256SUMS
 
       - name: Upload Arch Linux package artifact
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: tilo-arch-${{ matrix.arch }}
           path: dist/artifacts/*

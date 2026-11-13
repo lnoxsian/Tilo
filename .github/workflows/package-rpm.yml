@@ -59,7 +59,7 @@ jobs:
           sha256sum *.rpm > "tilo_${{ matrix.rpm_arch }}.rpm.sha256"
 
       - name: Upload RPM package artifact
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: tilo-rpm-${{ matrix.rpm_arch }}
           path: dist/artifacts/*

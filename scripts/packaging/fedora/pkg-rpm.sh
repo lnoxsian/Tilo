@@ -110,7 +110,7 @@ if [[ -n "${CUSTOM_BIN}" ]]; then
             -bb "${SCRIPT_DIR}/tilo-bin.spec"
 
         find "${RPM_TOPDIR}/RPMS" -type f -name "*.rpm" -exec cp {} "${OUT_DIR}/" \;
-        rm -rf "${STAGING_DIR}"
+        rm -rf "${STAGING_DIR}" "${RPM_TOPDIR}"
         echo "==> Binary RPM build complete in ${OUT_DIR}:"
         ls -lh "${OUT_DIR}"/*.rpm || true
         exit 0
@@ -143,6 +143,7 @@ if [ "${USE_DOCKER}" = true ]; then
             rpmbuild --define '_topdir /workspace/dist/rpmbuild' -bb /workspace/dist/rpmbuild/SPECS/tilo.spec
         "
     find "${RPM_TOPDIR}/RPMS" -type f -name "*.rpm" -exec cp {} "${OUT_DIR}/" \;
+    rm -rf "${RPM_TOPDIR}"
     echo "==> Docker RPM build complete:"
     ls -lh "${OUT_DIR}"/*.rpm
     exit 0
@@ -154,6 +155,7 @@ if command -v rpmbuild >/dev/null 2>&1; then
     
     # Copy generated RPMs to output dir
     find "${RPM_TOPDIR}/RPMS" -type f -name "*.rpm" -exec cp {} "${OUT_DIR}/" \;
+    rm -rf "${RPM_TOPDIR}"
     echo "==> RPM build complete:"
     ls -lh "${OUT_DIR}"/*.rpm
 else

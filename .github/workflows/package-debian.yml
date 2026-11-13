@@ -59,7 +59,7 @@ jobs:
           sha256sum *.deb > "tilo_${{ matrix.deb_arch }}.deb.sha256"
 
       - name: Upload Debian package artifact
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: tilo-deb-${{ matrix.deb_arch }}
           path: dist/artifacts/*

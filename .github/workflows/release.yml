@@ -145,7 +145,7 @@ jobs:
           fi
 
       - name: Upload matrix artifacts
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: artifacts-${{ matrix.target }}
           path: dist/artifacts/*
@@ -172,7 +172,7 @@ jobs:
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
 
       - name: Download all matrix build artifacts
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           path: dist/all-artifacts
           merge-multiple: true
@@ -193,7 +193,13 @@ jobs:
       - name: Compute SHA256 checksums
         run: |
           cd dist/all-artifacts
-          sha256sum * > SHA256SUMS
+          # Clean any stray subdirectories from artifacts before hashing and releasing
+          find . -maxdepth 1 -type d ! -path . -exec rm -rf {} +
+          for f in *; do
+            if [ -f "$f" ] && [ "$f" != "SHA256SUMS" ]; then
+              sha256sum "$f"
+            fi
+          done > SHA256SUMS
           cat SHA256SUMS
 
       - name: Create or update GitHub Release
