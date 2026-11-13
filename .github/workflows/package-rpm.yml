@@ -2,18 +2,6 @@ name: Package RPM (.rpm)
 
 on:
   workflow_dispatch:
-    inputs:
-      architecture:
-        description: 'RPM architecture to package'
-        required: true
-        type: choice
-        default: 'all'
-        options:
-          - 'all'
-          - 'x86_64'
-          - 'i686'
-          - 'aarch64'
-          - 'armv7hl'
 
 permissions:
   contents: read
@@ -22,7 +10,6 @@ jobs:
   package-rpm:
     name: Package .rpm (${{ matrix.rpm_arch }})
     runs-on: ubuntu-latest
-    if: inputs.architecture == 'all' || inputs.architecture == matrix.rpm_arch
     strategy:
       fail-fast: false
       matrix:

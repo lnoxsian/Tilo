@@ -2,18 +2,6 @@ name: Package Debian (.deb)
 
 on:
   workflow_dispatch:
-    inputs:
-      architecture:
-        description: 'Debian architecture to package'
-        required: true
-        type: choice
-        default: 'all'
-        options:
-          - 'all'
-          - 'amd64'
-          - 'i386'
-          - 'arm64'
-          - 'armhf'
 
 permissions:
   contents: read
@@ -22,7 +10,6 @@ jobs:
   package-deb:
     name: Package .deb (${{ matrix.deb_arch }})
     runs-on: ubuntu-latest
-    if: inputs.architecture == 'all' || inputs.architecture == matrix.deb_arch
     strategy:
       fail-fast: false
       matrix:

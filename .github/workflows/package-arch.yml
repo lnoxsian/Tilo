@@ -2,16 +2,6 @@ name: Package Arch Linux (.pkg.tar.zst & PKGBUILD)
 
 on:
   workflow_dispatch:
-    inputs:
-      architecture:
-        description: 'Arch Linux architecture to package'
-        required: true
-        type: choice
-        default: 'all'
-        options:
-          - 'all'
-          - 'x86_64'
-          - 'aarch64'
 
 permissions:
   contents: read
@@ -20,7 +10,6 @@ jobs:
   package-arch:
     name: Package Arch (${{ matrix.arch }})
     runs-on: ubuntu-latest
-    if: inputs.architecture == 'all' || inputs.architecture == matrix.arch
     strategy:
       fail-fast: false
       matrix:

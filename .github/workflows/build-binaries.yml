@@ -2,21 +2,6 @@ name: Build Binaries (Standalone)
 
 on:
   workflow_dispatch:
-    inputs:
-      architecture:
-        description: 'Target architecture to build'
-        required: true
-        type: choice
-        default: 'all'
-        options:
-          - 'all'
-          - 'x86_64-gnu'
-          - 'x86_64-musl'
-          - 'i686-gnu'
-          - 'i686-musl'
-          - 'arm64-gnu'
-          - 'arm64-musl'
-          - 'arm32-musl'
 
 permissions:
   contents: read
@@ -25,7 +10,6 @@ jobs:
   build:
     name: Build (${{ matrix.short_name }})
     runs-on: ubuntu-latest
-    if: inputs.architecture == 'all' || inputs.architecture == matrix.short_name
     strategy:
       fail-fast: false
       matrix:
