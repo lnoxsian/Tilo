@@ -1,5 +1,5 @@
 Name:           tilo
-Version:        0.2.5
+Version:        0.2.7
 Release:        1%{?dist}
 Summary:        Minimal Rust X11 Tiling Window Manager
 

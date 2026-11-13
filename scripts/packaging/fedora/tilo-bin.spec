@@ -5,8 +5,11 @@ Summary:        Minimal Rust X11 Tiling Window Manager
 
 License:        MIT
 URL:            https://github.com/lnoxsian/tilo
-BuildArch:      %{target_arch}
 AutoReqProv:    no
+
+%global debug_package %{nil}
+%global _enable_debug_package 0
+%global __os_install_post %{nil}
 
 Recommends:     dejavu-sans-fonts
 Suggests:       xorg-x11-server-Xephyr
