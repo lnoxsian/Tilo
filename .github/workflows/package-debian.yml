@@ -1,0 +1,76 @@
+name: Package Debian (.deb)
+
+on:
+  workflow_dispatch:
+    inputs:
+      architecture:
+        description: 'Debian architecture to package'
+        required: true
+        type: choice
+        default: 'all'
+        options:
+          - 'all'
+          - 'amd64'
+          - 'i386'
+          - 'arm64'
+          - 'armhf'
+
+permissions:
+  contents: read
+
+jobs:
+  package-deb:
+    name: Package .deb (${{ matrix.deb_arch }})
+    runs-on: ubuntu-latest
+    if: inputs.architecture == 'all' || inputs.architecture == matrix.deb_arch
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            deb_arch: amd64
+          - target: i686-unknown-linux-gnu
+            deb_arch: i386
+          - target: aarch64-unknown-linux-gnu
+            deb_arch: arm64
+          - target: armv7-unknown-linux-musleabihf
+            deb_arch: armhf
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install packaging tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y dpkg-dev
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install Cross
+        uses: taiki-e/install-action@cross
+
+      - name: Build target binary
+        run: |
+          cross build --release --target ${{ matrix.target }}
+
+      - name: Build Debian package
+        run: |
+          mkdir -p dist/artifacts
+          ./scripts/packaging/debian/pkg-deb.sh \
+            --binary "target/${{ matrix.target }}/release/tilo" \
+            --arch "${{ matrix.deb_arch }}" \
+            --out-dir dist/artifacts
+
+          cd dist/artifacts
+          sha256sum *.deb > "tilo_${{ matrix.deb_arch }}.deb.sha256"
+
+      - name: Upload Debian package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tilo-deb-${{ matrix.deb_arch }}
+          path: dist/artifacts/*
+          if-no-files-found: error

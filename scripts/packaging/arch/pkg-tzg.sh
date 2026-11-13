@@ -4,6 +4,11 @@
 # ==============================================================================
 # Builds an Arch Linux pacman package (.pkg.tar.zst / .pkg.tar.gz).
 # Uses 'makepkg' when available, with a standalone fallback if makepkg is missing.
+#
+# Options:
+#   --binary, -b <path>   Use pre-built binary instead of compiling release
+#   --arch, -a <arch>     Target architecture (e.g. x86_64, aarch64, armv7h, i686)
+#   --out-dir, -o <dir>   Output directory (default: dist/)
 # ==============================================================================
 
 set -euo pipefail
@@ -14,48 +19,94 @@ DIST_DIR="${REPO_ROOT}/dist"
 
 cd "${REPO_ROOT}"
 
+# Parse optional arguments
+CUSTOM_BIN=""
+OVERRIDE_ARCH=""
+OUT_DIR="${DIST_DIR}"
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --binary|-b)
+            CUSTOM_BIN="$2"
+            shift 2
+            ;;
+        --arch|-a)
+            OVERRIDE_ARCH="$2"
+            shift 2
+            ;;
+        --out-dir|-o)
+            OUT_DIR="$2"
+            shift 2
+            ;;
+        *)
+            echo "Unknown option: $1" >&2
+            exit 1
+            ;;
+    esac
+done
+
+# Resolve absolute paths
+OUT_DIR="$(mkdir -p "${OUT_DIR}" && cd "${OUT_DIR}" && pwd)"
+if [[ -n "${CUSTOM_BIN}" ]]; then
+    if [[ ! -f "${CUSTOM_BIN}" ]]; then
+        echo "Error: Specified binary '${CUSTOM_BIN}' not found!" >&2
+        exit 1
+    fi
+    CUSTOM_BIN="$(cd "$(dirname "${CUSTOM_BIN}")" && pwd)/$(basename "${CUSTOM_BIN}")"
+fi
+
 # Read current version from VERSION file
 VERSION="$(tr -d '[:space:]' < "${REPO_ROOT}/VERSION")"
 PKGREL=1
 
 # Detect architecture
-RAW_ARCH="$(uname -m)"
-case "${RAW_ARCH}" in
-    x86_64)  ARCH="x86_64" ;;
-    aarch64) ARCH="aarch64" ;;
-    armv7l)  ARCH="armv7h" ;;
-    i686)    ARCH="i686" ;;
-    *)       ARCH="${RAW_ARCH}" ;;
-esac
+if [[ -n "${OVERRIDE_ARCH}" ]]; then
+    ARCH="${OVERRIDE_ARCH}"
+else
+    RAW_ARCH="$(uname -m)"
+    case "${RAW_ARCH}" in
+        x86_64)  ARCH="x86_64" ;;
+        aarch64) ARCH="aarch64" ;;
+        armv7l)  ARCH="armv7h" ;;
+        i686)    ARCH="i686" ;;
+        *)       ARCH="${RAW_ARCH}" ;;
+    esac
+fi
 
 echo "==> Preparing Arch Linux package for tilo v${VERSION}-${PKGREL} (${ARCH})..."
 
-mkdir -p "${DIST_DIR}"
+mkdir -p "${OUT_DIR}"
 
 # Keep PKGBUILD synchronized with VERSION file
 sed -i -E "s/^pkgver=.*/pkgver=${VERSION}/" "${SCRIPT_DIR}/PKGBUILD"
 
-if command -v makepkg >/dev/null 2>&1; then
+if [[ -z "${CUSTOM_BIN}" ]] && command -v makepkg >/dev/null 2>&1; then
     echo "==> Using native 'makepkg'..."
     cd "${SCRIPT_DIR}"
     # Run makepkg: -f (force rebuild), -d (nodeps check if missing dependencies on foreign host)
     makepkg -f --nodeps || makepkg -f
     
-    # Move built package to dist/
-    mv "${SCRIPT_DIR}"/tilo-*.pkg.tar.* "${DIST_DIR}/"
-    echo "==> Package moved to ${DIST_DIR}/"
+    # Move built package to output dir
+    mv "${SCRIPT_DIR}"/tilo-*.pkg.tar.* "${OUT_DIR}/"
+    echo "==> Package moved to ${OUT_DIR}/"
 else
-    echo "==> 'makepkg' not found on system. Building standalone Arch package (.pkg.tar.zst)..."
+    echo "==> Building standalone Arch package (.pkg.tar.zst)..."
     
-    # Ensure release binary is compiled
-    make release
-    
-    STAGING_DIR="${DIST_DIR}/arch-staging"
+    STAGING_DIR="${OUT_DIR}/arch-staging"
     rm -rf "${STAGING_DIR}"
     mkdir -p "${STAGING_DIR}"
     
     # Install files into staging directory
-    make install DESTDIR="${STAGING_DIR}" PREFIX=/usr
+    if [[ -n "${CUSTOM_BIN}" ]]; then
+        if [[ ! -f "${CUSTOM_BIN}" ]]; then
+            echo "Error: Specified binary '${CUSTOM_BIN}' not found!" >&2
+            exit 1
+        fi
+        make install DESTDIR="${STAGING_DIR}" PREFIX=/usr BIN_SRC="${CUSTOM_BIN}"
+    else
+        make release
+        make install DESTDIR="${STAGING_DIR}" PREFIX=/usr
+    fi
     
     # Calculate installed size in bytes
     INSTALLED_BYTES="$(du -sb "${STAGING_DIR}" | cut -f1)"
@@ -74,10 +125,7 @@ packager = Tilo Developers <dev@tilo.org>
 size = ${INSTALLED_BYTES}
 arch = ${ARCH}
 license = MIT
-depend = libx11
-depend = libxrandr
-depend = libxcb
-depend = xcb-util
+depend = glibc
 optdepend = ttf-font: TrueType/OpenType font rendering
 optdepend = xorg-server-xephyr: Isolated nested X11 testing
 provides = tilo
@@ -99,12 +147,12 @@ EOF
 
     cd "${STAGING_DIR}"
     if command -v zstd >/dev/null 2>&1; then
-        PKG_FILE="${DIST_DIR}/tilo-${VERSION}-${PKGREL}-${ARCH}.pkg.tar.zst"
+        PKG_FILE="${OUT_DIR}/tilo-${VERSION}-${PKGREL}-${ARCH}.pkg.tar.zst"
         echo "==> Compressing with zstd into ${PKG_FILE}..."
         # Include .PKGINFO, .BUILDINFO, and all installed files
         tar --numeric-owner --owner=0 --group=0 -cf - .PKGINFO .BUILDINFO usr | zstd -c -T0 -19 > "${PKG_FILE}"
     else
-        PKG_FILE="${DIST_DIR}/tilo-${VERSION}-${PKGREL}-${ARCH}.pkg.tar.gz"
+        PKG_FILE="${OUT_DIR}/tilo-${VERSION}-${PKGREL}-${ARCH}.pkg.tar.gz"
         echo "==> Compressing with gzip into ${PKG_FILE}..."
         tar --numeric-owner --owner=0 --group=0 -czf "${PKG_FILE}" .PKGINFO .BUILDINFO usr
     fi
@@ -113,5 +161,5 @@ EOF
     rm -rf "${STAGING_DIR}"
 fi
 
-echo "==> Arch package built successfully:"
-ls -lh "${DIST_DIR}"/tilo-${VERSION}*.* || true
+echo "==> Arch package built successfully in ${OUT_DIR}:"
+ls -lh "${OUT_DIR}"/tilo-${VERSION}*.* || true

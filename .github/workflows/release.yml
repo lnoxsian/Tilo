@@ -1,0 +1,207 @@
+name: Build and Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Release tag (leave empty to use version from VERSION file, e.g. v0.2.7)'
+        required: false
+        default: ''
+      draft:
+        description: 'Create draft release'
+        required: false
+        type: boolean
+        default: false
+      prerelease:
+        description: 'Create pre-release'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-package:
+    name: Build & Package (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # x86_64 GNU/gcc
+          - target: x86_64-unknown-linux-gnu
+            label: x86_64-glibc
+            deb_arch: amd64
+            rpm_arch: x86_64
+            arch_arch: x86_64
+            build_packages: true
+
+          # x86_64 Musl
+          - target: x86_64-unknown-linux-musl
+            label: x86_64-musl
+            deb_arch: amd64
+            rpm_arch: x86_64
+            arch_arch: x86_64
+            build_packages: false
+
+          # x86 32-bit GNU/gcc
+          - target: i686-unknown-linux-gnu
+            label: i686-glibc
+            deb_arch: i386
+            rpm_arch: i686
+            arch_arch: i686
+            build_packages: true
+
+          # x86 32-bit Musl
+          - target: i686-unknown-linux-musl
+            label: i686-musl
+            deb_arch: i386
+            rpm_arch: i686
+            arch_arch: i686
+            build_packages: false
+
+          # ARM64 GNU/gcc
+          - target: aarch64-unknown-linux-gnu
+            label: arm64-glibc
+            deb_arch: arm64
+            rpm_arch: aarch64
+            arch_arch: aarch64
+            build_packages: true
+
+          # ARM64 Musl
+          - target: aarch64-unknown-linux-musl
+            label: arm64-musl
+            deb_arch: arm64
+            rpm_arch: aarch64
+            arch_arch: aarch64
+            build_packages: false
+
+          # ARM32 Musl (armhf)
+          - target: armv7-unknown-linux-musleabihf
+            label: arm32-musl
+            deb_arch: armhf
+            rpm_arch: armv7hl
+            arch_arch: armv7h
+            build_packages: true
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install system packaging tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y rpm zstd dpkg-dev
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install Cross
+        uses: taiki-e/install-action@cross
+
+      - name: Build target binary
+        run: |
+          cross build --release --target ${{ matrix.target }}
+
+      - name: Package artifacts
+        run: |
+          VERSION="$(tr -d '[:space:]' < VERSION)"
+          BIN_PATH="target/${{ matrix.target }}/release/tilo"
+          mkdir -p dist/artifacts
+
+          # 1. Standalone archive for this target
+          ./scripts/packaging/binary/pkg-bin.sh \
+            --binary "${BIN_PATH}" \
+            --target "${{ matrix.target }}" \
+            --out-dir dist/artifacts
+
+          # 2. Native Distribution Packages (.deb, .rpm, .pkg.tar.zst)
+          if [ "${{ matrix.build_packages }}" = "true" ]; then
+            echo "==> Packaging Debian package (.deb)..."
+            ./scripts/packaging/debian/pkg-deb.sh \
+              --binary "${BIN_PATH}" \
+              --arch "${{ matrix.deb_arch }}" \
+              --out-dir dist/artifacts
+
+            echo "==> Packaging Fedora/RHEL package (.rpm)..."
+            ./scripts/packaging/fedora/pkg-rpm.sh \
+              --binary "${BIN_PATH}" \
+              --arch "${{ matrix.rpm_arch }}" \
+              --out-dir dist/artifacts
+
+            if [ -n "${{ matrix.arch_arch }}" ]; then
+              echo "==> Packaging Arch Linux package (.pkg.tar.zst)..."
+              ./scripts/packaging/arch/pkg-tzg.sh \
+                --binary "${BIN_PATH}" \
+                --arch "${{ matrix.arch_arch }}" \
+                --out-dir dist/artifacts
+            fi
+          fi
+
+      - name: Upload matrix artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: artifacts-${{ matrix.target }}
+          path: dist/artifacts/*
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    needs: build-and-package
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Determine release version and tag
+        id: vars
+        run: |
+          VERSION="$(tr -d '[:space:]' < VERSION)"
+          if [ -n "${{ inputs.tag_name }}" ]; then
+            TAG="${{ inputs.tag_name }}"
+          else
+            TAG="v${VERSION}"
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: Download all matrix build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist/all-artifacts
+          merge-multiple: true
+
+      - name: Prepare Arch Linux PKGBUILD export
+        run: |
+          VERSION="${{ steps.vars.outputs.version }}"
+          TAG="${{ steps.vars.outputs.tag }}"
+          
+          # Create standalone exported PKGBUILD with target version
+          mkdir -p dist/arch-export
+          sed -E "s/^pkgver=.*/pkgver=${VERSION}/" scripts/packaging/arch/PKGBUILD > dist/arch-export/PKGBUILD
+          
+          # Export PKGBUILD directly to release artifacts
+          cp dist/arch-export/PKGBUILD dist/all-artifacts/PKGBUILD
+          tar -czf dist/all-artifacts/tilo-${VERSION}-PKGBUILD.tar.gz -C dist/arch-export PKGBUILD
+
+      - name: Compute SHA256 checksums
+        run: |
+          cd dist/all-artifacts
+          sha256sum * > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Create or update GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.vars.outputs.tag }}
+          name: Tilo ${{ steps.vars.outputs.tag }}
+          draft: ${{ inputs.draft }}
+          prerelease: ${{ inputs.prerelease }}
+          generate_release_notes: true
+          files: |
+            dist/all-artifacts/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

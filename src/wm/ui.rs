@@ -425,10 +425,7 @@ impl WindowManager {
                 } else {
                     let _ = self.clear_focus();
                 }
-                #[cfg(target_os = "linux")]
-                unsafe {
-                    libc::malloc_trim(0);
-                }
+                crate::process::trim_memory();
             }
         Ok(())
     }

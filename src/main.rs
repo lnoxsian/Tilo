@@ -52,10 +52,7 @@ fn main() {
     if let Err(err) = wm.manage_existing_windows() {
         eprintln!("[WARN  tilo::wm] Failed to manage pre-existing windows: {}", err);
     }
-    #[cfg(target_os = "linux")]
-    unsafe {
-        libc::malloc_trim(0);
-    }
+    tilo::process::trim_memory();
     println!("[INFO  tilo::wm] Entering X11 event loop...");
     if let Err(err) = wm.run() {
         eprintln!("[ERROR tilo::wm] Event loop error: {}", err);

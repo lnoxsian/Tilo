@@ -1,12 +1,12 @@
 # Maintainer: Tilo Developers <dev@tilo.org>
 pkgname=tilo
-pkgver=0.2.5
+pkgver=0.2.7
 pkgrel=1
 pkgdesc="Minimal Rust X11 Tiling Window Manager"
-arch=('x86_64' 'aarch64')
+arch=('x86_64' 'aarch64' 'armv7h' 'i686')
 url="https://github.com/lnoxsian/tilo"
 license=('MIT')
-depends=('libx11' 'libxrandr' 'libxcb' 'xcb-util')
+depends=('glibc')
 makedepends=('cargo' 'make')
 optdepends=(
     'ttf-font: TrueType/OpenType font rendering'

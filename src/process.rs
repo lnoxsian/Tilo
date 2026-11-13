@@ -11,6 +11,15 @@ use std::process::{Command, Stdio};
 #[cfg(target_os = "linux")]
 const CLOSE_RANGE_CLOEXEC: libc::c_uint = 4;
 
+/// Trims unused heap memory back to the operating system if supported by the C runtime (GNU glibc).
+#[inline]
+pub fn trim_memory() {
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    unsafe {
+        libc::malloc_trim(0);
+    }
+}
+
 /// Configures a `Command` with standard window manager process isolation:
 /// 1. Attaches `stdin`, `stdout`, and `stderr` to `/dev/null` so child output does not pollute
 ///    the window manager's console or block on open pipes.

@@ -632,10 +632,7 @@ impl WindowManager {
             } else {
                 let _ = self.render_statusbar();
             }
-            #[cfg(target_os = "linux")]
-            unsafe {
-                libc::malloc_trim(0);
-            }
+            crate::process::trim_memory();
         }
         removed
     }

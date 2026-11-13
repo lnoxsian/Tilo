@@ -230,10 +230,7 @@ impl Renderer {
             None
         };
 
-        #[cfg(target_os = "linux")]
-        unsafe {
-            libc::malloc_trim(0);
-        }
+        crate::process::trim_memory();
 
         Ok(Self {
             gc,
@@ -543,10 +540,7 @@ impl Renderer {
                 let mut fb = fb_cell.borrow_mut();
                 fb.resize(new_len, 0);
                 self.text_width_cache.borrow_mut().clear();
-                #[cfg(target_os = "linux")]
-                unsafe {
-                    libc::malloc_trim(0);
-                }
+                crate::process::trim_memory();
         }
 
         Ok(())
@@ -966,10 +960,7 @@ impl Renderer {
             let _ = conn.close_font(self.font_id);
         }
         conn.flush()?;
-        #[cfg(target_os = "linux")]
-        unsafe {
-            libc::malloc_trim(0);
-        }
+        crate::process::trim_memory();
         Ok(())
     }
 }

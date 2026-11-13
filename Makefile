@@ -31,7 +31,7 @@ INSTALL_PROGRAM ?= $(INSTALL) -m 755
 INSTALL_DATA ?= $(INSTALL) -m 644
 INSTALL_DIR ?= $(INSTALL) -d -m 755
 
-.PHONY: all debug release build test test-xephyr test-xephyr-release test-xephyr-layout test-layout test-layouts docker-build docker-compose install-deps clean install install-bin install-xsession install-desktop install-icons install-docs validate-desktop uninstall version version-check bump-patch bump-minor bump-major set-version help pkg pkg-deb pkg-arch pkg-rpm
+.PHONY: all debug release build test test-xephyr test-xephyr-release test-xephyr-layout test-layout test-layouts docker-build docker-compose install-deps clean install install-bin install-data install-xsession install-desktop install-icons install-docs validate-desktop uninstall version version-check bump-patch bump-minor bump-major set-version help pkg pkg-deb pkg-arch pkg-rpm pkg-bin
 
 # Default target: build debug binary
 all: debug
@@ -66,7 +66,7 @@ docker-compose:
 	@ls -lh dist/$(NAME)
 
 # Distribution packaging targets
-pkg: pkg-deb pkg-arch pkg-rpm
+pkg: pkg-deb pkg-arch pkg-rpm pkg-bin
 
 # Build Debian / Ubuntu package (.deb)
 pkg-deb:
@@ -82,6 +82,11 @@ pkg-arch:
 pkg-rpm:
 	@echo "==> Building Fedora / RHEL package (.rpm)..."
 	@$(SCRIPTS_DIR)/packaging/fedora/pkg-rpm.sh
+
+# Build standalone binary archive (.tar.gz)
+pkg-bin:
+	@echo "==> Building standalone binary archive (.tar.gz)..."
+	@$(SCRIPTS_DIR)/packaging/binary/pkg-bin.sh
 
 # Alias for debug
 build: debug
@@ -129,11 +134,18 @@ clean:
 install: install-bin install-xsession install-icons install-docs
 	@echo "==> $(NAME) v$(VERSION) successfully installed to $(DESTDIR)$(PREFIX)"
 
+# Source binary path (can be overridden, e.g. for packaging cross-compiled targets)
+BIN_SRC ?= $(TARGET_DIR)/release/$(NAME)
+
 # Install release binary only
-install-bin: release
-	@echo "==> Installing binary to $(DESTDIR)$(BINDIR)..."
+install-bin:
+	@if [ ! -f "$(BIN_SRC)" ]; then $(MAKE) release; fi
+	@echo "==> Installing binary from $(BIN_SRC) to $(DESTDIR)$(BINDIR)..."
 	$(INSTALL_DIR) $(DESTDIR)$(BINDIR)
-	$(INSTALL_PROGRAM) $(TARGET_DIR)/release/$(NAME) $(DESTDIR)$(BINDIR)/$(NAME)
+	$(INSTALL_PROGRAM) $(BIN_SRC) $(DESTDIR)$(BINDIR)/$(NAME)
+
+# Install data files only (desktop entry, icons, badges, documentation)
+install-data: install-xsession install-icons install-docs
 
 # Install XSession desktop entry for display managers (GDM, LightDM, SDDM, Ly, etc.)
 install-xsession:

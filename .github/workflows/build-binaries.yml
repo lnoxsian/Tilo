@@ -1,0 +1,77 @@
+name: Build Binaries (Standalone)
+
+on:
+  workflow_dispatch:
+    inputs:
+      architecture:
+        description: 'Target architecture to build'
+        required: true
+        type: choice
+        default: 'all'
+        options:
+          - 'all'
+          - 'x86_64-gnu'
+          - 'x86_64-musl'
+          - 'i686-gnu'
+          - 'i686-musl'
+          - 'arm64-gnu'
+          - 'arm64-musl'
+          - 'arm32-musl'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build (${{ matrix.short_name }})
+    runs-on: ubuntu-latest
+    if: inputs.architecture == 'all' || inputs.architecture == matrix.short_name
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            short_name: x86_64-gnu
+          - target: x86_64-unknown-linux-musl
+            short_name: x86_64-musl
+          - target: i686-unknown-linux-gnu
+            short_name: i686-gnu
+          - target: i686-unknown-linux-musl
+            short_name: i686-musl
+          - target: aarch64-unknown-linux-gnu
+            short_name: arm64-gnu
+          - target: aarch64-unknown-linux-musl
+            short_name: arm64-musl
+          - target: armv7-unknown-linux-musleabihf
+            short_name: arm32-musl
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install Cross
+        uses: taiki-e/install-action@cross
+
+      - name: Build target binary
+        run: |
+          cross build --release --target ${{ matrix.target }}
+
+      - name: Package standalone archive
+        run: |
+          mkdir -p dist/artifacts
+          ./scripts/packaging/binary/pkg-bin.sh \
+            --binary "target/${{ matrix.target }}/release/tilo" \
+            --target "${{ matrix.target }}" \
+            --out-dir dist/artifacts
+
+      - name: Upload binary archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: tilo-bin-${{ matrix.short_name }}
+          path: dist/artifacts/*
+          if-no-files-found: error

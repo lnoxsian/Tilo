@@ -1,0 +1,76 @@
+name: Package RPM (.rpm)
+
+on:
+  workflow_dispatch:
+    inputs:
+      architecture:
+        description: 'RPM architecture to package'
+        required: true
+        type: choice
+        default: 'all'
+        options:
+          - 'all'
+          - 'x86_64'
+          - 'i686'
+          - 'aarch64'
+          - 'armv7hl'
+
+permissions:
+  contents: read
+
+jobs:
+  package-rpm:
+    name: Package .rpm (${{ matrix.rpm_arch }})
+    runs-on: ubuntu-latest
+    if: inputs.architecture == 'all' || inputs.architecture == matrix.rpm_arch
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            rpm_arch: x86_64
+          - target: i686-unknown-linux-gnu
+            rpm_arch: i686
+          - target: aarch64-unknown-linux-gnu
+            rpm_arch: aarch64
+          - target: armv7-unknown-linux-musleabihf
+            rpm_arch: armv7hl
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install packaging tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y rpm
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install Cross
+        uses: taiki-e/install-action@cross
+
+      - name: Build target binary
+        run: |
+          cross build --release --target ${{ matrix.target }}
+
+      - name: Build RPM package
+        run: |
+          mkdir -p dist/artifacts
+          ./scripts/packaging/fedora/pkg-rpm.sh \
+            --binary "target/${{ matrix.target }}/release/tilo" \
+            --arch "${{ matrix.rpm_arch }}" \
+            --out-dir dist/artifacts
+
+          cd dist/artifacts
+          sha256sum *.rpm > "tilo_${{ matrix.rpm_arch }}.rpm.sha256"
+
+      - name: Upload RPM package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tilo-rpm-${{ matrix.rpm_arch }}
+          path: dist/artifacts/*
+          if-no-files-found: error
