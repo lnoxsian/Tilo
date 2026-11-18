@@ -2,9 +2,7 @@ use std::process::{Child, Command};
 use tilo::wm::WindowManager;
 use tilo::x11::X11Context;
 use x11rb::connection::Connection;
-use x11rb::protocol::xproto::{
-    ConnectionExt, CreateWindowAux, WindowClass,
-};
+use x11rb::protocol::xproto::{ConnectionExt, CreateWindowAux, WindowClass};
 use x11rb::wrapper::ConnectionExt as _;
 
 struct XephyrServer {
@@ -62,8 +60,8 @@ fn test_workspace_lifecycle_and_switching_in_xephyr() {
 
     let xephyr = XephyrServer::start(98);
     if let Some(server) = xephyr {
-        let wm_ctx = X11Context::connect_to(Some(&server.display))
-            .expect("WM context connect failed");
+        let wm_ctx =
+            X11Context::connect_to(Some(&server.display)).expect("WM context connect failed");
         assert!(wm_ctx.become_wm().is_ok());
 
         let mut wm = WindowManager::new(wm_ctx).expect("Failed to initialize WM");

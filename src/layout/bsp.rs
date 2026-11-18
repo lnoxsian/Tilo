@@ -1,7 +1,7 @@
 //! Binary Space Partitioning (BSP) tree layout.
 
-use x11rb::protocol::xproto::Window;
 use super::{LayoutConfig, LayoutType, Rect};
+use x11rb::protocol::xproto::Window;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SplitType {
@@ -15,9 +15,7 @@ pub enum SplitType {
 #[derive(Debug, Clone, PartialEq)]
 pub enum BspNode {
     /// A leaf node representing a single managed X11 client window.
-    Leaf {
-        window: Window,
-    },
+    Leaf { window: Window },
     /// An internal node dividing its allocated area between two child subtrees.
     Split {
         split_type: SplitType,
@@ -33,7 +31,9 @@ impl BspNode {
     pub fn contains(&self, target: Window) -> bool {
         match self {
             BspNode::Leaf { window } => *window == target,
-            BspNode::Split { first, second, .. } => first.contains(target) || second.contains(target),
+            BspNode::Split { first, second, .. } => {
+                first.contains(target) || second.contains(target)
+            }
         }
     }
 
@@ -72,7 +72,12 @@ impl BspNode {
                     None
                 }
             }
-            BspNode::Split { split_type, ratio, first, second } => {
+            BspNode::Split {
+                split_type,
+                ratio,
+                first,
+                second,
+            } => {
                 let (r1, r2) = split_rect(rect, *split_type, *ratio, inner_gap);
                 if first.contains(target) {
                     first.find_window_rect(target, r1, inner_gap)
@@ -91,7 +96,12 @@ impl BspNode {
             BspNode::Leaf { window } => {
                 out.push((*window, rect));
             }
-            BspNode::Split { split_type, ratio, first, second } => {
+            BspNode::Split {
+                split_type,
+                ratio,
+                first,
+                second,
+            } => {
                 let (r1, r2) = split_rect(rect, *split_type, *ratio, inner_gap);
                 first.calculate_rects(r1, inner_gap, out);
                 second.calculate_rects(r2, inner_gap, out);
@@ -100,7 +110,13 @@ impl BspNode {
     }
 
     /// Inserts `new_win` by replacing the leaf containing `target` with a split node.
-    pub fn insert_at(&mut self, target: Window, new_win: Window, split_type: SplitType, ratio: f32) -> bool {
+    pub fn insert_at(
+        &mut self,
+        target: Window,
+        new_win: Window,
+        split_type: SplitType,
+        ratio: f32,
+    ) -> bool {
         match self {
             BspNode::Leaf { window } if *window == target => {
                 let old_win = *window;
@@ -177,22 +193,33 @@ impl BspNode {
         click_coord: i32,
     ) -> bool {
         if let Some(highest) = self.find_highest_split_mut(target, target_split) {
-            highest.adjust_linear_leaf_by_pointer(target, delta, target_split, initial_rect, click_coord)
+            highest.adjust_linear_leaf_by_pointer(
+                target,
+                delta,
+                target_split,
+                initial_rect,
+                click_coord,
+            )
         } else {
             false
         }
     }
 
     /// Finds a mutable reference to the highest continuous ancestor split of `target_split` containing `target`.
-    fn find_highest_split_mut(&mut self, target: Window, target_split: SplitType) -> Option<&mut BspNode> {
+    fn find_highest_split_mut(
+        &mut self,
+        target: Window,
+        target_split: SplitType,
+    ) -> Option<&mut BspNode> {
         if !self.contains(target) {
             return None;
         }
 
         if let BspNode::Split { split_type, .. } = self
-            && *split_type == target_split {
-                return Some(self);
-            }
+            && *split_type == target_split
+        {
+            return Some(self);
+        }
 
         match self {
             BspNode::Split { first, second, .. } => {
@@ -336,12 +363,22 @@ impl BspNode {
         true
     }
 
-    fn collect_split_units(&self, target_split: SplitType, factor: f32, out: &mut Vec<(Vec<Window>, f32)>) {
+    fn collect_split_units(
+        &self,
+        target_split: SplitType,
+        factor: f32,
+        out: &mut Vec<(Vec<Window>, f32)>,
+    ) {
         match self {
             BspNode::Leaf { window } => {
                 out.push((vec![*window], factor));
             }
-            BspNode::Split { split_type, ratio, first, second } if *split_type == target_split => {
+            BspNode::Split {
+                split_type,
+                ratio,
+                first,
+                second,
+            } if *split_type == target_split => {
                 first.collect_split_units(target_split, factor * *ratio, out);
                 second.collect_split_units(target_split, factor * (1.0 - *ratio), out);
             }
@@ -354,7 +391,12 @@ impl BspNode {
     fn apply_split_unit_weights(&mut self, target_split: SplitType, units: &[(Vec<Window>, f32)]) {
         match self {
             BspNode::Leaf { .. } => {}
-            BspNode::Split { split_type, ratio, first, second } if *split_type == target_split => {
+            BspNode::Split {
+                split_type,
+                ratio,
+                first,
+                second,
+            } if *split_type == target_split => {
                 let first_wins = first.windows();
                 let second_wins = second.windows();
 
@@ -385,7 +427,12 @@ impl BspNode {
     pub fn resize_any_split(&mut self, delta: f32, target_split: SplitType) -> bool {
         match self {
             BspNode::Leaf { .. } => false,
-            BspNode::Split { split_type, ratio, first, second } => {
+            BspNode::Split {
+                split_type,
+                ratio,
+                first,
+                second,
+            } => {
                 if *split_type == target_split {
                     *ratio = (*ratio + delta).clamp(0.05, 0.95);
                     true
@@ -409,7 +456,12 @@ fn remove_node(node: Box<BspNode>, target: Window) -> Option<Box<BspNode>> {
                 Some(Box::new(BspNode::Leaf { window }))
             }
         }
-        BspNode::Split { split_type, ratio, first, second } => {
+        BspNode::Split {
+            split_type,
+            ratio,
+            first,
+            second,
+        } => {
             if first.contains(target) {
                 let new_first = remove_node(first, target);
                 match new_first {
@@ -452,15 +504,26 @@ fn split_rect(rect: Rect, split_type: SplitType, ratio: f32, inner_gap: u32) -> 
                 let w = rect.width / 2;
                 (
                     Rect::new(rect.x, rect.y, w, rect.height),
-                    Rect::new(rect.x + w as i32, rect.y, rect.width.saturating_sub(w), rect.height),
+                    Rect::new(
+                        rect.x + w as i32,
+                        rect.y,
+                        rect.width.saturating_sub(w),
+                        rect.height,
+                    ),
                 )
             } else {
                 let available = rect.width - inner_gap;
-                let w1 = ((available as f32 * ratio).round() as u32).clamp(1, available.saturating_sub(1));
+                let w1 = ((available as f32 * ratio).round() as u32)
+                    .clamp(1, available.saturating_sub(1));
                 let w2 = available - w1;
                 (
                     Rect::new(rect.x, rect.y, w1, rect.height),
-                    Rect::new(rect.x + w1 as i32 + inner_gap as i32, rect.y, w2, rect.height),
+                    Rect::new(
+                        rect.x + w1 as i32 + inner_gap as i32,
+                        rect.y,
+                        w2,
+                        rect.height,
+                    ),
                 )
             }
         }
@@ -469,15 +532,26 @@ fn split_rect(rect: Rect, split_type: SplitType, ratio: f32, inner_gap: u32) -> 
                 let h = rect.height / 2;
                 (
                     Rect::new(rect.x, rect.y, rect.width, h),
-                    Rect::new(rect.x, rect.y + h as i32, rect.width, rect.height.saturating_sub(h)),
+                    Rect::new(
+                        rect.x,
+                        rect.y + h as i32,
+                        rect.width,
+                        rect.height.saturating_sub(h),
+                    ),
                 )
             } else {
                 let available = rect.height - inner_gap;
-                let h1 = ((available as f32 * ratio).round() as u32).clamp(1, available.saturating_sub(1));
+                let h1 = ((available as f32 * ratio).round() as u32)
+                    .clamp(1, available.saturating_sub(1));
                 let h2 = available - h1;
                 (
                     Rect::new(rect.x, rect.y, rect.width, h1),
-                    Rect::new(rect.x, rect.y + h1 as i32 + inner_gap as i32, rect.width, h2),
+                    Rect::new(
+                        rect.x,
+                        rect.y + h1 as i32 + inner_gap as i32,
+                        rect.width,
+                        h2,
+                    ),
                 )
             }
         }
@@ -511,7 +585,10 @@ impl BspTree {
 
     /// Checks if a window is managed by this tree.
     pub fn contains(&self, window: Window) -> bool {
-        self.root.as_ref().map(|r| r.contains(window)).unwrap_or(false)
+        self.root
+            .as_ref()
+            .map(|r| r.contains(window))
+            .unwrap_or(false)
     }
 
     /// Returns all window IDs in pre-order traversal.
@@ -520,7 +597,13 @@ impl BspTree {
     }
 
     /// Inserts a window into the tree, auto-splitting or using a pre-selected split.
-    pub fn insert(&mut self, target: Option<Window>, new_win: Window, usable_rect: &Rect, inner_gap: u32) {
+    pub fn insert(
+        &mut self,
+        target: Option<Window>,
+        new_win: Window,
+        usable_rect: &Rect,
+        inner_gap: u32,
+    ) {
         if self.contains(new_win) {
             return;
         }
@@ -542,7 +625,8 @@ impl BspTree {
         let split_type = if let Some(pre) = self.preselect.take() {
             pre
         } else {
-            let target_rect = root.find_window_rect(target_win, *usable_rect, inner_gap)
+            let target_rect = root
+                .find_window_rect(target_win, *usable_rect, inner_gap)
                 .unwrap_or(*usable_rect);
             if target_rect.width >= target_rect.height {
                 SplitType::Horizontal
@@ -578,11 +662,47 @@ impl BspTree {
     /// Returns the active master pane ratio based on layout orientation.
     pub fn master_ratio_for_layout(&self, layout: LayoutType) -> Option<f32> {
         match (layout, self.root.as_deref()) {
-            (LayoutType::MasterStack, Some(BspNode::Split { split_type: SplitType::Horizontal, ratio, .. })) => Some(*ratio),
-            (LayoutType::MasterRight, Some(BspNode::Split { split_type: SplitType::Horizontal, ratio, .. })) => Some(1.0 - *ratio),
-            (LayoutType::MasterTop, Some(BspNode::Split { split_type: SplitType::Vertical, ratio, .. })) => Some(*ratio),
-            (LayoutType::MasterBottom, Some(BspNode::Split { split_type: SplitType::Vertical, ratio, .. })) => Some(1.0 - *ratio),
-            (LayoutType::CenterMaster, Some(BspNode::Split { split_type: SplitType::Horizontal, ratio, second, .. })) => {
+            (
+                LayoutType::MasterStack,
+                Some(BspNode::Split {
+                    split_type: SplitType::Horizontal,
+                    ratio,
+                    ..
+                }),
+            ) => Some(*ratio),
+            (
+                LayoutType::MasterRight,
+                Some(BspNode::Split {
+                    split_type: SplitType::Horizontal,
+                    ratio,
+                    ..
+                }),
+            ) => Some(1.0 - *ratio),
+            (
+                LayoutType::MasterTop,
+                Some(BspNode::Split {
+                    split_type: SplitType::Vertical,
+                    ratio,
+                    ..
+                }),
+            ) => Some(*ratio),
+            (
+                LayoutType::MasterBottom,
+                Some(BspNode::Split {
+                    split_type: SplitType::Vertical,
+                    ratio,
+                    ..
+                }),
+            ) => Some(1.0 - *ratio),
+            (
+                LayoutType::CenterMaster,
+                Some(BspNode::Split {
+                    split_type: SplitType::Horizontal,
+                    ratio,
+                    second,
+                    ..
+                }),
+            ) => {
                 if matches!(**second, BspNode::Leaf { .. }) {
                     Some(1.0 - *ratio)
                 } else {
@@ -599,7 +719,12 @@ impl BspTree {
     }
 
     /// Resizes the ancestor split of `window` by `delta_ratio` ($\pm 0.05$), falling back to any matching split.
-    pub fn resize_window(&mut self, window: Window, delta_ratio: f32, split_type: SplitType) -> bool {
+    pub fn resize_window(
+        &mut self,
+        window: Window,
+        delta_ratio: f32,
+        split_type: SplitType,
+    ) -> bool {
         if let Some(ref mut root) = self.root {
             root.resize_pane(window, delta_ratio, split_type)
         } else {
@@ -637,14 +762,26 @@ impl BspTree {
             if allow_h
                 && initial_rect.width > 0
                 && delta_x != 0
-                && root.resize_pane_by_pointer(window, delta_x, SplitType::Horizontal, initial_rect, click_x)
+                && root.resize_pane_by_pointer(
+                    window,
+                    delta_x,
+                    SplitType::Horizontal,
+                    initial_rect,
+                    click_x,
+                )
             {
                 handled = true;
             }
             if allow_v
                 && initial_rect.height > 0
                 && delta_y != 0
-                && root.resize_pane_by_pointer(window, delta_y, SplitType::Vertical, initial_rect, click_y)
+                && root.resize_pane_by_pointer(
+                    window,
+                    delta_y,
+                    SplitType::Vertical,
+                    initial_rect,
+                    click_y,
+                )
             {
                 handled = true;
             }
@@ -653,29 +790,45 @@ impl BspTree {
     }
 
     /// Dynamically resizes a window's split during mouse drag (defaults click position to center).
-    pub fn resize_by_pointer(&mut self, window: Window, delta_x: i32, delta_y: i32, initial_rect: Rect) -> bool {
+    pub fn resize_by_pointer(
+        &mut self,
+        window: Window,
+        delta_x: i32,
+        delta_y: i32,
+        initial_rect: Rect,
+    ) -> bool {
         let cx = initial_rect.x + (initial_rect.width as i32 / 2);
         let cy = initial_rect.y + (initial_rect.height as i32 / 2);
         self.resize_by_pointer_at(window, delta_x, delta_y, initial_rect, cx, cy)
     }
 
     /// Calculates bounding rectangles for all windows in the tree.
-    pub fn calculate_rects(&self, screen_rect: &Rect, config: &LayoutConfig) -> Vec<(Window, Rect)> {
+    pub fn calculate_rects(
+        &self,
+        screen_rect: &Rect,
+        config: &LayoutConfig,
+    ) -> Vec<(Window, Rect)> {
         let Some(ref root) = self.root else {
             return Vec::new();
         };
 
         let double_outer = 2 * config.outer_gap;
-        let (usable_x, usable_y, usable_w, usable_h) = if screen_rect.width <= double_outer || screen_rect.height <= double_outer {
-            (screen_rect.x, screen_rect.y, screen_rect.width, screen_rect.height)
-        } else {
-            (
-                screen_rect.x + config.outer_gap as i32,
-                screen_rect.y + config.outer_gap as i32,
-                screen_rect.width - double_outer,
-                screen_rect.height - double_outer,
-            )
-        };
+        let (usable_x, usable_y, usable_w, usable_h) =
+            if screen_rect.width <= double_outer || screen_rect.height <= double_outer {
+                (
+                    screen_rect.x,
+                    screen_rect.y,
+                    screen_rect.width,
+                    screen_rect.height,
+                )
+            } else {
+                (
+                    screen_rect.x + config.outer_gap as i32,
+                    screen_rect.y + config.outer_gap as i32,
+                    screen_rect.width - double_outer,
+                    screen_rect.height - double_outer,
+                )
+            };
 
         let usable_rect = Rect::new(usable_x, usable_y, usable_w, usable_h);
         let mut pairs = Vec::new();
@@ -893,7 +1046,12 @@ impl BspTree {
     }
 
     /// Rebuilds the tree structure for the specified layout type while preserving client order.
-    pub fn rebuild_for_layout(&mut self, layout: LayoutType, clients: &[Window], master_ratio: f32) {
+    pub fn rebuild_for_layout(
+        &mut self,
+        layout: LayoutType,
+        clients: &[Window],
+        master_ratio: f32,
+    ) {
         self.root = match layout {
             LayoutType::MasterStack => Self::build_master_stack(clients, master_ratio),
             LayoutType::MasterRight => Self::build_master_right(clients, master_ratio),
@@ -905,7 +1063,10 @@ impl BspTree {
             LayoutType::Horizontal => Self::build_horizontal(clients),
             LayoutType::Bsp => {
                 let current_wins = self.windows();
-                if current_wins.len() == clients.len() && clients.iter().all(|w| current_wins.contains(w)) && self.root.is_some() {
+                if current_wins.len() == clients.len()
+                    && clients.iter().all(|w| current_wins.contains(w))
+                    && self.root.is_some()
+                {
                     return;
                 }
                 let mut tree = BspTree::new();
@@ -948,14 +1109,24 @@ impl BspTree {
                         if wins.len() == 1 {
                             let m = wins[0];
                             if let Some(ref mut root) = self.root {
-                                root.insert_at(m, w, SplitType::Horizontal, master_ratio.clamp(0.05, 0.95));
+                                root.insert_at(
+                                    m,
+                                    w,
+                                    SplitType::Horizontal,
+                                    master_ratio.clamp(0.05, 0.95),
+                                );
                             }
                         } else if let Some(last) = wins.last().copied()
-                            && let Some(ref mut root) = self.root {
-                                root.insert_at(last, w, SplitType::Vertical, 0.5);
+                            && let Some(ref mut root) = self.root
+                        {
+                            root.insert_at(last, w, SplitType::Vertical, 0.5);
                         }
                     }
-                    LayoutType::MasterRight | LayoutType::MasterTop | LayoutType::MasterBottom | LayoutType::CenterMaster | LayoutType::Grid => {
+                    LayoutType::MasterRight
+                    | LayoutType::MasterTop
+                    | LayoutType::MasterBottom
+                    | LayoutType::CenterMaster
+                    | LayoutType::Grid => {
                         let mut all = self.windows();
                         all.push(w);
                         self.rebuild_for_layout(layout, &all, master_ratio);
@@ -963,15 +1134,17 @@ impl BspTree {
                     LayoutType::Vertical => {
                         let wins = self.windows();
                         if let Some(last) = wins.last().copied()
-                            && let Some(ref mut root) = self.root {
-                                root.insert_at(last, w, SplitType::Horizontal, 0.5);
+                            && let Some(ref mut root) = self.root
+                        {
+                            root.insert_at(last, w, SplitType::Horizontal, 0.5);
                         }
                     }
                     LayoutType::Horizontal => {
                         let wins = self.windows();
                         if let Some(last) = wins.last().copied()
-                            && let Some(ref mut root) = self.root {
-                                root.insert_at(last, w, SplitType::Vertical, 0.5);
+                            && let Some(ref mut root) = self.root
+                        {
+                            root.insert_at(last, w, SplitType::Vertical, 0.5);
                         }
                     }
                     _ => {
@@ -983,9 +1156,20 @@ impl BspTree {
     }
 
     /// Synchronizes the tree with a list of currently visible tiled windows.
-    pub fn sync_clients(&mut self, visible_clients: &[Window], focused: Option<Window>, usable_rect: &Rect, inner_gap: u32) {
-        self.sync_clients_with_layout(LayoutType::Bsp, visible_clients, focused, usable_rect, inner_gap, 0.55);
+    pub fn sync_clients(
+        &mut self,
+        visible_clients: &[Window],
+        focused: Option<Window>,
+        usable_rect: &Rect,
+        inner_gap: u32,
+    ) {
+        self.sync_clients_with_layout(
+            LayoutType::Bsp,
+            visible_clients,
+            focused,
+            usable_rect,
+            inner_gap,
+            0.55,
+        );
     }
 }
-
-

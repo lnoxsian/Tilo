@@ -67,8 +67,8 @@ fn test_ewmh_support_in_xephyr() {
 
     let xephyr = XephyrServer::start(94);
     if let Some(server) = xephyr {
-        let wm_ctx = X11Context::connect_to(Some(&server.display))
-            .expect("WM context connect failed");
+        let wm_ctx =
+            X11Context::connect_to(Some(&server.display)).expect("WM context connect failed");
         assert!(wm_ctx.become_wm().is_ok());
 
         let mut wm = WindowManager::new(wm_ctx).expect("Failed to initialize WM");
@@ -105,16 +105,30 @@ fn test_ewmh_support_in_xephyr() {
 
         // 1. Test _NET_SUPPORTING_WM_CHECK
         let check_root = get_supporting_wm_check(&client_conn, root, &ewmh).unwrap();
-        assert!(check_root.is_some(), "_NET_SUPPORTING_WM_CHECK must exist on root");
+        assert!(
+            check_root.is_some(),
+            "_NET_SUPPORTING_WM_CHECK must exist on root"
+        );
         let supporting_win = check_root.unwrap();
         assert_eq!(supporting_win, wm.supporting_window);
 
         let check_child = get_supporting_wm_check(&client_conn, supporting_win, &ewmh).unwrap();
-        assert_eq!(check_child, Some(supporting_win), "Child window must point to itself");
+        assert_eq!(
+            check_child,
+            Some(supporting_win),
+            "Child window must point to itself"
+        );
 
         // Verify _NET_WM_NAME on supporting window is "tilo"
         let name_reply = client_conn
-            .get_property(false, supporting_win, ewmh.net_wm_name, ewmh.utf8_string, 0, 32)
+            .get_property(
+                false,
+                supporting_win,
+                ewmh.net_wm_name,
+                ewmh.utf8_string,
+                0,
+                32,
+            )
             .unwrap()
             .reply()
             .unwrap();
@@ -125,7 +139,14 @@ fn test_ewmh_support_in_xephyr() {
         assert_eq!(current_desktop, Some(0)); // 0-indexed for workspace 1
 
         let num_desktops_reply = client_conn
-            .get_property(false, root, ewmh.net_number_of_desktops, AtomEnum::CARDINAL, 0, 1)
+            .get_property(
+                false,
+                root,
+                ewmh.net_number_of_desktops,
+                AtomEnum::CARDINAL,
+                0,
+                1,
+            )
             .unwrap()
             .reply()
             .unwrap();

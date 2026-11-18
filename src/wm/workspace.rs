@@ -2,23 +2,19 @@
 
 use super::WindowManager;
 use crate::bar::Statusbar;
-use crate::ewmh::{
-    update_net_active_window, update_net_client_list, update_net_current_desktop,
-};
+use crate::ewmh::{update_net_active_window, update_net_client_list, update_net_current_desktop};
 use crate::floating::{calculate_default_floating_geometry, clamp_floating_geometry};
-use crate::focus::{find_neighbor, set_window_border_color, Direction};
+use crate::focus::{Direction, find_neighbor, set_window_border_color};
 use crate::fullscreen::fullscreen_configure_aux;
 use crate::icccm::WmState;
 use crate::layout::{
-    apply_layout_with_border, calculate_master_stack, calculate_monocle, LayoutType, Rect,
+    LayoutType, Rect, apply_layout_with_border, calculate_master_stack, calculate_monocle,
 };
-use crate::monitor::{query_monitors, MonitorId};
+use crate::monitor::{MonitorId, query_monitors};
 use crate::workspace::WorkspaceId;
 use crate::x11::X11Error;
 use x11rb::connection::Connection;
-use x11rb::protocol::xproto::{
-    ConfigureWindowAux, ConnectionExt, InputFocus, StackMode, Window,
-};
+use x11rb::protocol::xproto::{ConfigureWindowAux, ConnectionExt, InputFocus, StackMode, Window};
 use x11rb::wrapper::ConnectionExt as _;
 
 impl WindowManager {
@@ -46,7 +42,8 @@ impl WindowManager {
 
     /// Updates the root window's `_NET_CURRENT_DESKTOP` property (0-indexed).
     pub fn update_ewmh_current_desktop(&self) -> Result<(), X11Error> {
-        let desktop_idx = crate::workspace::workspace_to_tag(self.current_workspace).saturating_sub(1);
+        let desktop_idx =
+            crate::workspace::workspace_to_tag(self.current_workspace).saturating_sub(1);
         update_net_current_desktop(
             &self.context.connection,
             self.context.root_window,
@@ -83,7 +80,8 @@ impl WindowManager {
                         self.layout_config.inner_gap,
                         self.layout_config.master_ratio,
                     );
-                    ws.bsp_tree.calculate_rects(usable_rect, &self.layout_config)
+                    ws.bsp_tree
+                        .calculate_rects(usable_rect, &self.layout_config)
                 }
             }
         } else {
@@ -110,7 +108,9 @@ impl WindowManager {
                 }
                 let title = self.get_window_title(w);
                 let is_focused = Some(w) == focused;
-                tabs.push(crate::bar::tabs::TabInfo::new(w, title, idx, is_focused, c.urgent));
+                tabs.push(crate::bar::tabs::TabInfo::new(
+                    w, title, idx, is_focused, c.urgent,
+                ));
                 idx += 1;
             }
         }
@@ -238,8 +238,16 @@ impl WindowManager {
         let target_focus = self
             .workspace_focus
             .focused_window_on(ws)
-            .or_else(|| self.workspace_manager.get(ws).and_then(|w| w.focused_client))
-            .or_else(|| self.workspace_manager.get(ws).and_then(|w| w.clients.first().copied()));
+            .or_else(|| {
+                self.workspace_manager
+                    .get(ws)
+                    .and_then(|w| w.focused_client)
+            })
+            .or_else(|| {
+                self.workspace_manager
+                    .get(ws)
+                    .and_then(|w| w.clients.first().copied())
+            });
 
         if let Some(w) = target_focus.filter(|w| self.client_state.contains(*w)) {
             self.focus_client(w)?;
@@ -275,10 +283,18 @@ impl WindowManager {
             let mon_ws = monitor.workspace;
             let usable_rect = self.usable_rect_for_monitor(monitor);
 
-            let ws_layout = self.workspace_manager.get(mon_ws).map(|ws| ws.layout).unwrap_or_default();
+            let ws_layout = self
+                .workspace_manager
+                .get(mon_ws)
+                .map(|ws| ws.layout)
+                .unwrap_or_default();
 
             if ws_layout == LayoutType::Tabbed {
-                let ws_clients = self.workspace_manager.get(mon_ws).map(|ws| ws.clients.clone()).unwrap_or_default();
+                let ws_clients = self
+                    .workspace_manager
+                    .get(mon_ws)
+                    .map(|ws| ws.clients.clone())
+                    .unwrap_or_default();
                 let tiled_clients: Vec<Window> = ws_clients
                     .into_iter()
                     .filter(|&w| {
@@ -303,8 +319,12 @@ impl WindowManager {
                         let _ = self.context.connection.map_window(w);
                         let _ = self.set_wm_state(w, WmState::Normal);
                         let mut geom = usable_rect;
-                        geom.width = geom.width.saturating_sub(2 * self.layout_config.border_width);
-                        geom.height = geom.height.saturating_sub(2 * self.layout_config.border_width);
+                        geom.width = geom
+                            .width
+                            .saturating_sub(2 * self.layout_config.border_width);
+                        geom.height = geom
+                            .height
+                            .saturating_sub(2 * self.layout_config.border_width);
                         apply_layout_with_border(
                             &self.context.connection,
                             &[w],
@@ -312,23 +332,31 @@ impl WindowManager {
                             self.layout_config.border_width,
                         )?;
                     } else if let Some(c) = self.client_state.get_client_mut(w)
-                        && c.mapped {
-                            c.mapped = false;
-                            let _ = self.context.connection.unmap_window(w);
-                            let _ = self.set_wm_state(w, WmState::Iconic);
-                        }
+                        && c.mapped
+                    {
+                        c.mapped = false;
+                        let _ = self.context.connection.unmap_window(w);
+                        let _ = self.set_wm_state(w, WmState::Iconic);
+                    }
                 }
             } else {
                 // Leaving or outside Tabbed layout: ensure all managed tiled windows on current workspace are mapped
                 if mon_ws == self.current_workspace {
-                    let ws_clients = self.workspace_manager.get(mon_ws).map(|ws| ws.clients.clone()).unwrap_or_default();
+                    let ws_clients = self
+                        .workspace_manager
+                        .get(mon_ws)
+                        .map(|ws| ws.clients.clone())
+                        .unwrap_or_default();
                     for &w in &ws_clients {
                         if let Some(c) = self.client_state.get_client_mut(w)
-                            && !c.mapped && !c.is_floating() && !c.is_fullscreen() {
-                                c.mapped = true;
-                                let _ = self.context.connection.map_window(w);
-                                let _ = self.set_wm_state(w, WmState::Normal);
-                            }
+                            && !c.mapped
+                            && !c.is_floating()
+                            && !c.is_fullscreen()
+                        {
+                            c.mapped = true;
+                            let _ = self.context.connection.map_window(w);
+                            let _ = self.set_wm_state(w, WmState::Normal);
+                        }
                     }
                 }
 
@@ -348,21 +376,22 @@ impl WindowManager {
 
                     // If Monocle layout, raise the focused window above other tiled windows
                     if ws_layout == LayoutType::Monocle
-                        && let Some(focused) = self.workspace_focus.focused_window_on(mon_ws) {
-                            let _ = self.context.connection.configure_window(
-                                focused,
-                                &ConfigureWindowAux::default().stack_mode(StackMode::ABOVE),
-                            );
-                        }
+                        && let Some(focused) = self.workspace_focus.focused_window_on(mon_ws)
+                    {
+                        let _ = self.context.connection.configure_window(
+                            focused,
+                            &ConfigureWindowAux::default().stack_mode(StackMode::ABOVE),
+                        );
+                    }
                 }
             }
 
             // Keep all mapped floating windows on this monitor's workspace stacked above tiled windows
             for &w in &self.client_state.floating_clients_on_workspace(mon_ws) {
-                let _ = self.context.connection.configure_window(
-                    w,
-                    &ConfigureWindowAux::new().stack_mode(StackMode::ABOVE),
-                );
+                let _ = self
+                    .context
+                    .connection
+                    .configure_window(w, &ConfigureWindowAux::new().stack_mode(StackMode::ABOVE));
             }
 
             // Keep all mapped fullscreen windows on this monitor's workspace filling this monitor and above
@@ -551,11 +580,9 @@ impl WindowManager {
 
     /// Queries the window title from X11 (`_NET_WM_NAME` or `WM_NAME`).
     pub fn get_window_title(&self, window: Window) -> String {
-        if let Ok((_, _, Some(title))) = crate::rules::query_window_properties(
-            &self.context.connection,
-            &self.atoms,
-            window,
-        ) {
+        if let Ok((_, _, Some(title))) =
+            crate::rules::query_window_properties(&self.context.connection, &self.atoms, window)
+        {
             title
         } else {
             String::new()
@@ -582,7 +609,9 @@ impl WindowManager {
             return Ok(self.focused_window());
         }
         let current = self.focused_window();
-        let visible_tiled = self.client_state.visible_tiled_clients_on_workspace(current_ws);
+        let visible_tiled = self
+            .client_state
+            .visible_tiled_clients_on_workspace(current_ws);
         if visible_tiled.is_empty() {
             return Ok(None);
         }
@@ -671,19 +700,25 @@ impl WindowManager {
 
         // If scratchpad is currently visible, ensure it remains visible on target workspace
         if let Some(scratch_win) = self.scratchpad.client
-            && self.scratchpad.is_visible {
-                self.workspace_manager.move_client(scratch_win, target_id);
-                if let Some(c) = self.client_state.get_client_mut(scratch_win) {
-                    c.workspace = target_id;
-                    c.mapped = true;
-                }
-                let _ = self.context.connection.map_window(scratch_win);
-                let aux = ConfigureWindowAux::new().stack_mode(StackMode::ABOVE);
-                let _ = self.context.connection.configure_window(scratch_win, &aux);
-                let _ = self.set_wm_state(scratch_win, WmState::Normal);
+            && self.scratchpad.is_visible
+        {
+            self.workspace_manager.move_client(scratch_win, target_id);
+            if let Some(c) = self.client_state.get_client_mut(scratch_win) {
+                c.workspace = target_id;
+                c.mapped = true;
             }
+            let _ = self.context.connection.map_window(scratch_win);
+            let aux = ConfigureWindowAux::new().stack_mode(StackMode::ABOVE);
+            let _ = self.context.connection.configure_window(scratch_win, &aux);
+            let _ = self.set_wm_state(scratch_win, WmState::Normal);
+        }
 
-        if let Some(mon) = self.monitor_manager.monitors.iter_mut().find(|m| m.id == target_mon_id) {
+        if let Some(mon) = self
+            .monitor_manager
+            .monitors
+            .iter_mut()
+            .find(|m| m.id == target_mon_id)
+        {
             mon.workspace = target_id;
         }
         self.monitor_manager.active_monitor_id = target_mon_id;
@@ -724,7 +759,10 @@ impl WindowManager {
 
         self.workspace_manager.move_client(window, target_id);
 
-        let target_mon = self.monitor_manager.monitor_for_workspace(target_id).cloned();
+        let target_mon = self
+            .monitor_manager
+            .monitor_for_workspace(target_id)
+            .cloned();
         let target_is_visible = target_mon.is_some();
 
         if let Some(client) = self.client_state.get_client_mut(window) {
@@ -744,8 +782,14 @@ impl WindowManager {
         }
 
         // Restore focus on current workspace
-        let next_focus = self.workspace_focus.remove_window(current_id, window)
-            .or_else(|| self.workspace_manager.get(current_id).and_then(|ws| ws.clients.first().copied()))
+        let next_focus = self
+            .workspace_focus
+            .remove_window(current_id, window)
+            .or_else(|| {
+                self.workspace_manager
+                    .get(current_id)
+                    .and_then(|ws| ws.clients.first().copied())
+            })
             .filter(|&w| self.client_state.contains(w));
 
         if let Some(next_win) = next_focus {
@@ -820,24 +864,31 @@ impl WindowManager {
 
         if let Some(client) = self.client_state.get_client(win)
             && client.is_floating()
-                && let Some(target_mon) = self.monitor_manager.get_monitor(target_monitor_id) {
-                    let mut geom = client.floating_geometry.unwrap_or_else(|| {
-                        calculate_default_floating_geometry(
-                            target_mon.width as u16,
-                            target_mon.height as u16,
-                        )
-                    });
-                    geom.x = target_mon.x + ((target_mon.width as i32 - geom.width as i32) / 2).max(0);
-                    geom.y = target_mon.y + ((target_mon.height as i32 - geom.height as i32) / 2).max(0);
-                    let aux = ConfigureWindowAux::new().x(geom.x).y(geom.y);
-                    let _ = self.context.connection.configure_window(win, &aux);
-                    if let Some(c_mut) = self.client_state.get_client_mut(win) {
-                        c_mut.set_floating(geom);
-                    }
-                }
+            && let Some(target_mon) = self.monitor_manager.get_monitor(target_monitor_id)
+        {
+            let mut geom = client.floating_geometry.unwrap_or_else(|| {
+                calculate_default_floating_geometry(
+                    target_mon.width as u16,
+                    target_mon.height as u16,
+                )
+            });
+            geom.x = target_mon.x + ((target_mon.width as i32 - geom.width as i32) / 2).max(0);
+            geom.y = target_mon.y + ((target_mon.height as i32 - geom.height as i32) / 2).max(0);
+            let aux = ConfigureWindowAux::new().x(geom.x).y(geom.y);
+            let _ = self.context.connection.configure_window(win, &aux);
+            if let Some(c_mut) = self.client_state.get_client_mut(win) {
+                c_mut.set_floating(geom);
+            }
+        }
 
-        let next_focus = self.workspace_focus.remove_window(current_ws, win)
-            .or_else(|| self.workspace_manager.get(current_ws).and_then(|ws| ws.clients.first().copied()))
+        let next_focus = self
+            .workspace_focus
+            .remove_window(current_ws, win)
+            .or_else(|| {
+                self.workspace_manager
+                    .get(current_ws)
+                    .and_then(|ws| ws.clients.first().copied())
+            })
             .filter(|&w| self.client_state.contains(w));
         if let Some(next_win) = next_focus {
             let _ = self.focus_client(next_win);
@@ -853,11 +904,15 @@ impl WindowManager {
     /// Refreshes monitor geometry by querying XRandR and reconciles state.
     pub fn refresh_monitors(&mut self) -> Result<(), X11Error> {
         // 1. Query the live root window geometry to get the actual current resolution
-        if let Ok(reply) = self.context.connection.get_geometry(self.context.root_window)
-            && let Ok(geom) = reply.reply() {
-                self.context.screen_width = geom.width;
-                self.context.screen_height = geom.height;
-            }
+        if let Ok(reply) = self
+            .context
+            .connection
+            .get_geometry(self.context.root_window)
+            && let Ok(geom) = reply.reply()
+        {
+            self.context.screen_width = geom.width;
+            self.context.screen_height = geom.height;
+        }
 
         // 2. Query updated monitors from XRandR (using the updated screen dimensions as fallback)
         let new_monitors = match query_monitors(
@@ -890,7 +945,11 @@ impl WindowManager {
             for tag in 1..=9 {
                 let sec_ws = crate::workspace::monitor_workspace_id(disc_id, tag);
                 let target_ws = crate::workspace::monitor_workspace_id(0, tag);
-                let clients = self.workspace_manager.get(sec_ws).map(|ws| ws.clients.clone()).unwrap_or_default();
+                let clients = self
+                    .workspace_manager
+                    .get(sec_ws)
+                    .map(|ws| ws.clients.clone())
+                    .unwrap_or_default();
                 for win in clients {
                     self.workspace_manager.move_client(win, target_ws);
                     let is_active = target_ws == primary_ws;
@@ -911,7 +970,10 @@ impl WindowManager {
         }
 
         // 3. Update EWMH _NET_DESKTOP_GEOMETRY
-        let desktop_geom = [self.context.screen_width as u32, self.context.screen_height as u32];
+        let desktop_geom = [
+            self.context.screen_width as u32,
+            self.context.screen_height as u32,
+        ];
         let _ = self.context.connection.change_property32(
             x11rb::protocol::xproto::PropMode::REPLACE,
             self.context.root_window,
@@ -922,7 +984,11 @@ impl WindowManager {
 
         // 4. Update the Statusbars to match the updated monitors
         if let Some(ref mut bar) = self.statusbar {
-            let primary_mon = self.monitor_manager.monitors.iter().find(|m| m.is_primary)
+            let primary_mon = self
+                .monitor_manager
+                .monitors
+                .iter()
+                .find(|m| m.is_primary)
                 .or_else(|| self.monitor_manager.monitors.first());
             let (bar_x, bar_y, bar_w, prim_id) = if let Some(m) = primary_mon {
                 (m.x, m.y, m.width, Some(m.id))
@@ -935,13 +1001,20 @@ impl WindowManager {
             let root_depth = screen.root_depth;
             let _ = bar.resize(&self.context.connection, new_bar_rect, root_depth);
 
-            let sec_monitors: Vec<_> = self.monitor_manager.monitors.iter()
+            let sec_monitors: Vec<_> = self
+                .monitor_manager
+                .monitors
+                .iter()
                 .filter(|m| Some(m.id) != prim_id)
                 .cloned()
                 .collect();
 
             if self.secondary_statusbars.len() == sec_monitors.len() {
-                for (sec_bar, mon) in self.secondary_statusbars.iter_mut().zip(sec_monitors.iter()) {
+                for (sec_bar, mon) in self
+                    .secondary_statusbars
+                    .iter_mut()
+                    .zip(sec_monitors.iter())
+                {
                     let sec_rect = Rect::new(mon.x, mon.y, mon.width, bar_height);
                     let _ = sec_bar.resize(&self.context.connection, sec_rect, root_depth);
                 }
@@ -960,40 +1033,49 @@ impl WindowManager {
 
         // 5. If the application launcher is open, re-center it on the active monitor
         if let Some(ref mut launcher) = self.launcher
-            && launcher.visible {
-                let active_mon = self.monitor_manager.active_monitor().clone();
-                let width = launcher.rect.width as u16;
-                let height = launcher.rect.height as u16;
-                let x = (active_mon.x + (active_mon.width as i32 - width as i32) / 2).max(active_mon.x) as i16;
-                let y = (active_mon.y + (active_mon.height as i32 - height as i32) / 3).max(active_mon.y) as i16;
-                launcher.rect.x = x as i32;
-                launcher.rect.y = y as i32;
-                let _ = self.context.connection.configure_window(
-                    launcher.window_id,
-                    &x11rb::protocol::xproto::ConfigureWindowAux::new().x(x as i32).y(y as i32),
-                );
-                let _ = launcher.render(&self.context.connection);
-            }
+            && launcher.visible
+        {
+            let active_mon = self.monitor_manager.active_monitor().clone();
+            let width = launcher.rect.width as u16;
+            let height = launcher.rect.height as u16;
+            let x = (active_mon.x + (active_mon.width as i32 - width as i32) / 2).max(active_mon.x)
+                as i16;
+            let y = (active_mon.y + (active_mon.height as i32 - height as i32) / 3)
+                .max(active_mon.y) as i16;
+            launcher.rect.x = x as i32;
+            launcher.rect.y = y as i32;
+            let _ = self.context.connection.configure_window(
+                launcher.window_id,
+                &x11rb::protocol::xproto::ConfigureWindowAux::new()
+                    .x(x as i32)
+                    .y(y as i32),
+            );
+            let _ = launcher.render(&self.context.connection);
+        }
 
         // 6. Clamp floating windows to new screen dimensions
         for client in self.client_state.clients.values_mut() {
             if client.floating
-                && let Some(geom) = client.floating_geometry {
-                    let clamped = clamp_floating_geometry(
-                        geom,
-                        self.context.screen_width,
-                        self.context.screen_height,
-                    );
-                    client.floating_geometry = Some(clamped);
-                    if client.mapped {
-                        let aux = ConfigureWindowAux::new()
-                            .x(clamped.x)
-                            .y(clamped.y)
-                            .width(clamped.width)
-                            .height(clamped.height);
-                        let _ = self.context.connection.configure_window(client.window, &aux);
-                    }
+                && let Some(geom) = client.floating_geometry
+            {
+                let clamped = clamp_floating_geometry(
+                    geom,
+                    self.context.screen_width,
+                    self.context.screen_height,
+                );
+                client.floating_geometry = Some(clamped);
+                if client.mapped {
+                    let aux = ConfigureWindowAux::new()
+                        .x(clamped.x)
+                        .y(clamped.y)
+                        .width(clamped.width)
+                        .height(clamped.height);
+                    let _ = self
+                        .context
+                        .connection
+                        .configure_window(client.window, &aux);
                 }
+            }
         }
 
         self.retile()?;
@@ -1015,7 +1097,9 @@ impl WindowManager {
             Some(w) => w,
             None => return Ok(None),
         };
-        let visible_tiled = self.client_state.visible_tiled_clients_on_workspace(current_ws);
+        let visible_tiled = self
+            .client_state
+            .visible_tiled_clients_on_workspace(current_ws);
         if visible_tiled.len() < 2 {
             return Ok(None);
         }
@@ -1040,8 +1124,16 @@ impl WindowManager {
                     ws.clients.swap(wa, wb);
                 }
             }
-            let idx_a = self.client_state.client_order.iter().position(|&w| w == current);
-            let idx_b = self.client_state.client_order.iter().position(|&w| w == target);
+            let idx_a = self
+                .client_state
+                .client_order
+                .iter()
+                .position(|&w| w == current);
+            let idx_b = self
+                .client_state
+                .client_order
+                .iter()
+                .position(|&w| w == target);
             if let (Some(a), Some(b)) = (idx_a, idx_b) {
                 self.client_state.client_order.swap(a, b);
             }

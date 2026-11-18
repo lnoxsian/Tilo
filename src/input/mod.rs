@@ -14,9 +14,7 @@ pub use mouse::*;
 
 use crate::x11::X11Error;
 use x11rb::connection::Connection;
-use x11rb::protocol::xproto::{
-    ConnectionExt, GrabMode, KeyPressEvent, ModMask, Window,
-};
+use x11rb::protocol::xproto::{ConnectionExt, GrabMode, KeyPressEvent, ModMask, Window};
 
 /// Caches X11 keyboard layout mappings to translate keycodes into keysyms.
 #[derive(Debug, Clone)]
@@ -50,9 +48,7 @@ impl KeyboardMapping {
 
     /// Returns the slice of keysyms associated with a specific keycode.
     pub fn keysyms_for_keycode(&self, keycode: u8) -> &[Keysym] {
-        if keycode < self.min_keycode
-            || keycode > self.max_keycode
-            || self.keysyms_per_keycode == 0
+        if keycode < self.min_keycode || keycode > self.max_keycode || self.keysyms_per_keycode == 0
         {
             return &[];
         }
@@ -92,24 +88,22 @@ impl KeyboardMapping {
 }
 
 /// Detects which modifier bit represents `NumLock` on the current X server.
-pub fn detect_num_lock_mask<C: Connection>(
-    conn: &C,
-    mapping: &KeyboardMapping,
-) -> u16 {
+pub fn detect_num_lock_mask<C: Connection>(conn: &C, mapping: &KeyboardMapping) -> u16 {
     if let Ok(reply) = conn.get_modifier_mapping()
-        && let Ok(reply) = reply.reply() {
-            let kpm = reply.keycodes_per_modifier() as usize;
-            for (mod_idx, chunk) in reply.keycodes.chunks(kpm).enumerate() {
-                for &kc in chunk {
-                    if kc != 0 {
-                        let syms = mapping.keysyms_for_keycode(kc);
-                        if syms.contains(&XK_NUM_LOCK) {
-                            return 1 << mod_idx;
-                        }
+        && let Ok(reply) = reply.reply()
+    {
+        let kpm = reply.keycodes_per_modifier() as usize;
+        for (mod_idx, chunk) in reply.keycodes.chunks(kpm).enumerate() {
+            for &kc in chunk {
+                if kc != 0 {
+                    let syms = mapping.keysyms_for_keycode(kc);
+                    if syms.contains(&XK_NUM_LOCK) {
+                        return 1 << mod_idx;
                     }
                 }
             }
         }
+    }
     MOD_MOD2 // Fallback to standard Mod2
 }
 
@@ -273,7 +267,7 @@ impl InputManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::keybind::{MOD_SUPER, XK_RETURN, XK_Q};
+    use crate::keybind::{MOD_SUPER, XK_Q, XK_RETURN};
 
     #[test]
     fn test_keyboard_mapping_logic() {

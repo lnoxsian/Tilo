@@ -1,7 +1,7 @@
 //! Master and stack layout variations.
 
-use x11rb::protocol::xproto::Window;
 use super::{LayoutConfig, Rect};
+use x11rb::protocol::xproto::Window;
 
 /// Calculates the bounding rectangles for a master/stack layout.
 ///
@@ -467,4 +467,3 @@ pub fn calculate_center_master(
 
     rects
 }
-

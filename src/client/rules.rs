@@ -18,6 +18,8 @@ pub enum RuleCondition {
     Instance(String),
     /// Matches the window's WM_NAME or _NET_WM_NAME (title).
     Title(String),
+    /// Matches rich criteria including class, instance, title, role, type, marks, etc.
+    Criteria(crate::criteria::Criteria),
 }
 
 /// Defines the action to take when a rule matches a window.
@@ -25,6 +27,8 @@ pub enum RuleCondition {
 pub struct RuleAction {
     /// If Some, assigns the window to the specified workspace ID instead of the active one.
     pub target_workspace: Option<WorkspaceId>,
+    /// If Some, assigns the window to the specified workspace by name.
+    pub target_workspace_name: Option<String>,
     /// If Some(true), spawns the window in a floating state.
     pub floating: Option<bool>,
     /// If Some(true), spawns the window in fullscreen.
@@ -37,9 +41,15 @@ impl RuleAction {
         Self::default()
     }
 
-    /// Sets the target workspace.
+    /// Sets the target workspace ID.
     pub fn with_workspace(mut self, workspace_id: WorkspaceId) -> Self {
         self.target_workspace = Some(workspace_id);
+        self
+    }
+
+    /// Sets the target workspace name.
+    pub fn with_workspace_name(mut self, ws_name: impl Into<String>) -> Self {
+        self.target_workspace_name = Some(ws_name.into());
         self
     }
 
@@ -69,6 +79,14 @@ impl WindowRule {
     /// Creates a new `WindowRule`.
     pub fn new(condition: RuleCondition, action: RuleAction) -> Self {
         Self { condition, action }
+    }
+
+    /// Creates a new `WindowRule` from a `Criteria`.
+    pub fn from_criteria(criteria: crate::criteria::Criteria, action: RuleAction) -> Self {
+        Self {
+            condition: RuleCondition::Criteria(criteria),
+            action,
+        }
     }
 }
 
@@ -110,14 +128,26 @@ pub fn match_rules(
 
     for rule in rules {
         let is_match = match &rule.condition {
-            RuleCondition::Class(expected) => class == Some(expected.as_str()),
-            RuleCondition::Instance(expected) => instance == Some(expected.as_str()),
-            RuleCondition::Title(expected) => title == Some(expected.as_str()),
+            RuleCondition::Class(expected) => class
+                .map(|c| crate::criteria::glob_match(expected, c))
+                .unwrap_or(false),
+            RuleCondition::Instance(expected) => instance
+                .map(|i| crate::criteria::glob_match(expected, i))
+                .unwrap_or(false),
+            RuleCondition::Title(expected) => title
+                .map(|t| crate::criteria::glob_match(expected, t))
+                .unwrap_or(false),
+            RuleCondition::Criteria(crit) => crit.matches(
+                class, instance, title, None, None, "", &[], false, false, 0,
+            ),
         };
 
         if is_match {
             if let Some(target_ws) = rule.action.target_workspace {
                 combined_action.target_workspace = Some(target_ws);
+            }
+            if let Some(ref target_name) = rule.action.target_workspace_name {
+                combined_action.target_workspace_name = Some(target_name.clone());
             }
             if let Some(floating) = rule.action.floating {
                 combined_action.floating = Some(floating);
@@ -141,14 +171,9 @@ pub fn query_window_properties(
     window: Window,
 ) -> Result<WindowProperties, X11Error> {
     // 1. Query WM_CLASS
-    let (instance, class) = if let Ok(reply) = conn.get_property(
-        false,
-        window,
-        AtomEnum::WM_CLASS,
-        AtomEnum::STRING,
-        0,
-        1024,
-    ) {
+    let (instance, class) = if let Ok(reply) =
+        conn.get_property(false, window, AtomEnum::WM_CLASS, AtomEnum::STRING, 0, 1024)
+    {
         if let Ok(prop) = reply.reply() {
             parse_wm_class(&prop.value)
         } else {
@@ -159,14 +184,9 @@ pub fn query_window_properties(
     };
 
     // 2. Query title (_NET_WM_NAME first, fallback to WM_NAME)
-    let title = if let Ok(reply) = conn.get_property(
-        false,
-        window,
-        atoms.net_wm_name,
-        atoms.utf8_string,
-        0,
-        1024,
-    ) {
+    let title = if let Ok(reply) =
+        conn.get_property(false, window, atoms.net_wm_name, atoms.utf8_string, 0, 1024)
+    {
         if let Ok(prop) = reply.reply() {
             if !prop.value.is_empty() {
                 Some(String::from_utf8_lossy(&prop.value).to_string())
@@ -181,14 +201,9 @@ pub fn query_window_properties(
     };
 
     let title = title.or_else(|| {
-        if let Ok(reply) = conn.get_property(
-            false,
-            window,
-            AtomEnum::WM_NAME,
-            AtomEnum::STRING,
-            0,
-            1024,
-        ) {
+        if let Ok(reply) =
+            conn.get_property(false, window, AtomEnum::WM_NAME, AtomEnum::STRING, 0, 1024)
+        {
             if let Ok(prop) = reply.reply() {
                 if !prop.value.is_empty() {
                     Some(String::from_utf8_lossy(&prop.value).to_string())
@@ -276,24 +291,44 @@ mod tests {
         ];
 
         // Firefox matches workspace 2
-        let action1 = match_rules(Some("Navigator"), Some("Firefox"), Some("Mozilla Firefox"), &rules);
+        let action1 = match_rules(
+            Some("Navigator"),
+            Some("Firefox"),
+            Some("Mozilla Firefox"),
+            &rules,
+        );
         assert_eq!(action1.target_workspace, Some(2));
         assert_eq!(action1.floating, None);
         assert_eq!(action1.fullscreen, None);
 
         // Pavucontrol matches floating
-        let action2 = match_rules(Some("pavucontrol"), Some("Pavucontrol"), Some("Volume Control"), &rules);
+        let action2 = match_rules(
+            Some("pavucontrol"),
+            Some("Pavucontrol"),
+            Some("Volume Control"),
+            &rules,
+        );
         assert_eq!(action2.target_workspace, None);
         assert_eq!(action2.floating, Some(true));
 
         // Scratchpad instance matches floating and fullscreen
-        let action3 = match_rules(Some("scratchpad"), Some("Alacritty"), Some("Terminal"), &rules);
+        let action3 = match_rules(
+            Some("scratchpad"),
+            Some("Alacritty"),
+            Some("Terminal"),
+            &rules,
+        );
         assert_eq!(action3.floating, Some(true));
         assert_eq!(action3.fullscreen, Some(true));
         assert_eq!(action3.target_workspace, None);
 
         // Non-matching window gets default action
-        let action4 = match_rules(Some("gedit"), Some("Gedit"), Some("Untitled Document"), &rules);
+        let action4 = match_rules(
+            Some("gedit"),
+            Some("Gedit"),
+            Some("Untitled Document"),
+            &rules,
+        );
         assert_eq!(action4, RuleAction::default());
     }
 

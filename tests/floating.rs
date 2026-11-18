@@ -4,9 +4,7 @@ use tilo::keybind::Action;
 use tilo::wm::WindowManager;
 use tilo::x11::X11Context;
 use x11rb::connection::Connection;
-use x11rb::protocol::xproto::{
-    ConnectionExt, CreateWindowAux, WindowClass,
-};
+use x11rb::protocol::xproto::{ConnectionExt, CreateWindowAux, WindowClass};
 use x11rb::wrapper::ConnectionExt as _;
 
 struct XephyrServer {
@@ -64,8 +62,8 @@ fn test_floating_window_lifecycle_and_actions_in_xephyr() {
 
     let xephyr = XephyrServer::start(97);
     if let Some(server) = xephyr {
-        let wm_ctx = X11Context::connect_to(Some(&server.display))
-            .expect("WM context connect failed");
+        let wm_ctx =
+            X11Context::connect_to(Some(&server.display)).expect("WM context connect failed");
         assert!(wm_ctx.become_wm().is_ok());
 
         let mut wm = WindowManager::new(wm_ctx).expect("Failed to initialize WM");
@@ -108,7 +106,10 @@ fn test_floating_window_lifecycle_and_actions_in_xephyr() {
         // Both are initially tiled
         assert!(!wm.client_state.get_client(win1).unwrap().floating);
         assert!(!wm.client_state.get_client(win2).unwrap().floating);
-        assert_eq!(wm.client_state.visible_tiled_clients_on_workspace(1).len(), 2);
+        assert_eq!(
+            wm.client_state.visible_tiled_clients_on_workspace(1).len(),
+            2
+        );
 
         let initial_geom1 = client_conn.get_geometry(win1).unwrap().reply().unwrap();
         let initial_geom2 = client_conn.get_geometry(win2).unwrap().reply().unwrap();
@@ -117,16 +118,23 @@ fn test_floating_window_lifecycle_and_actions_in_xephyr() {
         assert!(initial_geom2.width < 1000);
 
         // 2. Toggle win2 to floating
-        wm.toggle_floating(win2).expect("Toggle floating win2 failed");
+        wm.toggle_floating(win2)
+            .expect("Toggle floating win2 failed");
 
         let client2 = wm.client_state.get_client(win2).unwrap();
         assert!(client2.floating);
         assert!(client2.is_floating());
-        assert!(matches!(client2.layout_state, ClientLayoutState::Floating(_)));
+        assert!(matches!(
+            client2.layout_state,
+            ClientLayoutState::Floating(_)
+        ));
         assert!(client2.floating_geometry.is_some());
 
         // Now only win1 is tiled on Workspace 1
-        assert_eq!(wm.client_state.visible_tiled_clients_on_workspace(1), vec![win1]);
+        assert_eq!(
+            wm.client_state.visible_tiled_clients_on_workspace(1),
+            vec![win1]
+        );
 
         // win1 expands to take the whole workspace screen area
         let expanded_geom1 = client_conn.get_geometry(win1).unwrap().reply().unwrap();
@@ -140,7 +148,8 @@ fn test_floating_window_lifecycle_and_actions_in_xephyr() {
         assert_eq!(float_geom2.y, 160); // (800 - 480) / 2 = 160
 
         // 3. Move floating window win2 to (120, 140)
-        wm.move_floating(win2, 120, 140).expect("Move floating failed");
+        wm.move_floating(win2, 120, 140)
+            .expect("Move floating failed");
         let moved_geom2 = client_conn.get_geometry(win2).unwrap().reply().unwrap();
         assert_eq!(moved_geom2.x, 120);
         assert_eq!(moved_geom2.y, 140);
@@ -150,7 +159,8 @@ fn test_floating_window_lifecycle_and_actions_in_xephyr() {
         );
 
         // 4. Resize floating window win2 to 450x350
-        wm.resize_floating(win2, 450, 350).expect("Resize floating failed");
+        wm.resize_floating(win2, 450, 350)
+            .expect("Resize floating failed");
         let resized_geom2 = client_conn.get_geometry(win2).unwrap().reply().unwrap();
         assert_eq!(resized_geom2.width, 450);
         assert_eq!(resized_geom2.height, 350);
@@ -175,7 +185,10 @@ fn test_floating_window_lifecycle_and_actions_in_xephyr() {
         );
 
         // Both windows retiled
-        assert_eq!(wm.client_state.visible_tiled_clients_on_workspace(1).len(), 2);
+        assert_eq!(
+            wm.client_state.visible_tiled_clients_on_workspace(1).len(),
+            2
+        );
         let retiled_geom1 = client_conn.get_geometry(win1).unwrap().reply().unwrap();
         assert_eq!(retiled_geom1.width, initial_geom1.width);
 

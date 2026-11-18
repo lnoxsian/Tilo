@@ -1,10 +1,10 @@
 use std::os::unix::fs::PermissionsExt;
 use std::process::{Child, Command};
 use tilo::input::KeyboardMapping;
-use tilo::keybind::{default_keybindings, Action, MOD_CONTROL, MOD_SHIFT, XK_Q};
+use tilo::keybind::{Action, MOD_CONTROL, MOD_SHIFT, XK_Q, default_keybindings};
 use tilo::launcher::{
-    filter_executables, handle_launcher_keypress, scan_desktop_dirs, scan_path_from, spawn_app,
-    Launcher, LauncherAction, LauncherMode, LauncherPosition,
+    Launcher, LauncherAction, LauncherMode, LauncherPosition, filter_executables,
+    handle_launcher_keypress, scan_desktop_dirs, scan_path_from, spawn_app,
 };
 use tilo::wm::WindowManager;
 use tilo::x11::X11Context;
@@ -90,7 +90,8 @@ fn test_path_scanning_and_permissions() {
 #[test]
 fn test_spawn_app_with_arguments_and_error_handling() {
     // 1. Spawning executable with arguments
-    let test_file = std::env::temp_dir().join(format!("tilo_spawn_test_{}.tmp", std::process::id()));
+    let test_file =
+        std::env::temp_dir().join(format!("tilo_spawn_test_{}.tmp", std::process::id()));
     let _ = std::fs::remove_file(&test_file);
 
     let cmd = format!("touch {}", test_file.to_str().unwrap());
@@ -104,7 +105,10 @@ fn test_spawn_app_with_arguments_and_error_handling() {
         }
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
-    assert!(test_file.exists(), "Command with argument should have touched the file");
+    assert!(
+        test_file.exists(),
+        "Command with argument should have touched the file"
+    );
     let _ = std::fs::remove_file(&test_file);
 
     // 2. Spawning empty command line should error
@@ -156,8 +160,8 @@ fn test_launcher_in_xephyr_lifecycle_and_interaction() {
 
     let xephyr = XephyrServer::start(102);
     if let Some(server) = xephyr {
-        let wm_ctx = X11Context::connect_to(Some(&server.display))
-            .expect("WM context connect failed");
+        let wm_ctx =
+            X11Context::connect_to(Some(&server.display)).expect("WM context connect failed");
         assert!(wm_ctx.become_wm().is_ok());
 
         let mut wm = WindowManager::new_with_config(wm_ctx, tilo::config::Config::default())
@@ -171,7 +175,10 @@ fn test_launcher_in_xephyr_lifecycle_and_interaction() {
         let launcher = wm.launcher.as_ref().unwrap();
         assert!(launcher.visible);
         assert!(launcher.window_id > 0);
-        assert_eq!(launcher.rect.height, 256, "Launcher height must be 256px to fit top 8 suggestions with no empty space");
+        assert_eq!(
+            launcher.rect.height, 256,
+            "Launcher height must be 256px to fit top 8 suggestions with no empty space"
+        );
         let launcher_win = launcher.window_id;
 
         // Verify window attributes: override_redirect must be true
@@ -185,7 +192,8 @@ fn test_launcher_in_xephyr_lifecycle_and_interaction() {
         assert!(attrs.override_redirect);
 
         // 3. Render launcher UI
-        wm.render_launcher().expect("render_launcher should succeed");
+        wm.render_launcher()
+            .expect("render_launcher should succeed");
 
         // 4. Simulate typing characters: 'f', 'o', 'o', 't'
         // Using handle_launcher_keypress and update_launcher_state directly
@@ -211,7 +219,11 @@ fn test_launcher_in_xephyr_lifecycle_and_interaction() {
         }
 
         assert_eq!(wm.launcher.as_ref().unwrap().query, "f");
-        assert_eq!(wm.launcher.as_ref().unwrap().rect.height, 256, "Launcher height must stay fixed at 256px");
+        assert_eq!(
+            wm.launcher.as_ref().unwrap().rect.height,
+            256,
+            "Launcher height must stay fixed at 256px"
+        );
 
         // 5. Test close launcher
         wm.close_launcher().expect("close_launcher should succeed");
@@ -226,10 +238,12 @@ fn test_launcher_in_xephyr_lifecycle_and_interaction() {
         }
 
         // 6. Test toggle launcher
-        wm.toggle_launcher().expect("toggle_launcher (open) should succeed");
+        wm.toggle_launcher()
+            .expect("toggle_launcher (open) should succeed");
         assert!(wm.launcher.as_ref().unwrap().visible);
 
-        wm.toggle_launcher().expect("toggle_launcher (close) should succeed");
+        wm.toggle_launcher()
+            .expect("toggle_launcher (close) should succeed");
         assert!(!wm.launcher.as_ref().unwrap().visible);
 
         // 7. Test triggering launcher via KeyPress event (Mod4+d)
@@ -250,8 +264,12 @@ fn test_launcher_in_xephyr_lifecycle_and_interaction() {
             state: tilo::keybind::MOD_SUPER.into(),
             same_screen: true,
         };
-        wm.handle_event(x11rb::protocol::Event::KeyPress(ev_mod4_d)).unwrap();
-        assert!(wm.launcher.as_ref().unwrap().visible, "Mod4+d should open launcher");
+        wm.handle_event(x11rb::protocol::Event::KeyPress(ev_mod4_d))
+            .unwrap();
+        assert!(
+            wm.launcher.as_ref().unwrap().visible,
+            "Mod4+d should open launcher"
+        );
         wm.close_launcher().unwrap();
 
         // 8. Test SIGUSR1 signal toggle
@@ -259,14 +277,18 @@ fn test_launcher_in_xephyr_lifecycle_and_interaction() {
         if tilo::wm::LAUNCHER_SIGNAL.swap(false, std::sync::atomic::Ordering::SeqCst) {
             wm.toggle_launcher().unwrap();
         }
-        assert!(wm.launcher.as_ref().unwrap().visible, "SIGUSR1 should toggle launcher open");
+        assert!(
+            wm.launcher.as_ref().unwrap().visible,
+            "SIGUSR1 should toggle launcher open"
+        );
         wm.close_launcher().unwrap();
     }
 }
 
 #[test]
 fn test_dynamic_refresh_on_open_launcher() {
-    let temp_bin_dir = std::env::temp_dir().join(format!("tilo_test_dyn_bin_{}", std::process::id()));
+    let temp_bin_dir =
+        std::env::temp_dir().join(format!("tilo_test_dyn_bin_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&temp_bin_dir);
     let _ = std::fs::create_dir_all(&temp_bin_dir);
 
@@ -282,7 +304,11 @@ fn test_dynamic_refresh_on_open_launcher() {
     let mut launcher = Launcher::new();
     launcher.refresh_from(path_var, &[]);
     assert!(launcher.executable_cache.contains(&"init_app".to_string()));
-    assert!(!launcher.executable_cache.contains(&"newly_installed_pkg".to_string()));
+    assert!(
+        !launcher
+            .executable_cache
+            .contains(&"newly_installed_pkg".to_string())
+    );
 
     // Verify refresh_if_needed_from returns false when no files or directories changed
     assert!(!launcher.refresh_if_needed_from(path_var, &[]));
@@ -297,7 +323,11 @@ fn test_dynamic_refresh_on_open_launcher() {
 
     // 3. Opening launcher triggers refresh_if_needed_from
     assert!(launcher.refresh_if_needed_from(path_var, &[]));
-    assert!(launcher.executable_cache.contains(&"newly_installed_pkg".to_string()));
+    assert!(
+        launcher
+            .executable_cache
+            .contains(&"newly_installed_pkg".to_string())
+    );
 
     launcher.query = "newly".to_string();
     let filtered = launcher.filtered_results(5);
@@ -309,7 +339,8 @@ fn test_dynamic_refresh_on_open_launcher() {
 
 #[test]
 fn test_desktop_applications_indexing_and_command_resolution() {
-    let temp_desktop_dir = std::env::temp_dir().join(format!("tilo_test_desktop_{}", std::process::id()));
+    let temp_desktop_dir =
+        std::env::temp_dir().join(format!("tilo_test_desktop_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&temp_desktop_dir);
     let _ = std::fs::create_dir_all(&temp_desktop_dir);
 
@@ -326,7 +357,10 @@ NoDisplay=false
 
     let (parsed_names, commands) = scan_desktop_dirs(std::slice::from_ref(&temp_desktop_dir));
     assert!(parsed_names.contains(&"VLC media player".to_string()));
-    assert_eq!(commands.get("VLC media player").unwrap(), "vlc --started-from-file");
+    assert_eq!(
+        commands.get("VLC media player").unwrap(),
+        "vlc --started-from-file"
+    );
     assert_eq!(commands.get("vlc").unwrap(), "vlc --started-from-file");
 
     let _ = std::fs::remove_dir_all(&temp_desktop_dir);
@@ -398,7 +432,10 @@ fn test_exit_menu_with_lock_enabled() {
     launcher.show_lock = false;
     launcher.query.clear();
     launcher.invalidate_cache();
-    assert_eq!(launcher.filtered_results(8), vec!["Logout", "Reboot", "Poweroff"]);
+    assert_eq!(
+        launcher.filtered_results(8),
+        vec!["Logout", "Reboot", "Poweroff"]
+    );
 }
 
 #[test]
@@ -406,27 +443,43 @@ fn test_mod4_shift_q_keybinding_and_cancel() {
     // 1. Default keybindings should include Mod4+Shift+Q -> Action::Exit
     let binds = default_keybindings();
     let has_mod4_shift_q = binds.iter().any(|b| {
-        b.modifiers == (tilo::keybind::MOD_SUPER | MOD_SHIFT) && b.keysym == XK_Q && b.action == Action::Exit
+        b.modifiers == (tilo::keybind::MOD_SUPER | MOD_SHIFT)
+            && b.keysym == XK_Q
+            && b.action == Action::Exit
     });
-    assert!(has_mod4_shift_q, "Default keybindings must include Mod4+Shift+Q -> Action::Exit");
+    assert!(
+        has_mod4_shift_q,
+        "Default keybindings must include Mod4+Shift+Q -> Action::Exit"
+    );
 
     // And verify instant exit on Mod4+Shift+Q is removed
     let has_instant_quit = binds.iter().any(|b| {
-        b.modifiers == (tilo::keybind::MOD_SUPER | MOD_SHIFT) && b.keysym == XK_Q && b.action == Action::Quit
+        b.modifiers == (tilo::keybind::MOD_SUPER | MOD_SHIFT)
+            && b.keysym == XK_Q
+            && b.action == Action::Quit
     });
-    assert!(!has_instant_quit, "Instant exit Mod4+Shift+Q must be removed");
+    assert!(
+        !has_instant_quit,
+        "Instant exit Mod4+Shift+Q must be removed"
+    );
 
     // And verify Ctrl+Shift+Q is replaced
-    let has_ctrl_shift_q = binds.iter().any(|b| {
-        b.modifiers == (MOD_CONTROL | MOD_SHIFT) && b.keysym == XK_Q
-    });
-    assert!(!has_ctrl_shift_q, "Ctrl+Shift+Q must be replaced by Mod4+Shift+Q");
+    let has_ctrl_shift_q = binds
+        .iter()
+        .any(|b| b.modifiers == (MOD_CONTROL | MOD_SHIFT) && b.keysym == XK_Q);
+    assert!(
+        !has_ctrl_shift_q,
+        "Ctrl+Shift+Q must be replaced by Mod4+Shift+Q"
+    );
 
     // And verify unnecessary Mod+Shift+E keybinding is removed
     let has_super_shift_e = binds.iter().any(|b| {
         b.modifiers == (tilo::keybind::MOD_SUPER | MOD_SHIFT) && b.keysym == tilo::keybind::XK_E
     });
-    assert!(!has_super_shift_e, "Unnecessary Mod+Shift+E keybinding must be removed");
+    assert!(
+        !has_super_shift_e,
+        "Unnecessary Mod+Shift+E keybinding must be removed"
+    );
 
     // 2. Pressing Mod4+Shift+Q while launcher is open should emit Cancel action
     let mapping = KeyboardMapping {
@@ -465,7 +518,10 @@ fn test_launcher_scrolling_and_execution_beyond_top_8() {
     assert_eq!(launcher.scroll_offset, 8); // Visible window is 8..16 (items 8 through 15)
 
     // Verify command resolution for item at index 15
-    let selected = launcher.all_filtered_results().get(launcher.selected_index).cloned();
+    let selected = launcher
+        .all_filtered_results()
+        .get(launcher.selected_index)
+        .cloned();
     assert_eq!(selected, Some("app_15".to_string()));
 }
 
@@ -481,8 +537,8 @@ fn test_launcher_position_spotlight_vs_dmenu() {
     }
 
     if let Some(server) = XephyrServer::start(178) {
-        let wm_ctx = X11Context::connect_to(Some(&server.display))
-            .expect("WM context connect failed");
+        let wm_ctx =
+            X11Context::connect_to(Some(&server.display)).expect("WM context connect failed");
         assert!(wm_ctx.become_wm().is_ok());
 
         let mut wm = WindowManager::new_with_config(wm_ctx, tilo::config::Config::default())
@@ -499,7 +555,8 @@ fn test_launcher_position_spotlight_vs_dmenu() {
 
         // 2. Switch to Dmenu
         wm.config.launcher_position = LauncherPosition::Dmenu;
-        wm.open_launcher().expect("open_launcher in dmenu should succeed");
+        wm.open_launcher()
+            .expect("open_launcher in dmenu should succeed");
         let l_dmenu = wm.launcher.as_ref().unwrap();
         assert_eq!(l_dmenu.position, LauncherPosition::Dmenu);
         let active_mon = wm.monitor_manager.active_monitor().clone();
@@ -509,4 +566,3 @@ fn test_launcher_position_spotlight_vs_dmenu() {
         wm.close_launcher().expect("close_launcher should succeed");
     }
 }
-

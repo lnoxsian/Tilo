@@ -106,8 +106,12 @@ fn test_tabbed_layout_single_window_visible_and_status_bar_integration() {
     let bar_win = wm.enable_statusbar(24).expect("enable_statusbar failed");
 
     // Switch workspace 1 to Tabbed layout
-    wm.execute_action(Action::SetLayout(LayoutType::Tabbed)).unwrap();
-    assert_eq!(wm.workspace_manager.get(1).unwrap().layout, LayoutType::Tabbed);
+    wm.execute_action(Action::SetLayout(LayoutType::Tabbed))
+        .unwrap();
+    assert_eq!(
+        wm.workspace_manager.get(1).unwrap().layout,
+        LayoutType::Tabbed
+    );
 
     // Create 3 client windows
     let root = client_ctx.root_window;
@@ -133,17 +137,44 @@ fn test_tabbed_layout_single_window_visible_and_status_bar_integration() {
     assert_eq!(wm.focused_window(), Some(win3));
 
     // Verify X11 MapState on server
-    let attr1 = wm.context.connection.get_window_attributes(win1).unwrap().reply().unwrap();
-    let attr2 = wm.context.connection.get_window_attributes(win2).unwrap().reply().unwrap();
-    let attr3 = wm.context.connection.get_window_attributes(win3).unwrap().reply().unwrap();
+    let attr1 = wm
+        .context
+        .connection
+        .get_window_attributes(win1)
+        .unwrap()
+        .reply()
+        .unwrap();
+    let attr2 = wm
+        .context
+        .connection
+        .get_window_attributes(win2)
+        .unwrap()
+        .reply()
+        .unwrap();
+    let attr3 = wm
+        .context
+        .connection
+        .get_window_attributes(win3)
+        .unwrap()
+        .reply()
+        .unwrap();
 
     assert_eq!(attr1.map_state, MapState::UNMAPPED);
     assert_eq!(attr2.map_state, MapState::UNMAPPED);
     assert_eq!(attr3.map_state, MapState::VIEWABLE);
 
     // Sized to usable rect (occupies the entire layout area)
-    let geom3 = wm.context.connection.get_geometry(win3).unwrap().reply().unwrap();
-    assert_eq!(geom3.y, 24, "Should be placed directly below the 24px status bar");
+    let geom3 = wm
+        .context
+        .connection
+        .get_geometry(win3)
+        .unwrap()
+        .reply()
+        .unwrap();
+    assert_eq!(
+        geom3.y, 24,
+        "Should be placed directly below the 24px status bar"
+    );
     assert_eq!(geom3.width, 1000 - 2 * wm.layout_config.border_width as u16);
 
     // Check status bar tab metadata
@@ -172,20 +203,29 @@ fn test_tabbed_layout_single_window_visible_and_status_bar_integration() {
     assert_eq!(bar.tab_rects[2].0, win3);
 
     // Verify status bar pixels were written
-    let img = wm.context.connection.get_image(
-        x11rb::protocol::xproto::ImageFormat::Z_PIXMAP,
-        bar_win,
-        0,
-        0,
-        400,
-        24,
-        !0,
-    ).unwrap().reply().unwrap();
+    let img = wm
+        .context
+        .connection
+        .get_image(
+            x11rb::protocol::xproto::ImageFormat::Z_PIXMAP,
+            bar_win,
+            0,
+            0,
+            400,
+            24,
+            !0,
+        )
+        .unwrap()
+        .reply()
+        .unwrap();
     let has_colored_pixels = img.data.as_chunks::<4>().0.iter().any(|p| {
         let color = (p[2] as u32) << 16 | (p[1] as u32) << 8 | (p[0] as u32);
         color == 0x7aa2f7 || color == 0xc0caf5 || color == 0x15161e
     });
-    assert!(has_colored_pixels, "Statusbar must contain rendered tab pills");
+    assert!(
+        has_colored_pixels,
+        "Statusbar must contain rendered tab pills"
+    );
 }
 
 #[test]
@@ -204,7 +244,8 @@ fn test_tabbed_keyboard_navigation_and_reordering() {
 
     let mut wm = WindowManager::new(wm_ctx).expect("Failed to create WindowManager");
     wm.enable_statusbar(24).expect("enable_statusbar failed");
-    wm.execute_action(Action::SetLayout(LayoutType::Tabbed)).unwrap();
+    wm.execute_action(Action::SetLayout(LayoutType::Tabbed))
+        .unwrap();
 
     let root = client_ctx.root_window;
     let win1 = create_client_window(&client_ctx.connection, root, "term");
@@ -244,15 +285,27 @@ fn test_tabbed_keyboard_navigation_and_reordering() {
 
     // 6. Tab reordering: move win2 left
     // ws.clients order before: [win1, win2, win3]
-    assert_eq!(wm.workspace_manager.get(1).unwrap().clients, vec![win1, win2, win3]);
+    assert_eq!(
+        wm.workspace_manager.get(1).unwrap().clients,
+        vec![win1, win2, win3]
+    );
     wm.execute_action(Action::MoveTabLeft).unwrap();
-    assert_eq!(wm.workspace_manager.get(1).unwrap().clients, vec![win2, win1, win3]);
+    assert_eq!(
+        wm.workspace_manager.get(1).unwrap().clients,
+        vec![win2, win1, win3]
+    );
 
     // Move win2 right twice -> [win1, win2, win3] -> [win1, win3, win2]
     wm.execute_action(Action::MoveTabRight).unwrap();
-    assert_eq!(wm.workspace_manager.get(1).unwrap().clients, vec![win1, win2, win3]);
+    assert_eq!(
+        wm.workspace_manager.get(1).unwrap().clients,
+        vec![win1, win2, win3]
+    );
     wm.execute_action(Action::MoveTabRight).unwrap();
-    assert_eq!(wm.workspace_manager.get(1).unwrap().clients, vec![win1, win3, win2]);
+    assert_eq!(
+        wm.workspace_manager.get(1).unwrap().clients,
+        vec![win1, win3, win2]
+    );
 }
 
 #[test]
@@ -273,7 +326,8 @@ fn test_tabbed_layout_switching_preserves_windows() {
     wm.enable_statusbar(24).expect("enable_statusbar failed");
 
     // Start in MasterStack
-    wm.execute_action(Action::SetLayout(LayoutType::MasterStack)).unwrap();
+    wm.execute_action(Action::SetLayout(LayoutType::MasterStack))
+        .unwrap();
 
     let root = client_ctx.root_window;
     let win1 = create_client_window(&client_ctx.connection, root, "A");
@@ -290,8 +344,12 @@ fn test_tabbed_layout_switching_preserves_windows() {
     assert!(wm.client_state.get_client(win3).unwrap().mapped);
 
     // Switch to Tabbed
-    wm.execute_action(Action::SetLayout(LayoutType::Tabbed)).unwrap();
-    assert_eq!(wm.workspace_manager.get(1).unwrap().layout, LayoutType::Tabbed);
+    wm.execute_action(Action::SetLayout(LayoutType::Tabbed))
+        .unwrap();
+    assert_eq!(
+        wm.workspace_manager.get(1).unwrap().layout,
+        LayoutType::Tabbed
+    );
 
     // In Tabbed: only focused window (win3) is mapped
     assert!(!wm.client_state.get_client(win1).unwrap().mapped);
@@ -299,7 +357,8 @@ fn test_tabbed_layout_switching_preserves_windows() {
     assert!(wm.client_state.get_client(win3).unwrap().mapped);
 
     // Switch to Bsp
-    wm.execute_action(Action::SetLayout(LayoutType::Bsp)).unwrap();
+    wm.execute_action(Action::SetLayout(LayoutType::Bsp))
+        .unwrap();
     assert_eq!(wm.workspace_manager.get(1).unwrap().layout, LayoutType::Bsp);
 
     // In Bsp: all 3 windows are mapped and visible again
@@ -308,8 +367,12 @@ fn test_tabbed_layout_switching_preserves_windows() {
     assert!(wm.client_state.get_client(win3).unwrap().mapped);
 
     // Switch back to Tabbed: original order preserved
-    wm.execute_action(Action::SetLayout(LayoutType::Tabbed)).unwrap();
-    assert_eq!(wm.workspace_manager.get(1).unwrap().clients, vec![win1, win2, win3]);
+    wm.execute_action(Action::SetLayout(LayoutType::Tabbed))
+        .unwrap();
+    assert_eq!(
+        wm.workspace_manager.get(1).unwrap().clients,
+        vec![win1, win2, win3]
+    );
     let tabs = wm.get_workspace_tabs(1);
     assert_eq!(tabs.len(), 3);
     assert_eq!(tabs[0].window, win1);
@@ -333,7 +396,8 @@ fn test_tabbed_mouse_interaction_clicks_and_wheel() {
 
     let mut wm = WindowManager::new(wm_ctx).expect("Failed to create WindowManager");
     let bar_win = wm.enable_statusbar(24).expect("enable_statusbar failed");
-    wm.execute_action(Action::SetLayout(LayoutType::Tabbed)).unwrap();
+    wm.execute_action(Action::SetLayout(LayoutType::Tabbed))
+        .unwrap();
 
     let root = client_ctx.root_window;
     let win1 = create_client_window(&client_ctx.connection, root, "first");
@@ -458,7 +522,8 @@ fn test_tabbed_dynamic_title_update() {
 
     let mut wm = WindowManager::new(wm_ctx).expect("Failed to create WindowManager");
     wm.enable_statusbar(24).expect("enable_statusbar failed");
-    wm.execute_action(Action::SetLayout(LayoutType::Tabbed)).unwrap();
+    wm.execute_action(Action::SetLayout(LayoutType::Tabbed))
+        .unwrap();
 
     let root = client_ctx.root_window;
     let win1 = create_client_window(&client_ctx.connection, root, "Initial Title");
@@ -468,13 +533,16 @@ fn test_tabbed_dynamic_title_update() {
     assert_eq!(tabs[0].title, "Initial Title");
 
     // Client dynamically changes title via WM_NAME
-    client_ctx.connection.change_property8(
-        PropMode::REPLACE,
-        win1,
-        AtomEnum::WM_NAME,
-        AtomEnum::STRING,
-        b"New Dynamic Title",
-    ).unwrap();
+    client_ctx
+        .connection
+        .change_property8(
+            PropMode::REPLACE,
+            win1,
+            AtomEnum::WM_NAME,
+            AtomEnum::STRING,
+            b"New Dynamic Title",
+        )
+        .unwrap();
     client_ctx.flush().unwrap();
 
     let prop_ev = PropertyNotifyEvent {

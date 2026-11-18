@@ -1,8 +1,10 @@
 use std::io::Write;
 use std::process::{Child, Command};
-use tilo::config::{load_config_from_path, parse, tokenize, Config, ConfigError, Token};
+use tilo::config::{Config, ConfigError, Token, load_config_from_path, parse, tokenize};
 use tilo::focus::Direction;
-use tilo::keybind::{Action, MOD_SHIFT, MOD_SUPER, XK_1, XK_COMMA, XK_H, XK_PERIOD, XK_Q, XK_RETURN, XK_SPACE};
+use tilo::keybind::{
+    Action, MOD_SHIFT, MOD_SUPER, XK_1, XK_COMMA, XK_H, XK_PERIOD, XK_Q, XK_RETURN, XK_SPACE,
+};
 use tilo::wm::WindowManager;
 use tilo::x11::X11Context;
 
@@ -246,8 +248,8 @@ fn test_wm_apply_config_in_xephyr() {
 
     let xephyr = XephyrServer::start(97);
     if let Some(server) = xephyr {
-        let wm_ctx = X11Context::connect_to(Some(&server.display))
-            .expect("WM context connect failed");
+        let wm_ctx =
+            X11Context::connect_to(Some(&server.display)).expect("WM context connect failed");
         assert!(wm_ctx.become_wm().is_ok());
 
         let custom_config = Config {
@@ -297,28 +299,52 @@ bind Mod4+t layout master
     assert_eq!(config.layout, tilo::layout::LayoutType::Monocle);
     assert_eq!(config.bindings.len(), 4);
     assert_eq!(config.bindings[0].action, Action::CycleLayout);
-    assert_eq!(config.bindings[1].action, Action::SetLayout(tilo::layout::LayoutType::Monocle));
-    assert_eq!(config.bindings[2].action, Action::SetLayout(tilo::layout::LayoutType::Vertical));
-    assert_eq!(config.bindings[3].action, Action::SetLayout(tilo::layout::LayoutType::MasterStack));
+    assert_eq!(
+        config.bindings[1].action,
+        Action::SetLayout(tilo::layout::LayoutType::Monocle)
+    );
+    assert_eq!(
+        config.bindings[2].action,
+        Action::SetLayout(tilo::layout::LayoutType::Vertical)
+    );
+    assert_eq!(
+        config.bindings[3].action,
+        Action::SetLayout(tilo::layout::LayoutType::MasterStack)
+    );
 
     // Test other layout directives
     let t_master = tokenize("layout master\n").unwrap();
-    assert_eq!(parse(&t_master).unwrap().layout, tilo::layout::LayoutType::MasterStack);
+    assert_eq!(
+        parse(&t_master).unwrap().layout,
+        tilo::layout::LayoutType::MasterStack
+    );
 
     let t_vert = tokenize("layout vertical\n").unwrap();
-    assert_eq!(parse(&t_vert).unwrap().layout, tilo::layout::LayoutType::Vertical);
+    assert_eq!(
+        parse(&t_vert).unwrap().layout,
+        tilo::layout::LayoutType::Vertical
+    );
 
     let t_horiz = tokenize("layout horizontal\n").unwrap();
-    assert_eq!(parse(&t_horiz).unwrap().layout, tilo::layout::LayoutType::Horizontal);
+    assert_eq!(
+        parse(&t_horiz).unwrap().layout,
+        tilo::layout::LayoutType::Horizontal
+    );
 
     let t_bsp = tokenize("layout bsp\n").unwrap();
     assert_eq!(parse(&t_bsp).unwrap().layout, tilo::layout::LayoutType::Bsp);
 
     let t_grid = tokenize("layout grid\n").unwrap();
-    assert_eq!(parse(&t_grid).unwrap().layout, tilo::layout::LayoutType::Grid);
+    assert_eq!(
+        parse(&t_grid).unwrap().layout,
+        tilo::layout::LayoutType::Grid
+    );
 
     let t_grid_action = tokenize("bind Mod4+g layout_grid\n").unwrap();
-    assert_eq!(parse(&t_grid_action).unwrap().bindings[0].action, Action::SetLayout(tilo::layout::LayoutType::Grid));
+    assert_eq!(
+        parse(&t_grid_action).unwrap().bindings[0].action,
+        Action::SetLayout(tilo::layout::LayoutType::Grid)
+    );
 
     // Test invalid layout
     let t_err = tokenize("layout non_existent\n").unwrap();
@@ -465,8 +491,8 @@ fn test_wm_apply_config_hot_reloads_theme_in_xephyr() {
 
     let xephyr = XephyrServer::start(98);
     if let Some(server) = xephyr {
-        let wm_ctx = X11Context::connect_to(Some(&server.display))
-            .expect("WM context connect failed");
+        let wm_ctx =
+            X11Context::connect_to(Some(&server.display)).expect("WM context connect failed");
         assert!(wm_ctx.become_wm().is_ok());
 
         let initial_config = Config {
@@ -483,7 +509,8 @@ fn test_wm_apply_config_hot_reloads_theme_in_xephyr() {
         assert_eq!(wm.statusbar.as_ref().unwrap().color_scheme.bg, 0x1a1b26);
 
         // Apply hot reload with custom theme
-        let new_config_tokens = tokenize(r#"
+        let new_config_tokens = tokenize(
+            r#"
 bg #332211
 fg #eeddcc
 active_bg #ffaa00
@@ -492,7 +519,9 @@ border_focused #ffaa00
 border_normal #221100
 bar_bg #443322
 launcher_bg #554433
-"#).unwrap();
+"#,
+        )
+        .unwrap();
         let new_config = parse(&new_config_tokens).unwrap();
 
         assert!(wm.apply_config(new_config).is_ok());
@@ -504,11 +533,17 @@ launcher_bg #554433
         // Check statusbar theme updated
         assert_eq!(wm.statusbar.as_ref().unwrap().color_scheme.bg, 0x443322);
         assert_eq!(wm.statusbar.as_ref().unwrap().color_scheme.fg, 0xeeddcc);
-        assert_eq!(wm.statusbar.as_ref().unwrap().color_scheme.active_bg, 0xffaa00);
+        assert_eq!(
+            wm.statusbar.as_ref().unwrap().color_scheme.active_bg,
+            0xffaa00
+        );
 
         // Check launcher theme updated
         assert_eq!(wm.launcher.as_ref().unwrap().color_scheme.bg, 0x554433);
-        assert_eq!(wm.launcher.as_ref().unwrap().color_scheme.active_bg, 0xffaa00);
+        assert_eq!(
+            wm.launcher.as_ref().unwrap().color_scheme.active_bg,
+            0xffaa00
+        );
     }
 }
 
@@ -553,7 +588,8 @@ fn test_default_config_created_when_missing() {
     assert!(target_file.exists());
 
     // Verify it is a valid, parseable configuration matching default expectations
-    let config = load_config_from_path(&target_file).expect("Failed to load created default config");
+    let config =
+        load_config_from_path(&target_file).expect("Failed to load created default config");
     assert_eq!(config.mod_key, "Mod4");
     assert_eq!(config.terminal, "alacritty");
     assert_eq!(config.border_width, 2);
@@ -616,7 +652,10 @@ fn test_parse_lock_command_directives() {
     let input_2 = "lock_command \"betterlockscreen -l dim\"\n";
     let tokens_2 = tokenize(input_2).unwrap();
     let cfg_2 = parse(&tokens_2).unwrap();
-    assert_eq!(cfg_2.lock_command, Some("betterlockscreen -l dim".to_string()));
+    assert_eq!(
+        cfg_2.lock_command,
+        Some("betterlockscreen -l dim".to_string())
+    );
 
     // 4. screenlock synonym
     let input_3 = "screenlock slock\n";
@@ -644,6 +683,3 @@ fn test_parse_lock_action_keybinding() {
     assert_eq!(cfg.bindings.len(), 1);
     assert_eq!(cfg.bindings[0].action, Action::Lock);
 }
-
-
-

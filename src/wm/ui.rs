@@ -24,18 +24,36 @@ impl WindowManager {
         let font_name = self.config.bar_font();
 
         // 1. Primary monitor: full statusbar with all configured modules
-        let primary_mon = self.monitor_manager.monitors.iter().find(|m| m.is_primary)
+        let primary_mon = self
+            .monitor_manager
+            .monitors
+            .iter()
+            .find(|m| m.is_primary)
             .or_else(|| self.monitor_manager.monitors.first())
             .cloned();
         let (prim_x, prim_y, prim_w, prim_id, prim_ws) = if let Some(ref m) = primary_mon {
             (m.x, m.y, m.width, m.id, m.workspace)
         } else {
-            (0, 0, self.context.screen_width as u32, 0, self.current_workspace)
+            (
+                0,
+                0,
+                self.context.screen_width as u32,
+                0,
+                self.current_workspace,
+            )
         };
         let prim_rect = Rect::new(prim_x, prim_y, prim_w, height);
-        let win_id = crate::bar::create_statusbar_window_with_color(&self.context.connection, screen, prim_rect, bar_colors.bg)?;
-        let _ = self.cursor_manager.apply_window(&self.context.connection, win_id);
-        let mut bar = Statusbar::with_modules(win_id, prim_rect, &self.config.bar_modules, bar_colors);
+        let win_id = crate::bar::create_statusbar_window_with_color(
+            &self.context.connection,
+            screen,
+            prim_rect,
+            bar_colors.bg,
+        )?;
+        let _ = self
+            .cursor_manager
+            .apply_window(&self.context.connection, win_id);
+        let mut bar =
+            Statusbar::with_modules(win_id, prim_rect, &self.config.bar_modules, bar_colors);
         bar.separator = self.config.bar_separator().to_string();
         bar.set_workspace_tags(&self.config.workspace_tags);
         let prim_tag = crate::workspace::workspace_to_tag(prim_ws);
@@ -55,7 +73,10 @@ impl WindowManager {
                 bar.attach_renderer(renderer);
             }
             Err(err) => {
-                eprintln!("[WARN  tilo::wm] Failed to initialize primary statusbar renderer: {}", err);
+                eprintln!(
+                    "[WARN  tilo::wm] Failed to initialize primary statusbar renderer: {}",
+                    err
+                );
             }
         }
         let _ = bar.update_all();
@@ -101,7 +122,9 @@ impl WindowManager {
             sec_rect,
             bar_colors.bg,
         )?;
-        let _ = self.cursor_manager.apply_window(&self.context.connection, sec_win);
+        let _ = self
+            .cursor_manager
+            .apply_window(&self.context.connection, sec_win);
         let mut sec_bar = Statusbar::with_modules(sec_win, sec_rect, &sec_modules, bar_colors);
         sec_bar.separator = self.config.bar_separator().to_string();
         sec_bar.set_workspace_tags(&self.config.workspace_tags);
@@ -171,7 +194,15 @@ impl WindowManager {
             .unwrap_or(self.config.layout);
         let focused = self.workspace_focus.focused_window_on(ws);
         let layout_sym = match focused {
-            Some(w) if self.client_state.get_client(w).map(|c| c.floating).unwrap_or(false) => "><>",
+            Some(w)
+                if self
+                    .client_state
+                    .get_client(w)
+                    .map(|c| c.floating)
+                    .unwrap_or(false) =>
+            {
+                "><>"
+            }
             _ => layout.symbol(),
         };
         let tabs = if layout == LayoutType::Tabbed {
@@ -184,14 +215,22 @@ impl WindowManager {
 
     /// Redraws all active statusbar UIs (primary and secondary) using their attached renderers.
     pub fn render_statusbar(&mut self) -> Result<(), StatusbarError> {
-        let primary_mon = self.monitor_manager.monitors.iter().find(|m| m.is_primary)
+        let primary_mon = self
+            .monitor_manager
+            .monitors
+            .iter()
+            .find(|m| m.is_primary)
             .or_else(|| self.monitor_manager.monitors.first())
             .cloned();
         let primary_id = primary_mon.as_ref().map(|m| m.id).unwrap_or(0);
-        let primary_ws = primary_mon.as_ref().map(|m| m.workspace).unwrap_or(self.current_workspace);
+        let primary_ws = primary_mon
+            .as_ref()
+            .map(|m| m.workspace)
+            .unwrap_or(self.current_workspace);
 
         // 1. Render primary statusbar
-        let (primary_title, primary_layout_sym, primary_tabs) = self.workspace_display_info(primary_ws);
+        let (primary_title, primary_layout_sym, primary_tabs) =
+            self.workspace_display_info(primary_ws);
         let primary_tag = crate::workspace::workspace_to_tag(primary_ws);
         let occupied_prim = self.monitor_occupied_tags(primary_id);
 
@@ -213,21 +252,25 @@ impl WindowManager {
 
         // 2. Precompute info for secondary statusbars to avoid borrowing self while iterating iter_mut
         let monitors = self.monitor_manager.monitors.clone();
-        let sec_info: Vec<_> = self.secondary_statusbars.iter().map(|bar| {
-            let mon = monitors.iter().find(|m| {
-                bar.rect.x >= m.x && (bar.rect.x as i32) < (m.x + m.width as i32)
-            });
-            let sec_mon_id = mon.map(|m| m.id).unwrap_or(1);
-            let sec_ws = mon.map(|m| m.workspace).unwrap_or(11);
-            let (sec_title, sec_layout_sym, sec_tabs) = self.workspace_display_info(sec_ws);
-            let sec_tag = crate::workspace::workspace_to_tag(sec_ws);
-            let occupied_sec = self.monitor_occupied_tags(sec_mon_id);
+        let sec_info: Vec<_> = self
+            .secondary_statusbars
+            .iter()
+            .map(|bar| {
+                let mon = monitors
+                    .iter()
+                    .find(|m| bar.rect.x >= m.x && bar.rect.x < (m.x + m.width as i32));
+                let sec_mon_id = mon.map(|m| m.id).unwrap_or(1);
+                let sec_ws = mon.map(|m| m.workspace).unwrap_or(11);
+                let (sec_title, sec_layout_sym, sec_tabs) = self.workspace_display_info(sec_ws);
+                let sec_tag = crate::workspace::workspace_to_tag(sec_ws);
+                let occupied_sec = self.monitor_occupied_tags(sec_mon_id);
 
-            (sec_title, sec_layout_sym, sec_tabs, sec_tag, occupied_sec)
-        }).collect();
+                (sec_title, sec_layout_sym, sec_tabs, sec_tag, occupied_sec)
+            })
+            .collect();
 
         for (bar, (sec_title, sec_layout_sym, sec_tabs, sec_tag, occupied_sec)) in
-            self.secondary_statusbars.iter_mut().zip(sec_info.into_iter())
+            self.secondary_statusbars.iter_mut().zip(sec_info)
         {
             bar.set_title(&sec_title);
             bar.set_workspace(sec_tag, &occupied_sec);
@@ -240,7 +283,10 @@ impl WindowManager {
                 sec_tabs.as_deref(),
                 &self.config.tab_config,
             ) {
-                eprintln!("[WARN  tilo::wm] Secondary statusbar render failed: {}", err);
+                eprintln!(
+                    "[WARN  tilo::wm] Secondary statusbar render failed: {}",
+                    err
+                );
             }
         }
 
@@ -256,7 +302,11 @@ impl WindowManager {
 
     /// Opens the application launcher overlay in Exit/Power menu mode (Logout, Reboot, Poweroff).
     pub fn open_exit_launcher(&mut self) -> Result<(), StatusbarError> {
-        let is_visible_exit = self.launcher.as_ref().map(|l| l.visible && l.mode == crate::launcher::LauncherMode::Exit).unwrap_or(false);
+        let is_visible_exit = self
+            .launcher
+            .as_ref()
+            .map(|l| l.visible && l.mode == crate::launcher::LauncherMode::Exit)
+            .unwrap_or(false);
         if is_visible_exit {
             self.close_launcher()
         } else {
@@ -265,20 +315,28 @@ impl WindowManager {
     }
 
     /// Opens the application launcher overlay with the given mode, centering it on the monitor containing the mouse pointer and grabbing keyboard.
-    pub fn open_launcher_with_mode(&mut self, mode: crate::launcher::LauncherMode) -> Result<(), StatusbarError> {
+    pub fn open_launcher_with_mode(
+        &mut self,
+        mode: crate::launcher::LauncherMode,
+    ) -> Result<(), StatusbarError> {
         // Query pointer coordinates to target whichever monitor contains the mouse cursor
-        let target_mon_id = if let Ok(cookie) = self.context.connection.query_pointer(self.context.root_window)
+        let target_mon_id = if let Ok(cookie) = self
+            .context
+            .connection
+            .query_pointer(self.context.root_window)
             && let Ok(reply) = cookie.reply()
         {
-            self.monitor_manager.monitor_for_point(reply.root_x as i32, reply.root_y as i32).map(|m| m.id)
+            self.monitor_manager
+                .monitor_for_point(reply.root_x as i32, reply.root_y as i32)
+                .map(|m| m.id)
         } else {
             None
         };
 
-        if let Some(mon_id) = target_mon_id {
-            if mon_id != self.monitor_manager.active_monitor_id {
-                let _ = self.activate_monitor(mon_id);
-            }
+        if let Some(mon_id) = target_mon_id
+            && mon_id != self.monitor_manager.active_monitor_id
+        {
+            let _ = self.activate_monitor(mon_id);
         }
 
         let active_mon = self.monitor_manager.active_monitor().clone();
@@ -286,12 +344,18 @@ impl WindowManager {
             crate::launcher::LauncherPosition::Spotlight => {
                 let width = crate::launcher::LAUNCHER_WIDTH;
                 let height = crate::launcher::LAUNCHER_HEIGHT;
-                let x = (active_mon.x + (active_mon.width as i32 - width as i32) / 2).max(active_mon.x) as i16;
-                let y = (active_mon.y + (active_mon.height as i32 - height as i32) / 3).max(active_mon.y) as i16;
+                let x = (active_mon.x + (active_mon.width as i32 - width as i32) / 2)
+                    .max(active_mon.x) as i16;
+                let y = (active_mon.y + (active_mon.height as i32 - height as i32) / 3)
+                    .max(active_mon.y) as i16;
                 (width, height, x, y)
             }
             crate::launcher::LauncherPosition::Dmenu => {
-                let height = self.statusbar.as_ref().map(|b| b.rect.height as u16).unwrap_or(24);
+                let height = self
+                    .statusbar
+                    .as_ref()
+                    .map(|b| b.rect.height as u16)
+                    .unwrap_or(24);
                 let width = active_mon.width as u16;
                 let x = active_mon.x as i16;
                 let y = active_mon.y as i16;
@@ -322,7 +386,9 @@ impl WindowManager {
                 launcher.color_scheme.bg,
             )?;
             launcher.window_id = win_id;
-            let _ = self.cursor_manager.apply_window(&self.context.connection, win_id);
+            let _ = self
+                .cursor_manager
+                .apply_window(&self.context.connection, win_id);
 
             match crate::render::Renderer::new(
                 &self.context.connection,
@@ -336,7 +402,10 @@ impl WindowManager {
                     launcher.attach_renderer(renderer);
                 }
                 Err(err) => {
-                    eprintln!("[WARN  tilo::wm] Failed to initialize launcher renderer: {}", err);
+                    eprintln!(
+                        "[WARN  tilo::wm] Failed to initialize launcher renderer: {}",
+                        err
+                    );
                 }
             }
         } else {
@@ -383,11 +452,11 @@ impl WindowManager {
                 x11rb::CURRENT_TIME,
                 x11rb::protocol::xproto::GrabMode::ASYNC,
                 x11rb::protocol::xproto::GrabMode::ASYNC,
-            )
-                && let Ok(reply) = cookie.reply()
-                    && reply.status == x11rb::protocol::xproto::GrabStatus::SUCCESS {
-                        break;
-                    }
+            ) && let Ok(reply) = cookie.reply()
+                && reply.status == x11rb::protocol::xproto::GrabStatus::SUCCESS
+            {
+                break;
+            }
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
 
@@ -408,25 +477,26 @@ impl WindowManager {
     /// Closes and unmaps the application launcher overlay, releasing keyboard grab.
     pub fn close_launcher(&mut self) -> Result<(), StatusbarError> {
         if let Some(ref mut launcher) = self.launcher
-            && launcher.visible {
-                launcher.visible = false;
-                launcher.mode = crate::launcher::LauncherMode::App;
-                launcher.query.clear();
-                launcher.cursor_position = 0;
-                launcher.selected_index = 0;
-                launcher.scroll_offset = 0;
-                let _ = self.context.connection.ungrab_keyboard(x11rb::CURRENT_TIME);
-                let _ = launcher.destroy(&self.context.connection);
-                self.context.flush()?;
+            && launcher.visible
+        {
+            launcher.visible = false;
+            launcher.mode = crate::launcher::LauncherMode::App;
+            launcher.query.clear();
+            launcher.cursor_position = 0;
+            launcher.selected_index = 0;
+            launcher.scroll_offset = 0;
+            let _ = self.context.connection.ungrab_keyboard(x11rb::CURRENT_TIME);
+            let _ = launcher.destroy(&self.context.connection);
+            self.context.flush()?;
 
-                // Restore focus to active client window or clear focus
-                if let Some(focused) = self.focused_window() {
-                    let _ = self.focus_client(focused);
-                } else {
-                    let _ = self.clear_focus();
-                }
-                crate::process::trim_memory();
+            // Restore focus to active client window or clear focus
+            if let Some(focused) = self.focused_window() {
+                let _ = self.focus_client(focused);
+            } else {
+                let _ = self.clear_focus();
             }
+            crate::process::trim_memory();
+        }
         Ok(())
     }
 
@@ -437,7 +507,10 @@ impl WindowManager {
             && launcher.window_id != 0
         {
             let aux = ConfigureWindowAux::new().stack_mode(StackMode::ABOVE);
-            let _ = self.context.connection.configure_window(launcher.window_id, &aux);
+            let _ = self
+                .context
+                .connection
+                .configure_window(launcher.window_id, &aux);
             let _ = self.context.flush();
         }
         Ok(())
@@ -445,7 +518,11 @@ impl WindowManager {
 
     /// Toggles the visibility of the application launcher overlay.
     pub fn toggle_launcher(&mut self) -> Result<(), StatusbarError> {
-        let is_visible_app = self.launcher.as_ref().map(|l| l.visible && l.mode == crate::launcher::LauncherMode::App).unwrap_or(false);
+        let is_visible_app = self
+            .launcher
+            .as_ref()
+            .map(|l| l.visible && l.mode == crate::launcher::LauncherMode::App)
+            .unwrap_or(false);
         if is_visible_app {
             self.close_launcher()
         } else {
@@ -472,7 +549,9 @@ impl WindowManager {
             None => return Ok(()),
         };
 
-        if let Some(action) = crate::launcher::handle_launcher_keypress(event.detail, u16::from(event.state), mapping) {
+        if let Some(action) =
+            crate::launcher::handle_launcher_keypress(event.detail, u16::from(event.state), mapping)
+        {
             match action {
                 crate::launcher::LauncherAction::Cancel => {
                     let _ = self.close_launcher();
@@ -586,10 +665,15 @@ impl WindowManager {
             "lock" | "screenlock" | "lockscreen" | "screen_lock" => {
                 if let Some(ref lock_cmd) = self.config.lock_command {
                     if let Err(e) = crate::launcher::spawn_app(lock_cmd) {
-                        eprintln!("[WARN  tilo::wm] Failed to spawn lock command '{}': {}", lock_cmd, e);
+                        eprintln!(
+                            "[WARN  tilo::wm] Failed to spawn lock command '{}': {}",
+                            lock_cmd, e
+                        );
                     }
                 } else {
-                    eprintln!("[WARN  tilo::wm] Screen lock invoked but no lock_command is configured.");
+                    eprintln!(
+                        "[WARN  tilo::wm] Screen lock invoked but no lock_command is configured."
+                    );
                 }
             }
             "logout" | "exit" | "quit" => {
@@ -610,5 +694,4 @@ impl WindowManager {
             }
         }
     }
-
 }

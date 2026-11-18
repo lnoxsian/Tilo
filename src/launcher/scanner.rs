@@ -1,10 +1,10 @@
 //! Filesystem scanning, `.desktop` file parsing, and process execution for the launcher.
 
+use crate::statusbar::{StatusbarError, TiloError};
 use std::collections::{HashMap, HashSet};
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::process::Command;
-use crate::statusbar::{StatusbarError, TiloError};
 
 /// Scans a single binary directory for executable files.
 pub fn scan_single_bin_dir(dir: &std::path::Path) -> (Vec<String>, HashMap<String, String>) {
@@ -63,7 +63,8 @@ pub fn get_monitored_directories() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
 
     // PATH directories
-    let path_var = std::env::var("PATH").unwrap_or_else(|_| "/usr/local/bin:/usr/bin:/bin".to_string());
+    let path_var =
+        std::env::var("PATH").unwrap_or_else(|_| "/usr/local/bin:/usr/bin:/bin".to_string());
     for p in path_var.split(':') {
         if !p.is_empty() {
             dirs.push(PathBuf::from(p));
@@ -342,9 +343,9 @@ pub fn spawn_app(app_name: &str) -> Result<u32, TiloError> {
     cmd.args(binary_args);
     crate::process::configure_detached_command(&mut cmd);
 
-    let child = cmd
-        .spawn()
-        .map_err(|e| StatusbarError::SpawnError(format!("Failed to spawn '{}': {}", app_name, e)))?;
+    let child = cmd.spawn().map_err(|e| {
+        StatusbarError::SpawnError(format!("Failed to spawn '{}': {}", app_name, e))
+    })?;
 
     Ok(child.id())
 }

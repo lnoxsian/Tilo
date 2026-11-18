@@ -6,6 +6,7 @@
 pub mod decoration;
 pub mod floating;
 pub mod fullscreen;
+pub mod marks;
 pub mod rules;
 pub mod scratchpad;
 
@@ -17,7 +18,6 @@ pub use scratchpad::*;
 
 use std::collections::HashMap;
 use x11rb::protocol::xproto::Window;
-
 
 /// Represents a single tracked application window.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -48,6 +48,8 @@ pub struct Client {
     pub urgent: bool,
     /// Cached window title to avoid repeated X11 property queries.
     pub title: Option<String>,
+    /// Container marks assigned to this client.
+    pub marks: Vec<String>,
 }
 
 impl Client {
@@ -67,6 +69,7 @@ impl Client {
             border_color: None,
             urgent: false,
             title: None,
+            marks: Vec::new(),
         }
     }
 
@@ -171,11 +174,9 @@ impl ClientState {
             .iter()
             .copied()
             .filter(|&w| {
-                self.clients
-                    .get(&w)
-                    .is_some_and(|c| {
-                        c.workspace == workspace && c.mapped && !c.is_floating() && !c.is_fullscreen()
-                    })
+                self.clients.get(&w).is_some_and(|c| {
+                    c.workspace == workspace && c.mapped && !c.is_floating() && !c.is_fullscreen()
+                })
             })
             .collect()
     }
@@ -186,9 +187,9 @@ impl ClientState {
             .iter()
             .copied()
             .filter(|&w| {
-                self.clients
-                    .get(&w)
-                    .is_some_and(|c| c.workspace == workspace && c.mapped && c.is_floating() && !c.is_fullscreen())
+                self.clients.get(&w).is_some_and(|c| {
+                    c.workspace == workspace && c.mapped && c.is_floating() && !c.is_fullscreen()
+                })
             })
             .collect()
     }
@@ -240,8 +241,9 @@ impl ClientState {
     /// Clears focus from all managed clients.
     pub fn unfocus_all(&mut self) {
         if let Some(&prev) = self.focus_stack.last()
-            && let Some(client) = self.clients.get_mut(&prev) {
-                client.focused = false;
+            && let Some(client) = self.clients.get_mut(&prev)
+        {
+            client.focused = false;
         }
         self.focus_stack.clear();
     }

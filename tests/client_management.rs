@@ -2,9 +2,7 @@ use std::process::{Child, Command};
 use tilo::wm::WindowManager;
 use tilo::x11::X11Context;
 use x11rb::connection::Connection;
-use x11rb::protocol::xproto::{
-    ConnectionExt, CreateWindowAux, WindowClass,
-};
+use x11rb::protocol::xproto::{ConnectionExt, CreateWindowAux, WindowClass};
 use x11rb::wrapper::ConnectionExt as _;
 
 struct XephyrServer {
@@ -51,21 +49,26 @@ impl Drop for XephyrServer {
 
 #[test]
 fn test_client_lifecycle_and_management_in_xephyr() {
-    if !Command::new("which").arg("Xephyr").output().map(|o| o.status.success()).unwrap_or(false) {
+    if !Command::new("which")
+        .arg("Xephyr")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+    {
         return;
     }
 
     let xephyr = XephyrServer::start(91);
     if let Some(server) = xephyr {
-        let wm_ctx = X11Context::connect_to(Some(&server.display))
-            .expect("WM context connect failed");
+        let wm_ctx =
+            X11Context::connect_to(Some(&server.display)).expect("WM context connect failed");
         assert!(wm_ctx.become_wm().is_ok());
 
         let mut wm = WindowManager::new(wm_ctx).expect("Failed to initialize WM");
 
         // Client connection to create windows
-        let (client_conn, screen_num) = x11rb::connect(Some(&server.display))
-            .expect("Client connect failed");
+        let (client_conn, screen_num) =
+            x11rb::connect(Some(&server.display)).expect("Client connect failed");
         let screen = &client_conn.setup().roots[screen_num];
         let root = screen.root;
 
@@ -160,8 +163,13 @@ fn test_client_lifecycle_and_management_in_xephyr() {
         client_conn.flush().unwrap();
         client_conn.sync().unwrap();
 
-        let managed_override = wm.manage_window(override_win).expect("Manage override failed");
-        assert!(!managed_override, "Override-redirect window must be ignored");
+        let managed_override = wm
+            .manage_window(override_win)
+            .expect("Manage override failed");
+        assert!(
+            !managed_override,
+            "Override-redirect window must be ignored"
+        );
         assert_eq!(wm.client_state.len(), 2);
 
         // 6. Unmanage win1 and check focus restoration to win2

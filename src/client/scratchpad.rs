@@ -10,9 +10,7 @@
 use crate::layout::Rect;
 use crate::x11::X11Error;
 use x11rb::connection::Connection;
-use x11rb::protocol::xproto::{
-    ConfigureWindowAux, ConnectionExt, InputFocus, StackMode, Window,
-};
+use x11rb::protocol::xproto::{ConfigureWindowAux, ConnectionExt, InputFocus, StackMode, Window};
 
 /// State of the scratchpad window.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -57,12 +55,7 @@ impl Scratchpad {
 /// Calculates the centered geometry for the scratchpad on a given monitor or screen area.
 ///
 /// Uses 70% of the monitor dimensions by default, clamped to reasonable minimums.
-pub fn calculate_scratchpad_geometry(
-    mon_x: i32,
-    mon_y: i32,
-    mon_w: u32,
-    mon_h: u32,
-) -> Rect {
+pub fn calculate_scratchpad_geometry(mon_x: i32, mon_y: i32, mon_w: u32, mon_h: u32) -> Rect {
     let width = (mon_w * 70 / 100).max(400).min(mon_w);
     let height = (mon_h * 70 / 100).max(300).min(mon_h);
     let x = mon_x + (mon_w as i32 - width as i32) / 2;
@@ -108,7 +101,10 @@ pub fn toggle_scratchpad(
         // Show: query root geometry to center if needed, map, raise, and focus
         let setup = conn.setup();
         let (screen_w, screen_h) = if let Some(screen) = setup.roots.first() {
-            (screen.width_in_pixels as u32, screen.height_in_pixels as u32)
+            (
+                screen.width_in_pixels as u32,
+                screen.height_in_pixels as u32,
+            )
         } else {
             (1280, 720)
         };
@@ -159,7 +155,7 @@ mod tests {
     fn test_calculate_scratchpad_geometry() {
         let geom = calculate_scratchpad_geometry(0, 0, 1920, 1080);
         assert_eq!(geom.width, 1344); // 70% of 1920
-        assert_eq!(geom.height, 756);  // 70% of 1080
+        assert_eq!(geom.height, 756); // 70% of 1080
         assert_eq!(geom.x, (1920 - 1344) / 2);
         assert_eq!(geom.y, (1080 - 756) / 2);
 

@@ -2,17 +2,17 @@
 
 use super::WindowManager;
 use crate::client::{Client, ClientState};
+use crate::error::{WmError, is_connection_lost_error};
 use crate::ewmh::{update_net_wm_state_above, update_net_wm_state_fullscreen};
 use crate::floating::{calculate_default_floating_geometry, clamp_floating_geometry};
 use crate::focus::{set_window_border_color, set_window_border_width};
-use crate::fullscreen::{fullscreen_configure_aux, restore_configure_aux, Geometry};
+use crate::fullscreen::{Geometry, fullscreen_configure_aux, restore_configure_aux};
 use crate::icccm::{
-    get_wm_state, send_wm_delete as icccm_send_wm_delete,
-    set_wm_state as icccm_set_wm_state, IcccmAtoms, WmState,
+    IcccmAtoms, WmState, get_wm_state, send_wm_delete as icccm_send_wm_delete,
+    set_wm_state as icccm_set_wm_state,
 };
-use crate::rules::{apply_rules as apply_window_rules, RuleAction, WindowRule};
+use crate::rules::{RuleAction, WindowRule, apply_rules as apply_window_rules};
 use crate::x11::X11Error;
-use crate::error::{is_connection_lost_error, WmError};
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 use x11rb::protocol::xproto::{
@@ -40,9 +40,10 @@ impl WindowManager {
     /// - If hidden: moves to current workspace, centers on active monitor, maps, raises ABOVE, focuses.
     pub fn toggle_scratchpad(&mut self) -> Result<(), X11Error> {
         if let Some(win) = self.scratchpad.client
-            && !self.client_state.contains(win) {
-                self.scratchpad.clear_client();
-            }
+            && !self.client_state.contains(win)
+        {
+            self.scratchpad.clear_client();
+        }
 
         let win = match self.scratchpad.client {
             Some(w) => w,
@@ -78,10 +79,7 @@ impl WindowManager {
             // Show: center on active monitor, map, raise ABOVE, focus
             let mon = self.monitor_manager.active_monitor().clone();
             let geom = crate::scratchpad::calculate_scratchpad_geometry(
-                mon.x,
-                mon.y,
-                mon.width,
-                mon.height,
+                mon.x, mon.y, mon.width, mon.height,
             );
 
             if let Some(client) = self.client_state.get_client_mut(win) {
@@ -96,7 +94,8 @@ impl WindowManager {
                 ));
             }
 
-            self.workspace_manager.add_client(win, self.current_workspace);
+            self.workspace_manager
+                .add_client(win, self.current_workspace);
 
             let aux = ConfigureWindowAux::new()
                 .x(geom.x)
@@ -108,12 +107,8 @@ impl WindowManager {
             let _ = self.context.connection.configure_window(win, &aux);
             let _ = self.context.connection.map_window(win);
             let _ = self.set_wm_state(win, WmState::Normal);
-            let _ = update_net_wm_state_above(
-                &self.context.connection,
-                win,
-                true,
-                &self.ewmh_atoms,
-            );
+            let _ =
+                update_net_wm_state_above(&self.context.connection, win, true, &self.ewmh_atoms);
             let _ = self.focus_client(win);
             self.scratchpad.is_visible = true;
         }
@@ -163,9 +158,7 @@ impl WindowManager {
 
         // Subscribe to events on the client window
         let aux = ChangeWindowAttributesAux::default().event_mask(
-            EventMask::PROPERTY_CHANGE
-                | EventMask::STRUCTURE_NOTIFY
-                | EventMask::ENTER_WINDOW,
+            EventMask::PROPERTY_CHANGE | EventMask::STRUCTURE_NOTIFY | EventMask::ENTER_WINDOW,
         );
         let _ = self
             .context
@@ -183,7 +176,11 @@ impl WindowManager {
             }
         };
         let active_mon = self.monitor_manager.active_monitor();
-        let target_ws = rule_action.target_workspace.unwrap_or(active_mon.workspace);
+        let target_ws = if let Some(ref name) = rule_action.target_workspace_name {
+            self.workspace_manager.get_or_create_by_name(name).id
+        } else {
+            rule_action.target_workspace.unwrap_or(active_mon.workspace)
+        };
         self.workspace_manager.get_or_create(target_ws);
 
         let target_mon_id = self
@@ -225,11 +222,7 @@ impl WindowManager {
         }
 
         // Set initial border width and normal (unfocused) border color
-        let _ = set_window_border_width(
-            &self.context.connection,
-            window,
-            self.border_config.width,
-        );
+        let _ = set_window_border_width(&self.context.connection, window, self.border_config.width);
         let _ = set_window_border_color(
             &self.context.connection,
             window,
@@ -247,10 +240,20 @@ impl WindowManager {
             self.client_state.add_client(window, client);
 
             if is_floating {
-                let _ = update_net_wm_state_above(&self.context.connection, window, true, &self.ewmh_atoms);
+                let _ = update_net_wm_state_above(
+                    &self.context.connection,
+                    window,
+                    true,
+                    &self.ewmh_atoms,
+                );
             }
             if is_fullscreen {
-                let _ = update_net_wm_state_fullscreen(&self.context.connection, window, true, &self.ewmh_atoms);
+                let _ = update_net_wm_state_fullscreen(
+                    &self.context.connection,
+                    window,
+                    true,
+                    &self.ewmh_atoms,
+                );
             }
 
             // Retile active workspace FIRST so the window is positioned before being mapped
@@ -266,10 +269,20 @@ impl WindowManager {
             self.client_state.add_client(window, client);
             self.client_state.focus_stack.retain(|&w| w != window);
             if is_floating {
-                let _ = update_net_wm_state_above(&self.context.connection, window, true, &self.ewmh_atoms);
+                let _ = update_net_wm_state_above(
+                    &self.context.connection,
+                    window,
+                    true,
+                    &self.ewmh_atoms,
+                );
             }
             if is_fullscreen {
-                let _ = update_net_wm_state_fullscreen(&self.context.connection, window, true, &self.ewmh_atoms);
+                let _ = update_net_wm_state_fullscreen(
+                    &self.context.connection,
+                    window,
+                    true,
+                    &self.ewmh_atoms,
+                );
             }
             let _ = self.set_wm_state(window, WmState::Withdrawn);
             let _ = self.render_statusbar();
@@ -367,11 +380,9 @@ impl WindowManager {
 
     /// Returns the PID associated with a client window via `_NET_WM_PID` if set.
     pub fn get_client_pid(&self, window: Window) -> Option<u32> {
-        crate::x11::ewmh::get_wm_pid(
-            &self.context.connection,
-            window,
-            self.ewmh_atoms.net_wm_pid,
-        ).ok().flatten()
+        crate::x11::ewmh::get_wm_pid(&self.context.connection, window, self.ewmh_atoms.net_wm_pid)
+            .ok()
+            .flatten()
     }
 
     /// Closes all running application windows gracefully using ICCCM `WM_DELETE_WINDOW`,
@@ -379,10 +390,10 @@ impl WindowManager {
     /// exit within `timeout`.
     pub fn close_all_clients(&mut self, timeout: Duration) -> Result<(), WmError> {
         let mut all_windows: Vec<Window> = self.client_state.all_clients().to_vec();
-        if let Some(sp_win) = self.scratchpad.client {
-            if !all_windows.contains(&sp_win) {
-                all_windows.push(sp_win);
-            }
+        if let Some(sp_win) = self.scratchpad.client
+            && !all_windows.contains(&sp_win)
+        {
+            all_windows.push(sp_win);
         }
 
         if all_windows.is_empty() {
@@ -417,11 +428,12 @@ impl WindowManager {
         if !remaining.is_empty() {
             for &win in &remaining {
                 let _ = self.context.connection.kill_client(win);
-                if let Some(Some(pid)) = pids.get(&win) {
-                    if *pid != my_pid && *pid > 1 {
-                        unsafe {
-                            libc::kill(*pid as i32, libc::SIGTERM);
-                        }
+                if let Some(Some(pid)) = pids.get(&win)
+                    && *pid != my_pid
+                    && *pid > 1
+                {
+                    unsafe {
+                        libc::kill(*pid as i32, libc::SIGTERM);
                     }
                 }
             }
@@ -429,7 +441,9 @@ impl WindowManager {
 
             // Brief drain period (up to 300ms)
             let drain_start = Instant::now();
-            while !self.client_state.is_empty() && drain_start.elapsed() < Duration::from_millis(300) {
+            while !self.client_state.is_empty()
+                && drain_start.elapsed() < Duration::from_millis(300)
+            {
                 let _ = self.process_pending_events();
                 if self.client_state.is_empty() {
                     break;
@@ -439,12 +453,13 @@ impl WindowManager {
 
             // Final SIGKILL for remaining processes
             for &win in &remaining {
-                if let Some(Some(pid)) = pids.get(&win) {
-                    if *pid != my_pid && *pid > 1 {
-                        unsafe {
-                            if libc::kill(*pid as i32, 0) == 0 {
-                                libc::kill(*pid as i32, libc::SIGKILL);
-                            }
+                if let Some(Some(pid)) = pids.get(&win)
+                    && *pid != my_pid
+                    && *pid > 1
+                {
+                    unsafe {
+                        if libc::kill(*pid as i32, 0) == 0 {
+                            libc::kill(*pid as i32, libc::SIGKILL);
                         }
                     }
                 }
@@ -469,14 +484,10 @@ impl WindowManager {
     /// 3. Forcefully terminates any unresponsive clients (`KillClient` / `SIGKILL`).
     /// 4. Releases WM resources, destroys statusbar and launcher, clears root properties and grabs.
     /// 5. Reverts focus and stops the main event loop.
-    pub fn perform_desktop_shutdown(
-        &mut self,
-        timeout: Option<Duration>,
-    ) -> Result<(), WmError> {
+    pub fn perform_desktop_shutdown(&mut self, timeout: Option<Duration>) -> Result<(), WmError> {
         self.running = false;
-        let timeout_duration = timeout.unwrap_or_else(|| {
-            Duration::from_millis(self.config.shutdown_timeout_ms)
-        });
+        let timeout_duration =
+            timeout.unwrap_or_else(|| Duration::from_millis(self.config.shutdown_timeout_ms));
 
         let _ = self.close_all_clients(timeout_duration);
         self.perform_graceful_shutdown()?;
@@ -517,8 +528,14 @@ impl WindowManager {
         let all_clients: Vec<Window> = self.client_state.all_clients().to_vec();
         for win in all_clients {
             let _ = set_window_border_width(&self.context.connection, win, 0);
-            let _ = self.context.connection.delete_property(win, self.atoms.wm_state);
-            let _ = self.context.connection.delete_property(win, self.ewmh_atoms.net_wm_state);
+            let _ = self
+                .context
+                .connection
+                .delete_property(win, self.atoms.wm_state);
+            let _ = self
+                .context
+                .connection
+                .delete_property(win, self.ewmh_atoms.net_wm_state);
             let aux = ChangeWindowAttributesAux::default().event_mask(EventMask::NO_EVENT);
             let _ = self.context.connection.change_window_attributes(win, &aux);
 
@@ -541,31 +558,63 @@ impl WindowManager {
 
         // 5. Release WM_Sn selection ownership
         let sel_name = format!("WM_S{}", self.context.screen_num);
-        if let Ok(cookie) = self.context.connection.intern_atom(false, sel_name.as_bytes())
+        if let Ok(cookie) = self
+            .context
+            .connection
+            .intern_atom(false, sel_name.as_bytes())
             && let Ok(reply) = cookie.reply()
         {
-            let _ = self.context.connection.set_selection_owner(x11rb::NONE, reply.atom, x11rb::CURRENT_TIME);
+            let _ = self.context.connection.set_selection_owner(
+                x11rb::NONE,
+                reply.atom,
+                x11rb::CURRENT_TIME,
+            );
         }
 
         // Release EWMH properties and supporting window
         let root = self.context.root_window;
-        let _ = self.context.connection.delete_property(root, self.ewmh_atoms.net_supporting_wm_check);
-        let _ = self.context.connection.delete_property(root, self.ewmh_atoms.net_supported);
-        let _ = self.context.connection.delete_property(root, self.ewmh_atoms.net_client_list);
-        let _ = self.context.connection.delete_property(root, self.ewmh_atoms.net_active_window);
-        let _ = self.context.connection.delete_property(root, self.ewmh_atoms.net_workarea);
+        let _ = self
+            .context
+            .connection
+            .delete_property(root, self.ewmh_atoms.net_supporting_wm_check);
+        let _ = self
+            .context
+            .connection
+            .delete_property(root, self.ewmh_atoms.net_supported);
+        let _ = self
+            .context
+            .connection
+            .delete_property(root, self.ewmh_atoms.net_client_list);
+        let _ = self
+            .context
+            .connection
+            .delete_property(root, self.ewmh_atoms.net_active_window);
+        let _ = self
+            .context
+            .connection
+            .delete_property(root, self.ewmh_atoms.net_workarea);
 
         if self.supporting_window != 0 {
-            let _ = self.context.connection.destroy_window(self.supporting_window);
+            let _ = self
+                .context
+                .connection
+                .destroy_window(self.supporting_window);
             self.supporting_window = 0;
         }
 
         let _ = self.context.connection.ungrab_key(0, root, ModMask::ANY);
-        let _ = self.context.connection.ungrab_button(ButtonIndex::ANY, root, ModMask::ANY);
+        let _ = self
+            .context
+            .connection
+            .ungrab_button(ButtonIndex::ANY, root, ModMask::ANY);
         let aux = ChangeWindowAttributesAux::default().event_mask(EventMask::NO_EVENT);
         let _ = self.context.connection.change_window_attributes(root, &aux);
 
-        let _ = self.context.connection.set_input_focus(InputFocus::POINTER_ROOT, root, x11rb::CURRENT_TIME);
+        let _ = self.context.connection.set_input_focus(
+            InputFocus::POINTER_ROOT,
+            root,
+            x11rb::CURRENT_TIME,
+        );
         let _ = self.context.flush();
         self.running = false;
         Ok(())
@@ -620,7 +669,11 @@ impl WindowManager {
             if ws == self.current_workspace {
                 let _ = self.retile();
                 let next_candidate = next_ws_win
-                    .or_else(|| self.workspace_manager.get(ws).and_then(|w| w.clients.first().copied()))
+                    .or_else(|| {
+                        self.workspace_manager
+                            .get(ws)
+                            .and_then(|w| w.clients.first().copied())
+                    })
                     .filter(|&w| self.client_state.contains(w));
                 if let Some(next_window) = next_candidate {
                     let _ = self.focus_client(next_window);
@@ -636,8 +689,6 @@ impl WindowManager {
         }
         removed
     }
-
-
 
     /// Adds a window rule to the window manager.
     pub fn add_rule(&mut self, rule: WindowRule) {
@@ -691,7 +742,7 @@ impl WindowManager {
 
     /// Toggles the floating state of a specific window.
     ///
-    /// If the window is currently tiled, it will be made floating, restoring its previous 
+    /// If the window is currently tiled, it will be made floating, restoring its previous
     /// floating geometry or using a default centered geometry. If it is floating, it will
     /// be tiled.
     pub fn toggle_floating(&mut self, window: Window) -> Result<(), X11Error> {
@@ -746,8 +797,17 @@ impl WindowManager {
             self.focus_client(window)?;
         }
 
-        let is_floating_now = self.client_state.get_client(window).map(|c| c.floating).unwrap_or(false);
-        let _ = update_net_wm_state_above(&self.context.connection, window, is_floating_now, &self.ewmh_atoms);
+        let is_floating_now = self
+            .client_state
+            .get_client(window)
+            .map(|c| c.floating)
+            .unwrap_or(false);
+        let _ = update_net_wm_state_above(
+            &self.context.connection,
+            window,
+            is_floating_now,
+            &self.ewmh_atoms,
+        );
 
         self.context.flush()?;
         Ok(())
@@ -857,11 +917,8 @@ impl WindowManager {
 
         geom.x = x;
         geom.y = y;
-        let clamped = clamp_floating_geometry(
-            geom,
-            self.context.screen_width,
-            self.context.screen_height,
-        );
+        let clamped =
+            clamp_floating_geometry(geom, self.context.screen_width, self.context.screen_height);
 
         if let Some(client) = self.client_state.get_client_mut(window) {
             client.set_floating(clamped);
@@ -904,11 +961,8 @@ impl WindowManager {
 
         geom.width = width;
         geom.height = height;
-        let clamped = clamp_floating_geometry(
-            geom,
-            self.context.screen_width,
-            self.context.screen_height,
-        );
+        let clamped =
+            clamp_floating_geometry(geom, self.context.screen_width, self.context.screen_height);
 
         if let Some(client) = self.client_state.get_client_mut(window) {
             client.set_floating(clamped);
@@ -980,11 +1034,7 @@ impl WindowManager {
         w: u32,
         h: u32,
     ) -> Result<(), X11Error> {
-        let aux = ConfigureWindowAux::default()
-            .x(x)
-            .y(y)
-            .width(w)
-            .height(h);
+        let aux = ConfigureWindowAux::default().x(x).y(y).width(w).height(h);
         self.context.connection.configure_window(window, &aux)?;
         self.context.flush()?;
         Ok(())

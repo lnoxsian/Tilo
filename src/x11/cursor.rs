@@ -65,15 +65,18 @@ impl CursorManager {
         let handle = {
             let db = x11rb::resource_manager::new_from_default(conn)
                 .unwrap_or_else(|_| Database::new_from_data(&[]));
-            Handle::new(conn, screen_num, &db).ok().and_then(|c| c.reply().ok())
+            Handle::new(conn, screen_num, &db)
+                .ok()
+                .and_then(|c| c.reply().ok())
         };
 
         let load = |h: &Handle, names: &[&str]| -> Option<xproto::Cursor> {
             for name in names {
                 if let Ok(c) = h.load_cursor(conn, name)
-                    && c != 0 {
-                        return Some(c);
-                    }
+                    && c != 0
+                {
+                    return Some(c);
+                }
             }
             None
         };
@@ -146,4 +149,3 @@ mod tests {
         assert_eq!(mgr.resize_cursor, 0);
     }
 }
-

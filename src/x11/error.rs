@@ -105,18 +105,27 @@ mod tests {
     #[test]
     fn test_wm_error_display() {
         let err1 = WmError::ConnectionLost("Connection reset by peer".to_string());
-        assert_eq!(err1.to_string(), "X server connection lost: Connection reset by peer");
+        assert_eq!(
+            err1.to_string(),
+            "X server connection lost: Connection reset by peer"
+        );
         assert!(err1.is_fatal());
         assert!(!err1.is_recoverable());
 
         let err2 = WmError::ConfigError("Syntax error at line 5".to_string());
-        assert_eq!(err2.to_string(), "Configuration error: Syntax error at line 5");
+        assert_eq!(
+            err2.to_string(),
+            "Configuration error: Syntax error at line 5"
+        );
         assert!(!err2.is_fatal());
         assert!(err2.is_recoverable());
 
         let x11_err = X11Error::AnotherWmRunning;
         let err3 = WmError::X11ProtocolError(x11_err);
-        assert_eq!(err3.to_string(), "X11 protocol error: Another window manager is already running");
+        assert_eq!(
+            err3.to_string(),
+            "X11 protocol error: Another window manager is already running"
+        );
         assert!(!err3.is_fatal());
         assert!(err3.is_recoverable());
     }

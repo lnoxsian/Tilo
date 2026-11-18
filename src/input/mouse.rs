@@ -11,13 +11,12 @@ use crate::keybind::MOD_LOCK;
 use crate::x11::X11Error;
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::{
-    ButtonIndex, ButtonPressEvent, ConfigureWindowAux, ConnectionExt, EventMask, GrabMode,
-    ModMask, MotionNotifyEvent, StackMode, Window,
+    ButtonIndex, ButtonPressEvent, ConfigureWindowAux, ConnectionExt, EventMask, GrabMode, ModMask,
+    MotionNotifyEvent, StackMode, Window,
 };
 
 /// The current mouse interaction state.
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum MouseAction {
     /// No action is currently in progress.
     #[default]
@@ -48,7 +47,6 @@ pub enum MouseAction {
         click_y: i32,
     },
 }
-
 
 impl MouseAction {
     /// Returns `true` if a drag operation (move or resize) is currently active.

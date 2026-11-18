@@ -1,11 +1,9 @@
 use std::process::{Child, Command};
-use tilo::error::{is_client_disconnect_error, is_connection_lost_error, WmError};
+use tilo::error::{WmError, is_client_disconnect_error, is_connection_lost_error};
 use tilo::wm::WindowManager;
 use tilo::x11::{X11Context, X11Error};
 use x11rb::connection::Connection;
-use x11rb::protocol::xproto::{
-    ConnectionExt, CreateWindowAux, EventMask, Window, WindowClass,
-};
+use x11rb::protocol::xproto::{ConnectionExt, CreateWindowAux, EventMask, Window, WindowClass};
 use x11rb::wrapper::ConnectionExt as _;
 
 struct XephyrServer {
@@ -50,11 +48,18 @@ impl Drop for XephyrServer {
     }
 }
 
-fn create_test_window(conn: &impl Connection, screen_num: usize, x: i16, y: i16, w: u16, h: u16) -> Window {
+fn create_test_window(
+    conn: &impl Connection,
+    screen_num: usize,
+    x: i16,
+    y: i16,
+    w: u16,
+    h: u16,
+) -> Window {
     let win = conn.generate_id().unwrap();
     let screen = &conn.setup().roots[screen_num];
-    let values = CreateWindowAux::new()
-        .event_mask(EventMask::STRUCTURE_NOTIFY | EventMask::PROPERTY_CHANGE);
+    let values =
+        CreateWindowAux::new().event_mask(EventMask::STRUCTURE_NOTIFY | EventMask::PROPERTY_CHANGE);
     conn.create_window(
         x11rb::COPY_DEPTH_FROM_PARENT,
         win,
@@ -245,7 +250,11 @@ fn test_invalid_config_fallback_without_panic() {
     let cfg_file = temp_dir.join("config");
 
     // Write completely invalid/corrupted config
-    std::fs::write(&cfg_file, "this_is_an_invalid_directive @@@ 9999\nborder_width not_a_number\n").unwrap();
+    std::fs::write(
+        &cfg_file,
+        "this_is_an_invalid_directive @@@ 9999\nborder_width not_a_number\n",
+    )
+    .unwrap();
 
     // load_config_from_path should fail with ConfigError
     let load_res = tilo::config::load_config_from_path(&cfg_file);
@@ -255,7 +264,11 @@ fn test_invalid_config_fallback_without_panic() {
     let tilo_dir = temp_dir.join("tilo");
     let _ = std::fs::create_dir_all(&tilo_dir);
     let xdg_cfg_file = tilo_dir.join("config");
-    std::fs::write(&xdg_cfg_file, "this_is_an_invalid_directive @@@ 9999\nborder_width not_a_number\n").unwrap();
+    std::fs::write(
+        &xdg_cfg_file,
+        "this_is_an_invalid_directive @@@ 9999\nborder_width not_a_number\n",
+    )
+    .unwrap();
 
     let prev_xdg = std::env::var("XDG_CONFIG_HOME").ok();
     unsafe {

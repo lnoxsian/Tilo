@@ -34,7 +34,12 @@ pub struct Rect {
 impl Rect {
     /// Creates a new rectangle.
     pub const fn new(x: i32, y: i32, width: u32, height: u32) -> Self {
-        Self { x, y, width, height }
+        Self {
+            x,
+            y,
+            width,
+            height,
+        }
     }
 
     /// Checks if this rectangle overlaps with another rectangle (considering borders).
@@ -78,8 +83,7 @@ impl Default for LayoutConfig {
 }
 
 /// Available layout types.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum LayoutType {
     /// Traditional master and stack tiling (Master Left, Stack Right).
     #[default]
@@ -134,11 +138,13 @@ impl std::str::FromStr for LayoutType {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
-            "master" | "master-left" | "master_left" | "masterleft" | "masterstack" | "master_stack" | "default" => Ok(Self::MasterStack),
+            "master" | "master-left" | "master_left" | "masterleft" | "masterstack"
+            | "master_stack" | "default" => Ok(Self::MasterStack),
             "master-right" | "master_right" | "masterright" => Ok(Self::MasterRight),
             "master-top" | "master_top" | "mastertop" => Ok(Self::MasterTop),
             "master-bottom" | "master_bottom" | "masterbottom" => Ok(Self::MasterBottom),
-            "center-master" | "center_master" | "centermaster" | "centered-master" | "centered_master" | "centeredmaster" => Ok(Self::CenterMaster),
+            "center-master" | "center_master" | "centermaster" | "centered-master"
+            | "centered_master" | "centeredmaster" => Ok(Self::CenterMaster),
             "grid" | "g" => Ok(Self::Grid),
             "columns" | "column" | "cols" | "col" | "vertical" | "vert" | "v" => Ok(Self::Vertical),
             "rows" | "row" | "horizontal" | "horiz" | "h" => Ok(Self::Horizontal),
@@ -172,7 +178,11 @@ impl LayoutType {
     pub fn is_master(&self) -> bool {
         matches!(
             self,
-            Self::MasterStack | Self::MasterRight | Self::MasterTop | Self::MasterBottom | Self::CenterMaster
+            Self::MasterStack
+                | Self::MasterRight
+                | Self::MasterTop
+                | Self::MasterBottom
+                | Self::CenterMaster
         )
     }
 
@@ -254,7 +264,11 @@ pub fn rotate_master_layout(current: LayoutType) -> LayoutType {
 /// The next layout type.
 pub fn cycle_layout(current: LayoutType) -> LayoutType {
     match current {
-        LayoutType::MasterStack | LayoutType::MasterRight | LayoutType::MasterTop | LayoutType::MasterBottom | LayoutType::CenterMaster => LayoutType::Vertical,
+        LayoutType::MasterStack
+        | LayoutType::MasterRight
+        | LayoutType::MasterTop
+        | LayoutType::MasterBottom
+        | LayoutType::CenterMaster => LayoutType::Vertical,
         LayoutType::Vertical | LayoutType::Horizontal => LayoutType::Monocle,
         LayoutType::Monocle => LayoutType::Tabbed,
         LayoutType::Tabbed => LayoutType::Bsp,
@@ -288,7 +302,12 @@ pub fn calculate_layout(
                 return Vec::new();
             }
             let mut tree = BspTree::new();
-            tree.sync_clients(clients, clients.first().copied(), screen_rect, config.inner_gap);
+            tree.sync_clients(
+                clients,
+                clients.first().copied(),
+                screen_rect,
+                config.inner_gap,
+            );
             let pairs = tree.calculate_rects(screen_rect, config);
             let mut map = std::collections::HashMap::new();
             for (w, r) in pairs {
@@ -327,16 +346,15 @@ pub fn apply_layout(
     apply_layout_with_border(conn, clients, &rects, config.border_width)?;
 
     if layout == LayoutType::Monocle
-        && let Some(&first) = clients.first() {
-            let aux = ConfigureWindowAux::default()
-                .stack_mode(StackMode::ABOVE);
-            let _ = conn.configure_window(first, &aux);
-            conn.flush()?;
-        }
+        && let Some(&first) = clients.first()
+    {
+        let aux = ConfigureWindowAux::default().stack_mode(StackMode::ABOVE);
+        let _ = conn.configure_window(first, &aux);
+        conn.flush()?;
+    }
 
     Ok(())
 }
-
 
 /// Applies the computed layout geometries and border widths to the actual X11 windows.
 ///
@@ -369,8 +387,6 @@ pub fn apply_layout_with_border<C: Connection>(
     conn.flush()?;
     Ok(())
 }
-
-
 
 #[cfg(test)]
 mod tests {
@@ -466,7 +482,8 @@ mod tests {
                 idx
             );
             assert!(
-                r.y + (r.height + 2 * config.border_width) as i32 <= screen.y + screen.height as i32,
+                r.y + (r.height + 2 * config.border_width) as i32
+                    <= screen.y + screen.height as i32,
                 "Rect {} extends beyond bottom edge",
                 idx
             );
@@ -569,20 +586,56 @@ mod tests {
         assert_eq!(cycle_layout(LayoutType::Stacked), LayoutType::MasterStack);
 
         // Parsing
-        assert_eq!("master".parse::<LayoutType>().unwrap(), LayoutType::MasterStack);
-        assert_eq!("master-left".parse::<LayoutType>().unwrap(), LayoutType::MasterStack);
-        assert_eq!("master-right".parse::<LayoutType>().unwrap(), LayoutType::MasterRight);
-        assert_eq!("master-top".parse::<LayoutType>().unwrap(), LayoutType::MasterTop);
-        assert_eq!("master-bottom".parse::<LayoutType>().unwrap(), LayoutType::MasterBottom);
-        assert_eq!("center-master".parse::<LayoutType>().unwrap(), LayoutType::CenterMaster);
-        assert_eq!("centered-master".parse::<LayoutType>().unwrap(), LayoutType::CenterMaster);
+        assert_eq!(
+            "master".parse::<LayoutType>().unwrap(),
+            LayoutType::MasterStack
+        );
+        assert_eq!(
+            "master-left".parse::<LayoutType>().unwrap(),
+            LayoutType::MasterStack
+        );
+        assert_eq!(
+            "master-right".parse::<LayoutType>().unwrap(),
+            LayoutType::MasterRight
+        );
+        assert_eq!(
+            "master-top".parse::<LayoutType>().unwrap(),
+            LayoutType::MasterTop
+        );
+        assert_eq!(
+            "master-bottom".parse::<LayoutType>().unwrap(),
+            LayoutType::MasterBottom
+        );
+        assert_eq!(
+            "center-master".parse::<LayoutType>().unwrap(),
+            LayoutType::CenterMaster
+        );
+        assert_eq!(
+            "centered-master".parse::<LayoutType>().unwrap(),
+            LayoutType::CenterMaster
+        );
         assert_eq!("grid".parse::<LayoutType>().unwrap(), LayoutType::Grid);
         assert_eq!("g".parse::<LayoutType>().unwrap(), LayoutType::Grid);
-        assert_eq!("columns".parse::<LayoutType>().unwrap(), LayoutType::Vertical);
-        assert_eq!("vertical".parse::<LayoutType>().unwrap(), LayoutType::Vertical);
-        assert_eq!("rows".parse::<LayoutType>().unwrap(), LayoutType::Horizontal);
-        assert_eq!("horizontal".parse::<LayoutType>().unwrap(), LayoutType::Horizontal);
-        assert_eq!("monocle".parse::<LayoutType>().unwrap(), LayoutType::Monocle);
+        assert_eq!(
+            "columns".parse::<LayoutType>().unwrap(),
+            LayoutType::Vertical
+        );
+        assert_eq!(
+            "vertical".parse::<LayoutType>().unwrap(),
+            LayoutType::Vertical
+        );
+        assert_eq!(
+            "rows".parse::<LayoutType>().unwrap(),
+            LayoutType::Horizontal
+        );
+        assert_eq!(
+            "horizontal".parse::<LayoutType>().unwrap(),
+            LayoutType::Horizontal
+        );
+        assert_eq!(
+            "monocle".parse::<LayoutType>().unwrap(),
+            LayoutType::Monocle
+        );
         assert_eq!("bsp".parse::<LayoutType>().unwrap(), LayoutType::Bsp);
         assert!("invalid".parse::<LayoutType>().is_err());
 
@@ -610,11 +663,26 @@ mod tests {
         assert_eq!(LayoutType::Bsp.symbol(), "[B]");
 
         // Layout rotation cycling
-        assert_eq!(rotate_layout(LayoutType::MasterStack), LayoutType::MasterRight);
-        assert_eq!(rotate_layout(LayoutType::MasterRight), LayoutType::MasterTop);
-        assert_eq!(rotate_layout(LayoutType::MasterTop), LayoutType::MasterBottom);
-        assert_eq!(rotate_layout(LayoutType::MasterBottom), LayoutType::CenterMaster);
-        assert_eq!(rotate_layout(LayoutType::CenterMaster), LayoutType::MasterStack);
+        assert_eq!(
+            rotate_layout(LayoutType::MasterStack),
+            LayoutType::MasterRight
+        );
+        assert_eq!(
+            rotate_layout(LayoutType::MasterRight),
+            LayoutType::MasterTop
+        );
+        assert_eq!(
+            rotate_layout(LayoutType::MasterTop),
+            LayoutType::MasterBottom
+        );
+        assert_eq!(
+            rotate_layout(LayoutType::MasterBottom),
+            LayoutType::CenterMaster
+        );
+        assert_eq!(
+            rotate_layout(LayoutType::CenterMaster),
+            LayoutType::MasterStack
+        );
         assert_eq!(rotate_layout(LayoutType::Vertical), LayoutType::Horizontal);
         assert_eq!(rotate_layout(LayoutType::Horizontal), LayoutType::Vertical);
         assert_eq!(rotate_layout(LayoutType::Monocle), LayoutType::Monocle);
@@ -736,10 +804,22 @@ mod tests {
         let r2_post = rects_ms_post.iter().find(|(w, _)| *w == 2).unwrap().1;
         let r3_post = rects_ms_post.iter().find(|(w, _)| *w == 3).unwrap().1;
 
-        assert_eq!(r1_post.width, r1_init.width, "Master width must remain strictly unchanged");
-        assert_eq!(r1_post.height, r1_init.height, "Master height must remain strictly unchanged");
-        assert!(r2_post.height > r2_init.height, "Window 2 height must increase");
-        assert!(r3_post.height < r3_init.height, "Window 3 height must decrease");
+        assert_eq!(
+            r1_post.width, r1_init.width,
+            "Master width must remain strictly unchanged"
+        );
+        assert_eq!(
+            r1_post.height, r1_init.height,
+            "Master height must remain strictly unchanged"
+        );
+        assert!(
+            r2_post.height > r2_init.height,
+            "Window 2 height must increase"
+        );
+        assert!(
+            r3_post.height < r3_init.height,
+            "Window 3 height must decrease"
+        );
 
         // 2. Vertical layout: 3 columns. Resizing window 1 must NOT change non-adjacent window 3
         let mut tree_v = BspTree::new();
@@ -755,9 +835,18 @@ mod tests {
         let v2_post = rects_v_post.iter().find(|(w, _)| *w == 2).unwrap().1;
         let v3_post = rects_v_post.iter().find(|(w, _)| *w == 3).unwrap().1;
 
-        assert!(v1_post.width > v1_init.width, "Window 1 width must increase");
-        assert!(v2_post.width < v2_init.width, "Adjacent Window 2 width must decrease");
-        assert_eq!(v3_post.width, v3_init.width, "Non-adjacent Window 3 width must remain strictly unchanged");
+        assert!(
+            v1_post.width > v1_init.width,
+            "Window 1 width must increase"
+        );
+        assert!(
+            v2_post.width < v2_init.width,
+            "Adjacent Window 2 width must decrease"
+        );
+        assert_eq!(
+            v3_post.width, v3_init.width,
+            "Non-adjacent Window 3 width must remain strictly unchanged"
+        );
 
         // 3. Horizontal layout: 3 rows. Resizing window 1 must NOT change non-adjacent window 3
         let mut tree_h = BspTree::new();
@@ -773,9 +862,18 @@ mod tests {
         let h2_post = rects_h_post.iter().find(|(w, _)| *w == 2).unwrap().1;
         let h3_post = rects_h_post.iter().find(|(w, _)| *w == 3).unwrap().1;
 
-        assert!(h1_post.height > h1_init.height, "Window 1 height must increase");
-        assert!(h2_post.height < h2_init.height, "Adjacent Window 2 height must decrease");
-        assert_eq!(h3_post.height, h3_init.height, "Non-adjacent Window 3 height must remain strictly unchanged");
+        assert!(
+            h1_post.height > h1_init.height,
+            "Window 1 height must increase"
+        );
+        assert!(
+            h2_post.height < h2_init.height,
+            "Adjacent Window 2 height must decrease"
+        );
+        assert_eq!(
+            h3_post.height, h3_init.height,
+            "Non-adjacent Window 3 height must remain strictly unchanged"
+        );
     }
 
     #[test]
@@ -792,12 +890,24 @@ mod tests {
         let r_right = calculate_master_right(&[1, 2, 3], &screen, &config);
         assert_eq!(r_right.len(), 3);
         // Master window (index 0) must be to the right of stack windows (index 1, 2)
-        assert!(r_right[0].x > r_right[1].x, "Master must be to the right of stack");
-        assert_eq!(r_right[1].x, r_right[2].x, "Stack windows must be in the same vertical column");
-        assert!(r_right[1].y < r_right[2].y, "Stack window 2 must be above stack window 3");
+        assert!(
+            r_right[0].x > r_right[1].x,
+            "Master must be to the right of stack"
+        );
+        assert_eq!(
+            r_right[1].x, r_right[2].x,
+            "Stack windows must be in the same vertical column"
+        );
+        assert!(
+            r_right[1].y < r_right[2].y,
+            "Stack window 2 must be above stack window 3"
+        );
         for i in 0..3 {
             for j in (i + 1)..3 {
-                assert!(!r_right[i].overlaps(&r_right[j]), "Windows must not overlap in master-right");
+                assert!(
+                    !r_right[i].overlaps(&r_right[j]),
+                    "Windows must not overlap in master-right"
+                );
             }
         }
 
@@ -806,11 +916,20 @@ mod tests {
         assert_eq!(r_top.len(), 3);
         // Master window (index 0) must be above stack windows (index 1, 2)
         assert!(r_top[0].y < r_top[1].y, "Master must be above stack");
-        assert_eq!(r_top[1].y, r_top[2].y, "Stack windows must be in the same horizontal row");
-        assert!(r_top[1].x < r_top[2].x, "Stack window 2 must be to the left of stack window 3");
+        assert_eq!(
+            r_top[1].y, r_top[2].y,
+            "Stack windows must be in the same horizontal row"
+        );
+        assert!(
+            r_top[1].x < r_top[2].x,
+            "Stack window 2 must be to the left of stack window 3"
+        );
         for i in 0..3 {
             for j in (i + 1)..3 {
-                assert!(!r_top[i].overlaps(&r_top[j]), "Windows must not overlap in master-top");
+                assert!(
+                    !r_top[i].overlaps(&r_top[j]),
+                    "Windows must not overlap in master-top"
+                );
             }
         }
 
@@ -819,11 +938,20 @@ mod tests {
         assert_eq!(r_bot.len(), 3);
         // Master window (index 0) must be below stack windows (index 1, 2)
         assert!(r_bot[0].y > r_bot[1].y, "Master must be below stack");
-        assert_eq!(r_bot[1].y, r_bot[2].y, "Stack windows must be in the same horizontal row");
-        assert!(r_bot[1].x < r_bot[2].x, "Stack window 2 must be to the left of stack window 3");
+        assert_eq!(
+            r_bot[1].y, r_bot[2].y,
+            "Stack windows must be in the same horizontal row"
+        );
+        assert!(
+            r_bot[1].x < r_bot[2].x,
+            "Stack window 2 must be to the left of stack window 3"
+        );
         for i in 0..3 {
             for j in (i + 1)..3 {
-                assert!(!r_bot[i].overlaps(&r_bot[j]), "Windows must not overlap in master-bottom");
+                assert!(
+                    !r_bot[i].overlaps(&r_bot[j]),
+                    "Windows must not overlap in master-bottom"
+                );
             }
         }
 
@@ -831,11 +959,15 @@ mod tests {
         let mut tree = BspTree::new();
 
         tree.rebuild_for_layout(LayoutType::MasterStack, &[1, 2, 3], 0.60);
-        let ratio = tree.master_ratio_for_layout(LayoutType::MasterStack).unwrap();
+        let ratio = tree
+            .master_ratio_for_layout(LayoutType::MasterStack)
+            .unwrap();
         assert!((ratio - 0.60).abs() < 0.01);
 
         tree.rebuild_for_layout(LayoutType::MasterRight, &[1, 2, 3], 0.60);
-        let ratio = tree.master_ratio_for_layout(LayoutType::MasterRight).unwrap();
+        let ratio = tree
+            .master_ratio_for_layout(LayoutType::MasterRight)
+            .unwrap();
         assert!((ratio - 0.60).abs() < 0.01);
 
         tree.rebuild_for_layout(LayoutType::MasterTop, &[1, 2, 3], 0.60);
@@ -843,7 +975,9 @@ mod tests {
         assert!((ratio - 0.60).abs() < 0.01);
 
         tree.rebuild_for_layout(LayoutType::MasterBottom, &[1, 2, 3], 0.60);
-        let ratio = tree.master_ratio_for_layout(LayoutType::MasterBottom).unwrap();
+        let ratio = tree
+            .master_ratio_for_layout(LayoutType::MasterBottom)
+            .unwrap();
         assert!((ratio - 0.60).abs() < 0.01);
 
         // 5. Center Master (Stack Left: B, D; Master Center; Stack Right: C, E)
@@ -865,12 +999,17 @@ mod tests {
 
         for i in 0..5 {
             for j in (i + 1)..5 {
-                assert!(!r_center[i].overlaps(&r_center[j]), "Windows must not overlap in center-master");
+                assert!(
+                    !r_center[i].overlaps(&r_center[j]),
+                    "Windows must not overlap in center-master"
+                );
             }
         }
 
         tree.rebuild_for_layout(LayoutType::CenterMaster, &[1, 2, 3, 4, 5], 0.60);
-        let ratio = tree.master_ratio_for_layout(LayoutType::CenterMaster).unwrap();
+        let ratio = tree
+            .master_ratio_for_layout(LayoutType::CenterMaster)
+            .unwrap();
         assert!((ratio - 0.60).abs() < 0.05);
     }
 
@@ -948,7 +1087,8 @@ mod tests {
                 idx
             );
             assert!(
-                r.y + (r.height + 2 * config.border_width) as i32 <= screen.y + screen.height as i32,
+                r.y + (r.height + 2 * config.border_width) as i32
+                    <= screen.y + screen.height as i32,
                 "Window {} height extends beyond screen",
                 idx
             );
@@ -1069,8 +1209,24 @@ mod tests {
         // 1. Dragging Master (Window 1) vertically does NOT affect stack windows (no vertical split)
         assert!(!tree.resize_by_pointer(1, 0, 50, r1_init));
         let rects_no_change = tree.calculate_rects(&screen, &config);
-        assert_eq!(rects_no_change.iter().find(|(w, _)| *w == 2).unwrap().1.height, 400);
-        assert_eq!(rects_no_change.iter().find(|(w, _)| *w == 3).unwrap().1.height, 400);
+        assert_eq!(
+            rects_no_change
+                .iter()
+                .find(|(w, _)| *w == 2)
+                .unwrap()
+                .1
+                .height,
+            400
+        );
+        assert_eq!(
+            rects_no_change
+                .iter()
+                .find(|(w, _)| *w == 3)
+                .unwrap()
+                .1
+                .height,
+            400
+        );
 
         // 2. Dragging Stack Top (Window 2) down (+80px) increases Window 2 height and decreases Window 3 height
         assert!(tree.resize_by_pointer(2, 0, 80, r2_init));
@@ -1078,7 +1234,10 @@ mod tests {
         let r1_v = rects_v.iter().find(|(w, _)| *w == 1).unwrap().1;
         let r2_v = rects_v.iter().find(|(w, _)| *w == 2).unwrap().1;
         let r3_v = rects_v.iter().find(|(w, _)| *w == 3).unwrap().1;
-        assert_eq!(r1_v.width, 600, "Master width must remain strictly unchanged");
+        assert_eq!(
+            r1_v.width, 600,
+            "Master width must remain strictly unchanged"
+        );
         assert_eq!(r2_v.height, 480);
         assert_eq!(r3_v.height, 320);
     }

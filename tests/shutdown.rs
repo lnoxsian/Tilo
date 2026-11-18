@@ -1,13 +1,13 @@
 use std::process::{Child, Command};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
+use tilo::WmState;
+use tilo::keybind::{Action, MOD_SHIFT, MOD_SUPER, XK_Q, default_keybindings};
 use tilo::perform_graceful_shutdown;
 use tilo::rules::{RuleAction, RuleCondition, WindowRule};
 use tilo::wm::WindowManager;
 use tilo::x11::X11Context;
-use tilo::keybind::{default_keybindings, Action, MOD_SHIFT, MOD_SUPER, XK_Q};
-use tilo::WmState;
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::{
     AtomEnum, ConnectionExt, CreateWindowAux, InputFocus, MapState, PropMode, WindowClass,
@@ -160,11 +160,16 @@ fn test_graceful_shutdown_restores_borders_and_maps_all_windows() {
 
         // Verify win2 was unmapped on workspace 2
         client_conn.sync().unwrap();
-        let attrs2_before = client_conn.get_window_attributes(win2).unwrap().reply().unwrap();
+        let attrs2_before = client_conn
+            .get_window_attributes(win2)
+            .unwrap()
+            .reply()
+            .unwrap();
         assert_eq!(attrs2_before.map_state, MapState::UNMAPPED);
 
         // Execute graceful shutdown
-        wm.perform_graceful_shutdown().expect("perform_graceful_shutdown");
+        wm.perform_graceful_shutdown()
+            .expect("perform_graceful_shutdown");
 
         // 1. WM event loop stopped and state cleared
         assert!(!wm.running);
@@ -172,11 +177,18 @@ fn test_graceful_shutdown_restores_borders_and_maps_all_windows() {
 
         // 2. Borders restored to 0 on win1
         let geom1_after = client_conn.get_geometry(win1).unwrap().reply().unwrap();
-        assert_eq!(geom1_after.border_width, 0, "Borders must be reset to 0 upon shutdown");
+        assert_eq!(
+            geom1_after.border_width, 0,
+            "Borders must be reset to 0 upon shutdown"
+        );
 
         // 3. Inactive workspace window (win2) is mapped so it's not hidden after WM exits
         client_conn.sync().unwrap();
-        let attrs2_after = client_conn.get_window_attributes(win2).unwrap().reply().unwrap();
+        let attrs2_after = client_conn
+            .get_window_attributes(win2)
+            .unwrap()
+            .reply()
+            .unwrap();
         assert_ne!(
             attrs2_after.map_state,
             MapState::UNMAPPED,
@@ -208,14 +220,19 @@ fn test_graceful_shutdown_releases_substructure_and_allows_reacquisition() {
         let root = screen.root;
 
         let res = perform_graceful_shutdown(&client_conn, &mut wm1);
-        assert!(res.is_ok(), "Free function perform_graceful_shutdown failed");
+        assert!(
+            res.is_ok(),
+            "Free function perform_graceful_shutdown failed"
+        );
         assert!(!wm1.running);
         assert!(wm1.statusbar.is_none());
 
         // Step 3: Verify input focus reverted to PointerRoot (or root)
         let focus_reply = client_conn.get_input_focus().unwrap().reply().unwrap();
         assert!(
-            focus_reply.focus == root || focus_reply.focus == x11rb::NONE || focus_reply.revert_to == InputFocus::POINTER_ROOT,
+            focus_reply.focus == root
+                || focus_reply.focus == x11rb::NONE
+                || focus_reply.revert_to == InputFocus::POINTER_ROOT,
             "Focus should revert cleanly to PointerRoot"
         );
 
@@ -260,8 +277,18 @@ fn test_desktop_shutdown_closes_apps_gracefully() {
             )
             .expect("Create win");
 
-        let wm_protocols = client_conn.intern_atom(false, b"WM_PROTOCOLS").unwrap().reply().unwrap().atom;
-        let wm_delete_window = client_conn.intern_atom(false, b"WM_DELETE_WINDOW").unwrap().reply().unwrap().atom;
+        let wm_protocols = client_conn
+            .intern_atom(false, b"WM_PROTOCOLS")
+            .unwrap()
+            .reply()
+            .unwrap()
+            .atom;
+        let wm_delete_window = client_conn
+            .intern_atom(false, b"WM_DELETE_WINDOW")
+            .unwrap()
+            .reply()
+            .unwrap()
+            .atom;
         client_conn
             .change_property32(
                 PropMode::REPLACE,
@@ -289,25 +316,29 @@ fn test_desktop_shutdown_closes_apps_gracefully() {
 
         let client_thread = std::thread::spawn(move || {
             for _ in 0..50 {
-                if let Ok(Some(ev)) = client_conn.poll_for_event() {
-                    if let x11rb::protocol::Event::ClientMessage(msg) = ev {
-                        if msg.type_ == wm_protocols && msg.data.as_data32()[0] == wm_delete_window {
-                            flag_clone.store(true, Ordering::SeqCst);
-                            let _ = client_conn.destroy_window(win);
-                            let _ = client_conn.flush();
-                            break;
-                        }
-                    }
+                if let Ok(Some(ev)) = client_conn.poll_for_event()
+                    && let x11rb::protocol::Event::ClientMessage(msg) = ev
+                    && msg.type_ == wm_protocols
+                    && msg.data.as_data32()[0] == wm_delete_window
+                {
+                    flag_clone.store(true, Ordering::SeqCst);
+                    let _ = client_conn.destroy_window(win);
+                    let _ = client_conn.flush();
+                    break;
                 }
                 std::thread::sleep(Duration::from_millis(20));
             }
         });
 
         // Trigger desktop shutdown
-        wm.perform_desktop_shutdown(Some(Duration::from_millis(1500))).expect("desktop shutdown");
+        wm.perform_desktop_shutdown(Some(Duration::from_millis(1500)))
+            .expect("desktop shutdown");
         let _ = client_thread.join();
 
-        assert!(received_delete.load(Ordering::SeqCst), "Client must receive WM_DELETE_WINDOW");
+        assert!(
+            received_delete.load(Ordering::SeqCst),
+            "Client must receive WM_DELETE_WINDOW"
+        );
         assert!(!wm.running, "WM running state must be false");
         assert_eq!(wm.client_state.len(), 0, "All clients must be unmanaged");
     }
@@ -355,13 +386,17 @@ fn test_desktop_shutdown_forcefully_terminates_unresponsive_clients() {
         assert_eq!(wm.client_state.len(), 1);
 
         // Perform desktop shutdown with a short timeout (150ms)
-        wm.perform_desktop_shutdown(Some(Duration::from_millis(150))).expect("desktop shutdown");
+        wm.perform_desktop_shutdown(Some(Duration::from_millis(150)))
+            .expect("desktop shutdown");
 
         assert!(!wm.running);
         assert_eq!(wm.client_state.len(), 0);
 
         // Client connection should be disconnected by XKillClient
-        assert!(client_conn.sync().is_err(), "Unresponsive client connection must be severed by KillClient");
+        assert!(
+            client_conn.sync().is_err(),
+            "Unresponsive client connection must be severed by KillClient"
+        );
     }
 }
 
@@ -406,7 +441,8 @@ fn test_desktop_shutdown_closes_scratchpad_window() {
         wm.set_scratchpad_client(win);
         assert_eq!(wm.scratchpad.client, Some(win));
 
-        wm.perform_desktop_shutdown(Some(Duration::from_millis(150))).expect("desktop shutdown");
+        wm.perform_desktop_shutdown(Some(Duration::from_millis(150)))
+            .expect("desktop shutdown");
 
         assert!(!wm.running);
         assert_eq!(wm.scratchpad.client, None);
@@ -461,4 +497,3 @@ fn test_execute_power_action_logout_performs_desktop_shutdown() {
         assert_eq!(wm.client_state.len(), 0);
     }
 }
-

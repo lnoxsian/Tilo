@@ -61,8 +61,8 @@ fn test_focus_and_spatial_navigation_in_xephyr() {
 
     let xephyr = XephyrServer::start(95);
     if let Some(server) = xephyr {
-        let wm_ctx = X11Context::connect_to(Some(&server.display))
-            .expect("WM context connect failed");
+        let wm_ctx =
+            X11Context::connect_to(Some(&server.display)).expect("WM context connect failed");
         assert!(wm_ctx.become_wm().is_ok());
 
         let mut wm = WindowManager::new(wm_ctx).expect("Failed to initialize WM");

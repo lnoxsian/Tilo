@@ -64,8 +64,8 @@ fn test_fullscreen_mode_in_xephyr() {
 
     let xephyr = XephyrServer::start(95);
     if let Some(server) = xephyr {
-        let wm_ctx = X11Context::connect_to(Some(&server.display))
-            .expect("WM context connect failed");
+        let wm_ctx =
+            X11Context::connect_to(Some(&server.display)).expect("WM context connect failed");
         assert!(wm_ctx.become_wm().is_ok());
 
         let mut wm = WindowManager::new(wm_ctx).expect("Failed to initialize WM");
@@ -132,11 +132,17 @@ fn test_fullscreen_mode_in_xephyr() {
         assert_eq!(geom1_fs.y, 0);
         assert_eq!(geom1_fs.width, screen_width);
         assert_eq!(geom1_fs.height, screen_height);
-        assert_eq!(geom1_fs.border_width, 0, "Fullscreen window must have 0 border width");
+        assert_eq!(
+            geom1_fs.border_width, 0,
+            "Fullscreen window must have 0 border width"
+        );
 
         // The remaining tiled client (win2) expands to fill the entire workspace while win1 is fullscreen
         let geom2_while_fs = client_conn.get_geometry(win2).unwrap().reply().unwrap();
-        assert!(geom2_while_fs.width > 900, "win2 should expand to fill workspace when win1 is fullscreen");
+        assert!(
+            geom2_while_fs.width > 900,
+            "win2 should expand to fill workspace when win1 is fullscreen"
+        );
 
         // 3. Toggle win1 Off Fullscreen via Action::ToggleFullscreen
         wm.focus_client(win1).unwrap();
@@ -194,7 +200,11 @@ fn test_fullscreen_mode_in_xephyr() {
         wm.handle_client_message(&event_add).unwrap();
         client_conn.sync().unwrap();
         assert!(wm.client_state.get_client(win1).unwrap().is_fullscreen());
-        assert!(get_net_wm_state(&client_conn, win1, &ewmh).unwrap().contains(&ewmh.net_wm_state_fullscreen));
+        assert!(
+            get_net_wm_state(&client_conn, win1, &ewmh)
+                .unwrap()
+                .contains(&ewmh.net_wm_state_fullscreen)
+        );
 
         // Remove (action = 0)
         let event_remove = ClientMessageEvent::new(
@@ -206,7 +216,11 @@ fn test_fullscreen_mode_in_xephyr() {
         wm.handle_client_message(&event_remove).unwrap();
         client_conn.sync().unwrap();
         assert!(!wm.client_state.get_client(win1).unwrap().is_fullscreen());
-        assert!(!get_net_wm_state(&client_conn, win1, &ewmh).unwrap().contains(&ewmh.net_wm_state_fullscreen));
+        assert!(
+            !get_net_wm_state(&client_conn, win1, &ewmh)
+                .unwrap()
+                .contains(&ewmh.net_wm_state_fullscreen)
+        );
 
         // Toggle (action = 2)
         let event_toggle = ClientMessageEvent::new(
@@ -218,7 +232,11 @@ fn test_fullscreen_mode_in_xephyr() {
         wm.handle_client_message(&event_toggle).unwrap();
         client_conn.sync().unwrap();
         assert!(wm.client_state.get_client(win1).unwrap().is_fullscreen());
-        assert!(get_net_wm_state(&client_conn, win1, &ewmh).unwrap().contains(&ewmh.net_wm_state_fullscreen));
+        assert!(
+            get_net_wm_state(&client_conn, win1, &ewmh)
+                .unwrap()
+                .contains(&ewmh.net_wm_state_fullscreen)
+        );
 
         // 6. Test destroying/closing a fullscreen window
         wm.unmanage_window(win1);

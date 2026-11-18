@@ -62,7 +62,12 @@ fn test_become_wm_conflict_on_active_wm() {
 #[test]
 fn test_become_wm_success_and_contention_in_xephyr() {
     // Only run if Xephyr is available
-    if Command::new("which").arg("Xephyr").output().map(|o| o.status.success()).unwrap_or(false) {
+    if Command::new("which")
+        .arg("Xephyr")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+    {
         let xephyr = XephyrServer::start(94);
         if let Some(server) = xephyr {
             // First WM instance connects and becomes WM
@@ -80,7 +85,10 @@ fn test_become_wm_success_and_contention_in_xephyr() {
                 Err(X11Error::AnotherWmRunning) => {
                     // Correctly rejected second WM!
                 }
-                other => panic!("Expected AnotherWmRunning for second instance, got: {:?}", other),
+                other => panic!(
+                    "Expected AnotherWmRunning for second instance, got: {:?}",
+                    other
+                ),
             }
         }
     }

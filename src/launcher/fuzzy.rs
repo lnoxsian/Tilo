@@ -84,7 +84,10 @@ fn find_ignore_case(haystack: &str, needle: &str) -> Option<usize> {
         }
         for (char_idx, (byte_idx, _)) in haystack.char_indices().enumerate() {
             let sub = &haystack[byte_idx..];
-            if sub.chars().zip(needle.chars()).all(|(a, b)| a.eq_ignore_ascii_case(&b))
+            if sub
+                .chars()
+                .zip(needle.chars())
+                .all(|(a, b)| a.eq_ignore_ascii_case(&b))
                 && sub.chars().count() >= n_len
             {
                 return Some(char_idx);
@@ -108,7 +111,9 @@ fn score_item(item: &str, query: &str) -> Option<i32> {
     } else if let Some(fuzzy_score) = fuzzy_match(query, item) {
         let first_char = query.chars().next();
         let starts_with_first = first_char.is_some_and(|fc| {
-            item.chars().next().is_some_and(|ic| ic.eq_ignore_ascii_case(&fc))
+            item.chars()
+                .next()
+                .is_some_and(|ic| ic.eq_ignore_ascii_case(&fc))
         });
         if starts_with_first {
             Some(1500 + fuzzy_score * 10 - (item.len() as i32))

@@ -13,7 +13,7 @@
 //! - Status metrics rendering (RAM, CPU, Clock, Layout).
 
 pub mod font;
-pub use font::{parse_font_spec, resolve_font_file, FontEngine};
+pub use font::{FontEngine, parse_font_spec, resolve_font_file};
 
 use crate::layout::Rect;
 use crate::statusbar::{ColorScheme, StatusModule, StatusbarError, TiloError};
@@ -21,9 +21,7 @@ use crate::x11::X11Error;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use x11rb::connection::Connection;
-use x11rb::protocol::xproto::{
-    ChangeGCAux, ConnectionExt, CreateGCAux, ImageFormat, Rectangle,
-};
+use x11rb::protocol::xproto::{ChangeGCAux, ConnectionExt, CreateGCAux, ImageFormat, Rectangle};
 
 /// Determines if a font specification should use the ultra-low-memory X11 Core font engine.
 pub fn is_core_font_spec(font_name: &str) -> bool {
@@ -110,16 +108,17 @@ impl Renderer {
         }
         // query_font round-trips to X server, ensuring the font name is valid
         if let Ok(cookie) = conn.query_font(font_id)
-            && let Ok(reply) = cookie.reply() {
-                let ascent = reply.font_ascent;
-                let descent = reply.font_descent;
-                let width = if reply.max_bounds.character_width > 0 {
-                    reply.max_bounds.character_width as u16
-                } else {
-                    8
-                };
-                return Ok((font_id, ascent, descent, width));
-            }
+            && let Ok(reply) = cookie.reply()
+        {
+            let ascent = reply.font_ascent;
+            let descent = reply.font_descent;
+            let width = if reply.max_bounds.character_width > 0 {
+                reply.max_bounds.character_width as u16
+            } else {
+                8
+            };
+            return Ok((font_id, ascent, descent, width));
+        }
         let _ = conn.close_font(font_id);
         Err(())
     }
@@ -139,7 +138,12 @@ impl Renderer {
         }
 
         // Standard core X11 fonts that are guaranteed to exist on any X11 server
-        for fallback in &["fixed", "6x13", "9x15", "-misc-fixed-medium-r-*-*-13-*-*-*-*-*-*-*"] {
+        for fallback in &[
+            "fixed",
+            "6x13",
+            "9x15",
+            "-misc-fixed-medium-r-*-*-13-*-*-*-*-*-*-*",
+        ] {
             if let Ok((font_id, _, _, _)) = Self::try_open_font(conn, fallback) {
                 return Ok(font_id);
             }
@@ -186,13 +190,19 @@ impl Renderer {
         let is_core = is_explicit_core || font_engine_opt.is_none();
 
         // 2. Metrics calculation: from FontEngine if loaded, otherwise from core X11 font
-        let (font_id, core_ascent, core_descent, core_width) = if let Some(ref fe) = font_engine_opt {
+        let (font_id, core_ascent, core_descent, core_width) = if let Some(ref fe) = font_engine_opt
+        {
             (0, fe.ascent, fe.descent, fe.char_width)
         } else if let Ok(res) = Self::try_open_font(conn, clean_name) {
             res
         } else {
             let mut loaded = None;
-            for fallback in &["fixed", "6x13", "9x15", "-misc-fixed-medium-r-*-*-13-*-*-*-*-*-*-*"] {
+            for fallback in &[
+                "fixed",
+                "6x13",
+                "9x15",
+                "-misc-fixed-medium-r-*-*-13-*-*-*-*-*-*-*",
+            ] {
                 if let Ok(res) = Self::try_open_font(conn, fallback) {
                     loaded = Some(res);
                     break;
@@ -314,7 +324,8 @@ impl Renderer {
                     let glyph_w = metrics.width;
                     let glyph_h = metrics.height;
 
-                    let is_horizontally_inside = left_x >= 0 && (left_x + glyph_w as i32) <= fb_w as i32;
+                    let is_horizontally_inside =
+                        left_x >= 0 && (left_x + glyph_w as i32) <= fb_w as i32;
 
                     for r in 0..glyph_h {
                         let screen_y = top_y + r as i32;
@@ -327,7 +338,8 @@ impl Renderer {
                         if is_horizontally_inside {
                             // Fast path: contiguous unclipped row slice enables auto-vectorization
                             let x_start = left_x as usize;
-                            let row_slice = &mut fb[row_offset + x_start..row_offset + x_start + glyph_w];
+                            let row_slice =
+                                &mut fb[row_offset + x_start..row_offset + x_start + glyph_w];
                             for c in 0..glyph_w {
                                 let coverage = bitmap[bitmap_row + c] as u32;
                                 if coverage == 0 {
@@ -400,9 +412,10 @@ impl Renderer {
 
         if !self.is_core
             && let Some(ref fe) = self.font_engine
-            && let Some(ref fb_cell) = self.framebuffer {
-                self.draw_text_software(&mut fb_cell.borrow_mut(), fe, x, y, text, color);
-                return Ok(());
+            && let Some(ref fb_cell) = self.framebuffer
+        {
+            self.draw_text_software(&mut fb_cell.borrow_mut(), fe, x, y, text, color);
+            return Ok(());
         }
 
         // Core X11 font rendering path (zero heap allocations)
@@ -443,9 +456,10 @@ impl Renderer {
         color: u32,
     ) -> Result<(), StatusbarError> {
         if !self.is_core
-            && let Some(ref fb_cell) = self.framebuffer {
-                self.fill_rect_software(&mut fb_cell.borrow_mut(), x, y, width, height, color);
-                return Ok(());
+            && let Some(ref fb_cell) = self.framebuffer
+        {
+            self.fill_rect_software(&mut fb_cell.borrow_mut(), x, y, width, height, color);
+            return Ok(());
         }
 
         // Core X11 fill path (zero heap allocations)
@@ -468,26 +482,27 @@ impl Renderer {
         }
 
         if !self.is_core
-            && let Some(ref fe) = self.font_engine {
-                if let Some(&w) = self.text_width_cache.borrow().get(text) {
-                    return w;
-                }
+            && let Some(ref fe) = self.font_engine
+        {
+            if let Some(&w) = self.text_width_cache.borrow().get(text) {
+                return w;
+            }
 
-                let mut width_px = 0.0f32;
-                for ch in text.chars() {
-                    width_px += fe.char_advance(ch);
-                }
-                let width = width_px.round() as u16;
+            let mut width_px = 0.0f32;
+            for ch in text.chars() {
+                width_px += fe.char_advance(ch);
+            }
+            let width = width_px.round() as u16;
 
-                if text.len() <= 32 && !text.contains(':') {
-                    let mut cache = self.text_width_cache.borrow_mut();
-                    if cache.len() >= 256 {
-                        cache.clear();
-                    }
-                    cache.insert(text.to_string(), width);
+            if text.len() <= 32 && !text.contains(':') {
+                let mut cache = self.text_width_cache.borrow_mut();
+                if cache.len() >= 256 {
+                    cache.clear();
                 }
+                cache.insert(text.to_string(), width);
+            }
 
-                return width;
+            return width;
         }
 
         (text.chars().count() as u16) * self.char_width
@@ -535,19 +550,24 @@ impl Renderer {
         self.depth = depth;
 
         if !self.is_core
-            && let Some(ref fb_cell) = self.framebuffer {
-                let new_len = (new_width as usize) * (new_height as usize);
-                let mut fb = fb_cell.borrow_mut();
-                fb.resize(new_len, 0);
-                self.text_width_cache.borrow_mut().clear();
-                crate::process::trim_memory();
+            && let Some(ref fb_cell) = self.framebuffer
+        {
+            let new_len = (new_width as usize) * (new_height as usize);
+            let mut fb = fb_cell.borrow_mut();
+            fb.resize(new_len, 0);
+            self.text_width_cache.borrow_mut().clear();
+            crate::process::trim_memory();
         }
 
         Ok(())
     }
 
     /// Copies the existing off-screen pixmap directly onto the target window.
-    pub fn copy_pixmap_to_window(&self, conn: &impl Connection, window: u32) -> Result<(), StatusbarError> {
+    pub fn copy_pixmap_to_window(
+        &self,
+        conn: &impl Connection,
+        window: u32,
+    ) -> Result<(), StatusbarError> {
         conn.copy_area(
             self.pixmap,
             window,
@@ -558,13 +578,17 @@ impl Renderer {
             0,
             self.width,
             self.height,
-        )?.check()?;
+        )?
+        .check()?;
         conn.flush()?;
         Ok(())
     }
 
     /// Synchronizes the software framebuffer to the X11 double-buffer pixmap using `put_image`.
-    pub fn flush_framebuffer_to_pixmap(&self, conn: &impl Connection) -> Result<(), StatusbarError> {
+    pub fn flush_framebuffer_to_pixmap(
+        &self,
+        conn: &impl Connection,
+    ) -> Result<(), StatusbarError> {
         if self.is_core || self.framebuffer.is_none() {
             return Ok(());
         }
@@ -708,7 +732,11 @@ impl Renderer {
     }
 
     /// Blits the fully rendered off-screen pixmap onto the target window in a single atomic frame.
-    pub fn flush_to_window(&self, conn: &impl Connection, window: u32) -> Result<(), StatusbarError> {
+    pub fn flush_to_window(
+        &self,
+        conn: &impl Connection,
+        window: u32,
+    ) -> Result<(), StatusbarError> {
         self.flush_area_to_window(conn, window, self.width, self.height)
     }
 
@@ -733,7 +761,8 @@ impl Renderer {
             0,
             width.min(self.width),
             height.min(self.height),
-        )?.check()?;
+        )?
+        .check()?;
         conn.flush()?;
         Ok(())
     }
@@ -757,23 +786,27 @@ impl Renderer {
         color_scheme: &ColorScheme,
         separator: &str,
     ) -> Result<crate::bar::StatusbarHitRects, StatusbarError> {
-        let do_fill_rect = |x: i16, y: i16, w: u16, h: u16, col: u32| -> Result<(), StatusbarError> {
-            if !self.is_core
-                && let Some(ref fb_cell) = self.framebuffer {
+        let do_fill_rect =
+            |x: i16, y: i16, w: u16, h: u16, col: u32| -> Result<(), StatusbarError> {
+                if !self.is_core
+                    && let Some(ref fb_cell) = self.framebuffer
+                {
                     self.fill_rect_software(&mut fb_cell.borrow_mut(), x, y, w, h, col);
                     return Ok(());
-            }
-            self.fill_rect(conn, self.pixmap, x, y, w, h, col)
-        };
+                }
+                self.fill_rect(conn, self.pixmap, x, y, w, h, col)
+            };
 
         let do_draw_text = |x: i16, y: i16, text: &str, col: u32| -> Result<(), StatusbarError> {
             if !self.is_core
                 && let Some(ref fe) = self.font_engine
-                && let Some(ref fb_cell) = self.framebuffer {
-                    self.draw_text_software(&mut fb_cell.borrow_mut(), fe, x, y, text, col);
-                    return Ok(());
+                && let Some(ref fb_cell) = self.framebuffer
+            {
+                self.draw_text_software(&mut fb_cell.borrow_mut(), fe, x, y, text, col);
+                return Ok(());
             }
-            self.draw_text(conn, self.pixmap, x, y, text, col).map_err(|e| StatusbarError::RenderError(e.to_string()))
+            self.draw_text(conn, self.pixmap, x, y, text, col)
+                .map_err(|e| StatusbarError::RenderError(e.to_string()))
         };
 
         // 1. Clear background of pixmap
@@ -791,11 +824,12 @@ impl Renderer {
             let is_occupied = occupied_workspaces.contains(&ws);
 
             let ws_str = if let Some(tag) = workspace_tags.get((ws - 1) as usize)
-                && !tag.is_empty() {
-                    tag.as_str()
-                } else {
-                    WS_STRS.get(ws as usize).copied().unwrap_or("?")
-                };
+                && !tag.is_empty()
+            {
+                tag.as_str()
+            } else {
+                WS_STRS.get(ws as usize).copied().unwrap_or("?")
+            };
             let ws_text_w = self.text_width(ws_str);
             let pad = 6i16;
             let pill_w = ws_text_w + (pad as u16 * 2);
@@ -807,39 +841,18 @@ impl Renderer {
 
             if is_active {
                 // Active workspace pill background
-                do_fill_rect(
-                    cur_x,
-                    pill_y,
-                    pill_w,
-                    pill_h,
-                    color_scheme.active_bg,
-                )?;
+                do_fill_rect(cur_x, pill_y, pill_w, pill_h, color_scheme.active_bg)?;
                 // Active workspace text
-                do_draw_text(
-                    cur_x + pad,
-                    baseline,
-                    ws_str,
-                    color_scheme.active_fg,
-                )?;
+                do_draw_text(cur_x + pad, baseline, ws_str, color_scheme.active_fg)?;
             } else if is_occupied {
                 // Occupied workspace indicator
-                do_draw_text(
-                    cur_x + pad,
-                    baseline,
-                    ws_str,
-                    color_scheme.fg,
-                )?;
+                do_draw_text(cur_x + pad, baseline, ws_str, color_scheme.fg)?;
                 // Small indicator dot/asterisk
                 let dot_x = cur_x + pad + ws_text_w as i16;
                 do_draw_text(dot_x, baseline - 2, "*", color_scheme.active_bg)?;
             } else {
                 // Inactive empty workspace
-                do_draw_text(
-                    cur_x + pad,
-                    baseline,
-                    ws_str,
-                    color_scheme.inactive_fg,
-                )?;
+                do_draw_text(cur_x + pad, baseline, ws_str, color_scheme.inactive_fg)?;
             }
 
             cur_x += pill_w as i16 + 4;
@@ -892,7 +905,8 @@ impl Renderer {
                 );
                 for geom in &geoms {
                     let text_w = self.text_width(&geom.label) as i16;
-                    let text_x = geom.rect.x as i16 + ((geom.rect.width as i16 - text_w) / 2).max(2);
+                    let text_x =
+                        geom.rect.x as i16 + ((geom.rect.width as i16 - text_w) / 2).max(2);
                     if geom.focused {
                         do_fill_rect(
                             geom.rect.x as i16,
@@ -924,7 +938,10 @@ impl Renderer {
             if available_space > 0 {
                 let max_chars = (available_space / self.char_width.max(1) as i16).max(10) as usize;
                 let display_title = if active_window_title.chars().count() > max_chars {
-                    let truncated: String = active_window_title.chars().take(max_chars.saturating_sub(3)).collect();
+                    let truncated: String = active_window_title
+                        .chars()
+                        .take(max_chars.saturating_sub(3))
+                        .collect();
                     format!("{}...", truncated)
                 } else {
                     active_window_title.to_string()
@@ -1028,7 +1045,9 @@ mod tests {
         assert!(is_core_font_spec("6x13"));
         assert!(is_core_font_spec("9x15"));
         assert!(is_core_font_spec("core:monospace"));
-        assert!(is_core_font_spec("-misc-fixed-medium-r-*-*-13-*-*-*-*-*-*-*"));
+        assert!(is_core_font_spec(
+            "-misc-fixed-medium-r-*-*-13-*-*-*-*-*-*-*"
+        ));
 
         assert!(!is_core_font_spec("pango:monospace 10"));
         assert!(!is_core_font_spec("monospace 10"));
@@ -1112,12 +1131,26 @@ mod tests {
         // Verify all resulting strings are exactly 3 characters
         let wrapped_master = format!("[{}]", "[]=");
         let all_symbols = [
-            "[]=", "=[]", "TT=", "=TT", "|M|", "|||", "===", "><>",
-            "[G]", "[M]", "[T]", "[S]", "[B]", "[|||]", "[===]", &wrapped_master, "M",
+            "[]=",
+            "=[]",
+            "TT=",
+            "=TT",
+            "|M|",
+            "|||",
+            "===",
+            "><>",
+            "[G]",
+            "[M]",
+            "[T]",
+            "[S]",
+            "[B]",
+            "[|||]",
+            "[===]",
+            &wrapped_master,
+            "M",
         ];
         for s in all_symbols {
             assert_eq!(format_layout_symbol(s).chars().count(), 3);
         }
     }
 }
-

@@ -50,9 +50,9 @@ pub const XK_F12: Keysym = 0xffc9;
 
 // Multimedia Keysym Constants (XF86Audio*)
 pub const XF86_AUDIO_LOWER_VOLUME: Keysym = 0x1008_ff11;
-pub const XF86_AUDIO_MUTE:         Keysym = 0x1008_ff12;
+pub const XF86_AUDIO_MUTE: Keysym = 0x1008_ff12;
 pub const XF86_AUDIO_RAISE_VOLUME: Keysym = 0x1008_ff13;
-pub const XF86_AUDIO_MIC_MUTE:     Keysym = 0x1008_ffb2;
+pub const XF86_AUDIO_MIC_MUTE: Keysym = 0x1008_ffb2;
 
 pub const XK_A: Keysym = 0x0061;
 pub const XK_B: Keysym = 0x0062;
@@ -288,8 +288,7 @@ pub fn parse_keybind(spec: &str, action: Action) -> Result<KeyBind, String> {
         }
     }
 
-    let keysym = parse_keysym(key_part)
-        .ok_or_else(|| format!("Unknown keysym: {}", key_part))?;
+    let keysym = parse_keysym(key_part).ok_or_else(|| format!("Unknown keysym: {}", key_part))?;
 
     Ok(KeyBind::new(modifiers, keysym, action))
 }
@@ -298,11 +297,7 @@ pub fn parse_keybind(spec: &str, action: Action) -> Result<KeyBind, String> {
 pub fn default_keybindings() -> Vec<KeyBind> {
     vec![
         // Applications
-        KeyBind::new(
-            MOD_SUPER,
-            XK_RETURN,
-            Action::Spawn("alacritty".to_string()),
-        ),
+        KeyBind::new(MOD_SUPER, XK_RETURN, Action::Spawn("alacritty".to_string())),
         // Window Management & Exit
         KeyBind::new(MOD_SUPER | MOD_SHIFT, XK_Q, Action::Exit),
         KeyBind::new(MOD_SUPER, XK_Q, Action::Close),
@@ -322,10 +317,22 @@ pub fn default_keybindings() -> Vec<KeyBind> {
         KeyBind::new(MOD_SUPER | MOD_SHIFT, XK_K, Action::Move(Direction::Up)),
         KeyBind::new(MOD_SUPER | MOD_SHIFT, XK_L, Action::Move(Direction::Right)),
         // Window Movement (Arrow keys)
-        KeyBind::new(MOD_SUPER | MOD_SHIFT, XK_LEFT, Action::Move(Direction::Left)),
-        KeyBind::new(MOD_SUPER | MOD_SHIFT, XK_DOWN, Action::Move(Direction::Down)),
+        KeyBind::new(
+            MOD_SUPER | MOD_SHIFT,
+            XK_LEFT,
+            Action::Move(Direction::Left),
+        ),
+        KeyBind::new(
+            MOD_SUPER | MOD_SHIFT,
+            XK_DOWN,
+            Action::Move(Direction::Down),
+        ),
         KeyBind::new(MOD_SUPER | MOD_SHIFT, XK_UP, Action::Move(Direction::Up)),
-        KeyBind::new(MOD_SUPER | MOD_SHIFT, XK_RIGHT, Action::Move(Direction::Right)),
+        KeyBind::new(
+            MOD_SUPER | MOD_SHIFT,
+            XK_RIGHT,
+            Action::Move(Direction::Right),
+        ),
         // Window States & Launcher & Scratchpad
         KeyBind::new(MOD_SUPER, XK_F, Action::ToggleFullscreen),
         KeyBind::new(MOD_SUPER, XK_D, Action::Launcher),
@@ -362,13 +369,37 @@ pub fn default_keybindings() -> Vec<KeyBind> {
         KeyBind::new(MOD_SUPER | MOD_SHIFT, XK_COMMA, Action::FocusMonitorLeft),
         KeyBind::new(MOD_SUPER | MOD_SHIFT, XK_PERIOD, Action::FocusMonitorRight),
         // BSP Tile Resizing
-        KeyBind::new(MOD_SUPER | MOD_CONTROL, XK_LEFT, Action::ResizeTile(Direction::Left)),
-        KeyBind::new(MOD_SUPER | MOD_CONTROL, XK_RIGHT, Action::ResizeTile(Direction::Right)),
-        KeyBind::new(MOD_SUPER | MOD_CONTROL, XK_UP, Action::ResizeTile(Direction::Up)),
-        KeyBind::new(MOD_SUPER | MOD_CONTROL, XK_DOWN, Action::ResizeTile(Direction::Down)),
+        KeyBind::new(
+            MOD_SUPER | MOD_CONTROL,
+            XK_LEFT,
+            Action::ResizeTile(Direction::Left),
+        ),
+        KeyBind::new(
+            MOD_SUPER | MOD_CONTROL,
+            XK_RIGHT,
+            Action::ResizeTile(Direction::Right),
+        ),
+        KeyBind::new(
+            MOD_SUPER | MOD_CONTROL,
+            XK_UP,
+            Action::ResizeTile(Direction::Up),
+        ),
+        KeyBind::new(
+            MOD_SUPER | MOD_CONTROL,
+            XK_DOWN,
+            Action::ResizeTile(Direction::Down),
+        ),
         // BSP Split Preselection
-        KeyBind::new(MOD_SUPER, XK_V, Action::PreselectSplit(crate::layout::SplitType::Vertical)),
-        KeyBind::new(MOD_SUPER, XK_B, Action::PreselectSplit(crate::layout::SplitType::Horizontal)),
+        KeyBind::new(
+            MOD_SUPER,
+            XK_V,
+            Action::PreselectSplit(crate::layout::SplitType::Vertical),
+        ),
+        KeyBind::new(
+            MOD_SUPER,
+            XK_B,
+            Action::PreselectSplit(crate::layout::SplitType::Horizontal),
+        ),
         // WM Controls
         KeyBind::new(MOD_SUPER | MOD_SHIFT, XK_R, Action::Reload),
         // Audio & Media Keys
@@ -403,7 +434,10 @@ mod tests {
         assert_eq!(parse_keysym("1"), Some(XK_1));
         assert_eq!(parse_keysym("Space"), Some(XK_SPACE));
         assert_eq!(parse_keysym("F5"), Some(XK_F5));
-        assert_eq!(parse_keysym("XF86AudioRaiseVolume"), Some(XF86_AUDIO_RAISE_VOLUME));
+        assert_eq!(
+            parse_keysym("XF86AudioRaiseVolume"),
+            Some(XF86_AUDIO_RAISE_VOLUME)
+        );
         assert_eq!(parse_keysym("VolumeDown"), Some(XF86_AUDIO_LOWER_VOLUME));
         assert_eq!(parse_keysym("VolumeMute"), Some(XF86_AUDIO_MUTE));
         assert_eq!(parse_keysym("NonExistentKey"), None);
@@ -433,14 +467,32 @@ mod tests {
         assert!(!binds.is_empty());
         assert!(binds.iter().any(|b| b.action == Action::Close));
         assert!(binds.iter().any(|b| b.action == Action::Exit));
-        assert!(binds.iter().any(|b| b.modifiers == MOD_SUPER && b.keysym == XK_R && b.action == Action::RotateMaster));
-        assert!(binds.iter().any(|b| b.modifiers == MOD_SUPER | MOD_SHIFT && b.keysym == XK_R && b.action == Action::Reload));
-        assert!(binds.iter().any(|b| b.modifiers == MOD_SUPER && b.keysym == XK_SPACE && b.action == Action::CycleLayout));
-        assert!(binds.iter().any(|b| b.modifiers == 0 && b.keysym == XF86_AUDIO_RAISE_VOLUME && b.action == Action::VolumeUp(5)));
-        assert!(binds.iter().any(|b| b.modifiers == 0 && b.keysym == XF86_AUDIO_LOWER_VOLUME && b.action == Action::VolumeDown(5)));
-        assert!(binds.iter().any(|b| b.modifiers == 0 && b.keysym == XF86_AUDIO_MUTE && b.action == Action::VolumeToggleMute));
-        assert!(binds.iter().any(|b| b.modifiers == MOD_SUPER && b.keysym == XK_F12 && b.action == Action::VolumeUp(5)));
-        assert!(binds.iter().any(|b| b.modifiers == MOD_SUPER && b.keysym == XK_F11 && b.action == Action::VolumeDown(5)));
-        assert!(binds.iter().any(|b| b.modifiers == MOD_SUPER && b.keysym == XK_F10 && b.action == Action::VolumeToggleMute));
+        assert!(binds.iter().any(|b| b.modifiers == MOD_SUPER
+            && b.keysym == XK_R
+            && b.action == Action::RotateMaster));
+        assert!(binds.iter().any(|b| b.modifiers == MOD_SUPER | MOD_SHIFT
+            && b.keysym == XK_R
+            && b.action == Action::Reload));
+        assert!(binds.iter().any(|b| b.modifiers == MOD_SUPER
+            && b.keysym == XK_SPACE
+            && b.action == Action::CycleLayout));
+        assert!(binds.iter().any(|b| b.modifiers == 0
+            && b.keysym == XF86_AUDIO_RAISE_VOLUME
+            && b.action == Action::VolumeUp(5)));
+        assert!(binds.iter().any(|b| b.modifiers == 0
+            && b.keysym == XF86_AUDIO_LOWER_VOLUME
+            && b.action == Action::VolumeDown(5)));
+        assert!(binds.iter().any(|b| b.modifiers == 0
+            && b.keysym == XF86_AUDIO_MUTE
+            && b.action == Action::VolumeToggleMute));
+        assert!(binds.iter().any(|b| b.modifiers == MOD_SUPER
+            && b.keysym == XK_F12
+            && b.action == Action::VolumeUp(5)));
+        assert!(binds.iter().any(|b| b.modifiers == MOD_SUPER
+            && b.keysym == XK_F11
+            && b.action == Action::VolumeDown(5)));
+        assert!(binds.iter().any(|b| b.modifiers == MOD_SUPER
+            && b.keysym == XK_F10
+            && b.action == Action::VolumeToggleMute));
     }
 }

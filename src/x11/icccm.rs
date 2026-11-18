@@ -104,23 +104,29 @@ impl WmSizeHints {
             height = height.max(min_h);
         }
         if let Some(max_w) = self.max_width
-            && max_w > 0 {
-                width = width.min(max_w);
-            }
+            && max_w > 0
+        {
+            width = width.min(max_w);
+        }
         if let Some(max_h) = self.max_height
-            && max_h > 0 {
-                height = height.min(max_h);
-            }
+            && max_h > 0
+        {
+            height = height.min(max_h);
+        }
 
         // Apply resize increments
         if let (Some(w_inc), Some(base_w)) = (self.width_inc, self.base_width.or(self.min_width))
-            && w_inc > 1 && width >= base_w {
-                width = base_w + ((width - base_w) / w_inc) * w_inc;
-            }
+            && w_inc > 1
+            && width >= base_w
+        {
+            width = base_w + ((width - base_w) / w_inc) * w_inc;
+        }
         if let (Some(h_inc), Some(base_h)) = (self.height_inc, self.base_height.or(self.min_height))
-            && h_inc > 1 && height >= base_h {
-                height = base_h + ((height - base_h) / h_inc) * h_inc;
-            }
+            && h_inc > 1
+            && height >= base_h
+        {
+            height = base_h + ((height - base_h) / h_inc) * h_inc;
+        }
 
         (width, height)
     }
@@ -217,19 +223,15 @@ pub fn supports_protocol(
     protocol: Atom,
     wm_protocols: Atom,
 ) -> Result<bool, X11Error> {
-    let reply = conn.get_property(
-        false,
-        window,
-        wm_protocols,
-        AtomEnum::ATOM,
-        0,
-        32,
-    )?.reply();
+    let reply = conn
+        .get_property(false, window, wm_protocols, AtomEnum::ATOM, 0, 32)?
+        .reply();
 
     if let Ok(prop) = reply
-        && let Some(mut atoms) = prop.value32() {
-            return Ok(atoms.any(|a| a == protocol));
-        }
+        && let Some(mut atoms) = prop.value32()
+    {
+        return Ok(atoms.any(|a| a == protocol));
+    }
     Ok(false)
 }
 
@@ -244,13 +246,7 @@ pub fn send_wm_delete(
     atoms: &IcccmAtoms,
 ) -> Result<(), X11Error> {
     if supports_protocol(conn, window, atoms.wm_delete_window, atoms.wm_protocols)? {
-        let data = [
-            atoms.wm_delete_window,
-            x11rb::CURRENT_TIME,
-            0,
-            0,
-            0,
-        ];
+        let data = [atoms.wm_delete_window, x11rb::CURRENT_TIME, 0, 0, 0];
         let event = ClientMessageEvent::new(
             32,
             window,
@@ -273,13 +269,7 @@ pub fn send_wm_take_focus(
     atoms: &IcccmAtoms,
     timestamp: x11rb::protocol::xproto::Timestamp,
 ) -> Result<(), X11Error> {
-    let data = [
-        atoms.wm_take_focus,
-        timestamp,
-        0,
-        0,
-        0,
-    ];
+    let data = [atoms.wm_take_focus, timestamp, 0, 0, 0];
     let event = ClientMessageEvent::new(
         32,
         window,
@@ -318,20 +308,16 @@ pub fn get_wm_state(
     window: Window,
     atoms: &IcccmAtoms,
 ) -> Result<Option<WmState>, X11Error> {
-    let reply = conn.get_property(
-        false,
-        window,
-        atoms.wm_state,
-        atoms.wm_state,
-        0,
-        2,
-    )?.reply();
+    let reply = conn
+        .get_property(false, window, atoms.wm_state, atoms.wm_state, 0, 2)?
+        .reply();
 
     if let Ok(prop) = reply
         && let Some(mut val32) = prop.value32()
-            && let Some(state_num) = val32.next() {
-                return Ok(WmState::from_u32(state_num));
-            }
+        && let Some(state_num) = val32.next()
+    {
+        return Ok(WmState::from_u32(state_num));
+    }
     Ok(None)
 }
 
@@ -347,33 +333,24 @@ pub fn get_wm_normal_hints(
         AtomEnum::ANY,
         0,
         32,
-    )
-        && let Ok(prop) = reply.reply()
-            && let Some(val32) = prop.value32() {
-                let vec: Vec<u32> = val32.collect();
-                return Ok(Some(parse_wm_size_hints(&vec)));
-            }
+    ) && let Ok(prop) = reply.reply()
+        && let Some(val32) = prop.value32()
+    {
+        let vec: Vec<u32> = val32.collect();
+        return Ok(Some(parse_wm_size_hints(&vec)));
+    }
     Ok(None)
 }
 
 /// Retrieves and parses `WM_HINTS` from a client window.
-pub fn get_wm_hints(
-    conn: &impl Connection,
-    window: Window,
-) -> Result<Option<WmHints>, X11Error> {
-    if let Ok(reply) = conn.get_property(
-        false,
-        window,
-        AtomEnum::WM_HINTS,
-        AtomEnum::ANY,
-        0,
-        32,
-    )
+pub fn get_wm_hints(conn: &impl Connection, window: Window) -> Result<Option<WmHints>, X11Error> {
+    if let Ok(reply) = conn.get_property(false, window, AtomEnum::WM_HINTS, AtomEnum::ANY, 0, 32)
         && let Ok(prop) = reply.reply()
-            && let Some(val32) = prop.value32() {
-                let vec: Vec<u32> = val32.collect();
-                return Ok(Some(parse_wm_hints(&vec)));
-            }
+        && let Some(val32) = prop.value32()
+    {
+        let vec: Vec<u32> = val32.collect();
+        return Ok(Some(parse_wm_hints(&vec)));
+    }
     Ok(None)
 }
 
@@ -400,8 +377,8 @@ mod tests {
         data[6] = 150; // min_height
         data[7] = 800; // max_width
         data[8] = 600; // max_height
-        data[9] = 10;  // width_inc
-        data[10] = 5;  // height_inc
+        data[9] = 10; // width_inc
+        data[10] = 5; // height_inc
 
         let hints = parse_wm_size_hints(&data);
         assert_eq!(hints.min_width, Some(200));

@@ -3,18 +3,18 @@
 use super::WindowManager;
 use crate::ewmh::NetWmStateAction;
 use crate::floating::calculate_default_floating_geometry;
-use crate::focus::{set_window_border_color, Direction};
-use crate::icccm::{get_wm_hints, get_wm_normal_hints, WmState};
+use crate::focus::{Direction, set_window_border_color};
+use crate::icccm::{WmState, get_wm_hints, get_wm_normal_hints};
 use crate::keybind::{Action, MOD_LOCK, MOD_SHIFT};
 use crate::layout::{LayoutType, Rect};
 use crate::x11::X11Error;
-use x11rb::protocol::xproto::{
-    Allow, AtomEnum, ButtonPressEvent, ButtonReleaseEvent, ClientMessageEvent,
-    ConfigWindow, ConfigureRequestEvent, ConfigureWindowAux, ConnectionExt, EnterNotifyEvent,
-    EventMask, GrabMode, KeyPressEvent, MotionNotifyEvent, NotifyDetail, NotifyMode,
-    PropertyNotifyEvent, Window,
-};
 use x11rb::protocol::Event;
+use x11rb::protocol::xproto::{
+    Allow, AtomEnum, ButtonPressEvent, ButtonReleaseEvent, ClientMessageEvent, ConfigWindow,
+    ConfigureRequestEvent, ConfigureWindowAux, ConnectionExt, EnterNotifyEvent, EventMask,
+    GrabMode, KeyPressEvent, MotionNotifyEvent, NotifyDetail, NotifyMode, PropertyNotifyEvent,
+    Window,
+};
 
 impl WindowManager {
     /// Dispatches a single X11 event to the appropriate handler method.
@@ -46,10 +46,11 @@ impl WindowManager {
             }
             Event::KeyPress(ev) => {
                 if let Some(ref launcher) = self.launcher
-                    && launcher.visible {
-                        self.handle_launcher_key(&ev)?;
-                        return Ok(());
-                    }
+                    && launcher.visible
+                {
+                    self.handle_launcher_key(&ev)?;
+                    return Ok(());
+                }
                 self.handle_key_press(&ev)?;
             }
             Event::ButtonPress(ev) => {
@@ -79,8 +80,15 @@ impl WindowManager {
             }
             Event::Expose(ev) => {
                 if ev.count == 0 {
-                    let is_primary_bar = self.statusbar.as_ref().map(|b| ev.window == b.window_id).unwrap_or(false);
-                    let is_sec_bar = self.secondary_statusbars.iter().any(|b| ev.window == b.window_id);
+                    let is_primary_bar = self
+                        .statusbar
+                        .as_ref()
+                        .map(|b| ev.window == b.window_id)
+                        .unwrap_or(false);
+                    let is_sec_bar = self
+                        .secondary_statusbars
+                        .iter()
+                        .any(|b| ev.window == b.window_id);
                     if is_primary_bar || is_sec_bar {
                         let _ = self.render_statusbar();
                     }
@@ -151,27 +159,28 @@ impl WindowManager {
                 event.window, err
             );
         } else if let Some(client) = self.client_state.get_client_mut(event.window)
-            && client.floating {
-                let mut geom = client.floating_geometry.unwrap_or_else(|| {
-                    calculate_default_floating_geometry(
-                        self.context.screen_width,
-                        self.context.screen_height,
-                    )
-                });
-                if event.value_mask.contains(ConfigWindow::X) {
-                    geom.x = i32::from(event.x);
-                }
-                if event.value_mask.contains(ConfigWindow::Y) {
-                    geom.y = i32::from(event.y);
-                }
-                if event.value_mask.contains(ConfigWindow::WIDTH) {
-                    geom.width = u32::from(event.width);
-                }
-                if event.value_mask.contains(ConfigWindow::HEIGHT) {
-                    geom.height = u32::from(event.height);
-                }
-                client.set_floating(geom);
+            && client.floating
+        {
+            let mut geom = client.floating_geometry.unwrap_or_else(|| {
+                calculate_default_floating_geometry(
+                    self.context.screen_width,
+                    self.context.screen_height,
+                )
+            });
+            if event.value_mask.contains(ConfigWindow::X) {
+                geom.x = i32::from(event.x);
             }
+            if event.value_mask.contains(ConfigWindow::Y) {
+                geom.y = i32::from(event.y);
+            }
+            if event.value_mask.contains(ConfigWindow::WIDTH) {
+                geom.width = u32::from(event.width);
+            }
+            if event.value_mask.contains(ConfigWindow::HEIGHT) {
+                geom.height = u32::from(event.height);
+            }
+            client.set_floating(geom);
+        }
         Ok(())
     }
 
@@ -179,21 +188,23 @@ impl WindowManager {
     pub fn handle_destroy_notify(&mut self, window: Window) -> Result<(), X11Error> {
         // If launcher overlay window was destroyed, close and reset launcher state cleanly
         if let Some(ref mut launcher) = self.launcher
-            && launcher.window_id == window {
-                launcher.window_id = 0;
-                launcher.visible = false;
-                let _ = self.context.connection.ungrab_keyboard(x11rb::CURRENT_TIME);
-                if let Some(focused) = self.focused_window() {
-                    let _ = self.focus_client(focused);
-                }
-                return Ok(());
+            && launcher.window_id == window
+        {
+            launcher.window_id = 0;
+            launcher.visible = false;
+            let _ = self.context.connection.ungrab_keyboard(x11rb::CURRENT_TIME);
+            if let Some(focused) = self.focused_window() {
+                let _ = self.focus_client(focused);
             }
+            return Ok(());
+        }
 
         // If statusbar window was destroyed, ignore
         if let Some(ref bar) = self.statusbar
-            && bar.window_id == window {
-                return Ok(());
-            }
+            && bar.window_id == window
+        {
+            return Ok(());
+        }
 
         // Only managed clients need unmanaging on destroy
         if self.client_state.contains(window) {
@@ -206,13 +217,15 @@ impl WindowManager {
     pub fn handle_unmap_notify(&mut self, window: Window) -> Result<(), X11Error> {
         // Ignore unmanaged windows such as the launcher or status bar overlay
         if let Some(ref launcher) = self.launcher
-            && launcher.window_id == window {
-                return Ok(());
-            }
+            && launcher.window_id == window
+        {
+            return Ok(());
+        }
         if let Some(ref bar) = self.statusbar
-            && bar.window_id == window {
-                return Ok(());
-            }
+            && bar.window_id == window
+        {
+            return Ok(());
+        }
         if !self.client_state.contains(window) {
             return Ok(());
         }
@@ -268,7 +281,8 @@ impl WindowManager {
             let _ = get_wm_normal_hints(&self.context.connection, event.window);
         } else if event.atom == AtomEnum::WM_NAME.into() || event.atom == self.atoms.net_wm_name {
             let title = self.get_window_title(event.window);
-            let title_changed = if let Some(client) = self.client_state.get_client_mut(event.window) {
+            let title_changed = if let Some(client) = self.client_state.get_client_mut(event.window)
+            {
                 let changed = client.title.as_deref() != Some(&title);
                 client.title = Some(title.clone());
                 changed
@@ -277,8 +291,9 @@ impl WindowManager {
             };
             if title_changed {
                 if Some(event.window) == self.focused_window()
-                    && let Some(ref mut bar) = self.statusbar {
-                        bar.set_title(&title);
+                    && let Some(ref mut bar) = self.statusbar
+                {
+                    bar.set_title(&title);
                 }
                 if let Some(ws) = self.workspace_manager.find_workspace_for(event.window)
                     && ws == self.current_workspace
@@ -323,9 +338,17 @@ impl WindowManager {
                 self.switch_workspace(target_ws)?;
             }
             Action::MoveToWorkspace(tag) => {
-                let win = self.focused_window()
-                    .or_else(|| self.workspace_focus.focused_window_on(self.current_workspace))
-                    .or_else(|| self.workspace_manager.get(self.current_workspace).and_then(|w| w.clients.first().copied()));
+                let win = self
+                    .focused_window()
+                    .or_else(|| {
+                        self.workspace_focus
+                            .focused_window_on(self.current_workspace)
+                    })
+                    .or_else(|| {
+                        self.workspace_manager
+                            .get(self.current_workspace)
+                            .and_then(|w| w.clients.first().copied())
+                    });
                 if let Some(win) = win {
                     let active_mon = self.monitor_manager.active_monitor_id;
                     let target_ws = crate::workspace::monitor_workspace_id(active_mon, tag);
@@ -379,29 +402,54 @@ impl WindowManager {
             Action::Lock => {
                 if let Some(ref lock_cmd) = self.config.lock_command {
                     if let Err(e) = crate::launcher::spawn_app(lock_cmd) {
-                        eprintln!("[WARN  tilo::wm] Failed to spawn lock command '{}': {}", lock_cmd, e);
+                        eprintln!(
+                            "[WARN  tilo::wm] Failed to spawn lock command '{}': {}",
+                            lock_cmd, e
+                        );
                     }
                 } else {
-                    eprintln!("[WARN  tilo::wm] Lock action invoked but no lock_command is configured.");
+                    eprintln!(
+                        "[WARN  tilo::wm] Lock action invoked but no lock_command is configured."
+                    );
                 }
             }
             Action::ResizeTile(dir) => {
                 let current_ws = self.workspace_manager.current_id();
-                let focused = self.focused_window()
+                let focused = self
+                    .focused_window()
                     .or_else(|| self.workspace_focus.focused_window_on(current_ws));
 
                 if let Some(win) = focused {
                     // 1. Floating window resizing in all 4 directions via keyboard
-                    let is_floating = self.client_state.get_client(win).map(|c| c.floating).unwrap_or(false);
+                    let is_floating = self
+                        .client_state
+                        .get_client(win)
+                        .map(|c| c.floating)
+                        .unwrap_or(false);
                     if is_floating {
                         let step = 30;
-                        let geom = self.client_state.get_client(win).and_then(|c| c.floating_geometry).unwrap_or_else(|| {
-                            crate::floating::calculate_default_floating_geometry(self.context.screen_width, self.context.screen_height)
-                        });
+                        let geom = self
+                            .client_state
+                            .get_client(win)
+                            .and_then(|c| c.floating_geometry)
+                            .unwrap_or_else(|| {
+                                crate::floating::calculate_default_floating_geometry(
+                                    self.context.screen_width,
+                                    self.context.screen_height,
+                                )
+                            });
                         let (new_w, new_h) = match dir {
-                            Direction::Right => ((geom.width + step).min(self.context.screen_width as u32), geom.height),
-                            Direction::Left => (geom.width.saturating_sub(step).max(100), geom.height),
-                            Direction::Down => (geom.width, (geom.height + step).min(self.context.screen_height as u32)),
+                            Direction::Right => (
+                                (geom.width + step).min(self.context.screen_width as u32),
+                                geom.height,
+                            ),
+                            Direction::Left => {
+                                (geom.width.saturating_sub(step).max(100), geom.height)
+                            }
+                            Direction::Down => (
+                                geom.width,
+                                (geom.height + step).min(self.context.screen_height as u32),
+                            ),
                             Direction::Up => (geom.width, geom.height.saturating_sub(step).max(80)),
                         };
                         let _ = self.resize_floating(win, new_w, new_h);
@@ -418,9 +466,10 @@ impl WindowManager {
                         };
                         if ws.bsp_tree.resize_window(win, delta, split_type) {
                             if ws.layout.is_master()
-                                && let Some(r) = ws.bsp_tree.master_ratio_for_layout(ws.layout) {
-                                    self.layout_config.master_ratio = r;
-                                }
+                                && let Some(r) = ws.bsp_tree.master_ratio_for_layout(ws.layout)
+                            {
+                                self.layout_config.master_ratio = r;
+                            }
                             let _ = self.retile();
                         }
                     }
@@ -435,34 +484,44 @@ impl WindowManager {
             }
             Action::CycleLayout => {
                 let current_ws = self.workspace_manager.current_id();
-                let visible_tiled = self.client_state.visible_tiled_clients_on_workspace(current_ws);
+                let visible_tiled = self
+                    .client_state
+                    .visible_tiled_clients_on_workspace(current_ws);
                 let master_ratio = self.layout_config.master_ratio;
                 if let Some(ws) = self.workspace_manager.get_mut(current_ws) {
                     ws.cycle_layout();
-                    ws.bsp_tree.rebuild_for_layout(ws.layout, &visible_tiled, master_ratio);
+                    ws.bsp_tree
+                        .rebuild_for_layout(ws.layout, &visible_tiled, master_ratio);
                 }
                 self.retile()?;
                 self.render_statusbar().ok();
             }
             Action::RotateMaster => {
                 let current_ws = self.workspace_manager.current_id();
-                let visible_tiled = self.client_state.visible_tiled_clients_on_workspace(current_ws);
+                let visible_tiled = self
+                    .client_state
+                    .visible_tiled_clients_on_workspace(current_ws);
                 let master_ratio = self.layout_config.master_ratio;
                 if let Some(ws) = self.workspace_manager.get_mut(current_ws)
-                    && ws.layout.can_rotate() {
-                        ws.rotate_layout();
-                        ws.bsp_tree.rebuild_for_layout(ws.layout, &visible_tiled, master_ratio);
-                        self.retile()?;
-                        self.render_statusbar().ok();
-                    }
+                    && ws.layout.can_rotate()
+                {
+                    ws.rotate_layout();
+                    ws.bsp_tree
+                        .rebuild_for_layout(ws.layout, &visible_tiled, master_ratio);
+                    self.retile()?;
+                    self.render_statusbar().ok();
+                }
             }
             Action::SetLayout(layout) => {
                 let current_ws = self.workspace_manager.current_id();
-                let visible_tiled = self.client_state.visible_tiled_clients_on_workspace(current_ws);
+                let visible_tiled = self
+                    .client_state
+                    .visible_tiled_clients_on_workspace(current_ws);
                 let master_ratio = self.layout_config.master_ratio;
                 if let Some(ws) = self.workspace_manager.get_mut(current_ws) {
                     ws.set_layout(layout);
-                    ws.bsp_tree.rebuild_for_layout(layout, &visible_tiled, master_ratio);
+                    ws.bsp_tree
+                        .rebuild_for_layout(layout, &visible_tiled, master_ratio);
                 }
                 self.retile()?;
                 self.render_statusbar().ok();
@@ -549,17 +608,25 @@ impl WindowManager {
     /// - Normal Left Click: focus clicked window and replay event to client.
     pub fn handle_button_press(&mut self, event: &ButtonPressEvent) -> Result<(), X11Error> {
         // Launcher mouse interaction (Wheel scroll, item click, or click outside to dismiss)
-        if let Some(ref launcher) = self.launcher && launcher.visible {
+        if let Some(ref launcher) = self.launcher
+            && launcher.visible
+        {
             if event.event == launcher.window_id {
                 if event.detail == 4 {
                     if let Some(ref mut l) = self.launcher {
-                        crate::launcher::update_launcher_state(l, crate::launcher::LauncherAction::SelectPrevious);
+                        crate::launcher::update_launcher_state(
+                            l,
+                            crate::launcher::LauncherAction::SelectPrevious,
+                        );
                     }
                     let _ = self.render_launcher();
                     return Ok(());
                 } else if event.detail == 5 {
                     if let Some(ref mut l) = self.launcher {
-                        crate::launcher::update_launcher_state(l, crate::launcher::LauncherAction::SelectNext);
+                        crate::launcher::update_launcher_state(
+                            l,
+                            crate::launcher::LauncherAction::SelectNext,
+                        );
                     }
                     let _ = self.render_launcher();
                     return Ok(());
@@ -594,19 +661,41 @@ impl WindowManager {
         }
 
         // Statusbar mouse interaction (Workspace clicks, Tab clicks, and wheel switching)
-        let hit_bar_info = if let Some(ref bar) = self.statusbar && bar.window_id == event.event {
-            let mon_id = self.monitor_manager.monitors.iter()
+        let hit_bar_info = if let Some(ref bar) = self.statusbar
+            && bar.window_id == event.event
+        {
+            let mon_id = self
+                .monitor_manager
+                .monitors
+                .iter()
                 .find(|m| m.is_primary)
                 .or_else(|| self.monitor_manager.monitors.first())
                 .map(|m| m.id)
                 .unwrap_or(0);
-            Some((bar.workspace_rects.clone(), bar.tab_rects.clone(), bar.rect.height, mon_id))
-        } else if let Some(bar) = self.secondary_statusbars.iter().find(|b| b.window_id == event.event) {
-            let mon_id = self.monitor_manager.monitors.iter()
-                .find(|m| bar.rect.x >= m.x && (bar.rect.x as i32) < (m.x + m.width as i32))
+            Some((
+                bar.workspace_rects.clone(),
+                bar.tab_rects.clone(),
+                bar.rect.height,
+                mon_id,
+            ))
+        } else if let Some(bar) = self
+            .secondary_statusbars
+            .iter()
+            .find(|b| b.window_id == event.event)
+        {
+            let mon_id = self
+                .monitor_manager
+                .monitors
+                .iter()
+                .find(|m| bar.rect.x >= m.x && bar.rect.x < (m.x + m.width as i32))
                 .map(|m| m.id)
                 .unwrap_or_else(|| self.monitor_manager.active_monitor_id);
-            Some((bar.workspace_rects.clone(), bar.tab_rects.clone(), bar.rect.height, mon_id))
+            Some((
+                bar.workspace_rects.clone(),
+                bar.tab_rects.clone(),
+                bar.rect.height,
+                mon_id,
+            ))
         } else {
             None
         };
@@ -626,7 +715,8 @@ impl WindowManager {
             let click_y = event.event_y as i32;
 
             // 1. Mouse wheel over workspace region (Scroll up -> prev workspace, Scroll down -> next workspace)
-            if self.config.workspace_wheel_switch && (event.detail == 4 || event.detail == 5)
+            if self.config.workspace_wheel_switch
+                && (event.detail == 4 || event.detail == 5)
                 && let Some(first) = workspace_rects.first()
                 && let Some(last) = workspace_rects.last()
             {
@@ -658,11 +748,21 @@ impl WindowManager {
                     if is_hit && click_y >= 0 && click_y < bar_height as i32 {
                         let target_ws = crate::workspace::monitor_workspace_id(hit_mon_id, tag);
                         if event.detail == 1 {
-                            let clean_modifiers = u16::from(event.state) & 0x00FF & !(self.input_manager.num_lock_mask | MOD_LOCK);
+                            let clean_modifiers = u16::from(event.state)
+                                & 0x00FF
+                                & !(self.input_manager.num_lock_mask | MOD_LOCK);
                             if clean_modifiers & MOD_SHIFT != 0 {
-                                let win = self.focused_window()
-                                    .or_else(|| self.workspace_focus.focused_window_on(self.current_workspace))
-                                    .or_else(|| self.workspace_manager.get(self.current_workspace).and_then(|w| w.clients.first().copied()));
+                                let win = self
+                                    .focused_window()
+                                    .or_else(|| {
+                                        self.workspace_focus
+                                            .focused_window_on(self.current_workspace)
+                                    })
+                                    .or_else(|| {
+                                        self.workspace_manager
+                                            .get(self.current_workspace)
+                                            .and_then(|w| w.clients.first().copied())
+                                    });
                                 if let Some(win) = win {
                                     self.move_to_workspace(win, target_ws)?;
                                 }
@@ -671,9 +771,17 @@ impl WindowManager {
                             }
                             return Ok(());
                         } else if event.detail == 3 {
-                            let win = self.focused_window()
-                                .or_else(|| self.workspace_focus.focused_window_on(self.current_workspace))
-                                .or_else(|| self.workspace_manager.get(self.current_workspace).and_then(|w| w.clients.first().copied()));
+                            let win = self
+                                .focused_window()
+                                .or_else(|| {
+                                    self.workspace_focus
+                                        .focused_window_on(self.current_workspace)
+                                })
+                                .or_else(|| {
+                                    self.workspace_manager
+                                        .get(self.current_workspace)
+                                        .and_then(|w| w.clients.first().copied())
+                                });
                             if let Some(win) = win {
                                 self.move_to_workspace(win, target_ws)?;
                             }
@@ -684,7 +792,8 @@ impl WindowManager {
             }
 
             // 3. Mouse wheel over tab region
-            if self.config.tab_config.wheel_switch && (event.detail == 4 || event.detail == 5)
+            if self.config.tab_config.wheel_switch
+                && (event.detail == 4 || event.detail == 5)
                 && let Some(first) = tab_rects.first()
                 && let Some(last) = tab_rects.last()
             {
@@ -722,14 +831,23 @@ impl WindowManager {
             return Ok(());
         }
 
-        let event_time = if event.time != 0 { event.time } else { x11rb::CURRENT_TIME };
-        let clean_modifiers = u16::from(event.state) & 0x00FF & !(self.input_manager.num_lock_mask | MOD_LOCK);
-        let matching_action = self.mouse_bindings.iter().find(|b| {
-            b.button == event.detail && b.modifiers == clean_modifiers
-        }).map(|b| b.action_type);
+        let event_time = if event.time != 0 {
+            event.time
+        } else {
+            x11rb::CURRENT_TIME
+        };
+        let clean_modifiers =
+            u16::from(event.state) & 0x00FF & !(self.input_manager.num_lock_mask | MOD_LOCK);
+        let matching_action = self
+            .mouse_bindings
+            .iter()
+            .find(|b| b.button == event.detail && b.modifiers == clean_modifiers)
+            .map(|b| b.action_type);
 
         let current_ws = self.workspace_manager.current_id();
-        let mon_id = self.monitor_manager.monitor_for_point(event.root_x as i32, event.root_y as i32)
+        let mon_id = self
+            .monitor_manager
+            .monitor_for_point(event.root_x as i32, event.root_y as i32)
             .map(|m| m.id)
             .unwrap_or(self.monitor_manager.active_monitor_id);
 
@@ -741,7 +859,10 @@ impl WindowManager {
         } else if matching_action == Some(crate::mouse::MouseActionType::Resize) {
             // Click occurred in the gap or on the boundary between splits on the root window
             let usable_rect = {
-                let mon = self.monitor_manager.get_monitor(mon_id).unwrap_or_else(|| self.monitor_manager.active_monitor());
+                let mon = self
+                    .monitor_manager
+                    .get_monitor(mon_id)
+                    .unwrap_or_else(|| self.monitor_manager.active_monitor());
                 self.usable_rect_for_monitor(mon)
             };
             let ws_pairs = self.get_workspace_window_geometries(current_ws, &usable_rect);
@@ -751,7 +872,9 @@ impl WindowManager {
                 .map(|&(w, rect)| (w, rect.distance_to_point(click_p.0, click_p.1)))
                 .min_by_key(|&(_, dist)| dist);
 
-            let res = if let Some((w, dist)) = closest_win && dist <= 80 {
+            let res = if let Some((w, dist)) = closest_win
+                && dist <= 80
+            {
                 Some(w)
             } else {
                 None
@@ -764,7 +887,10 @@ impl WindowManager {
                 if mon_id != self.monitor_manager.active_monitor_id {
                     let _ = self.activate_monitor(mon_id);
                 }
-                let _ = self.context.connection.allow_events(Allow::REPLAY_POINTER, event_time);
+                let _ = self
+                    .context
+                    .connection
+                    .allow_events(Allow::REPLAY_POINTER, event_time);
                 let _ = self.context.flush();
                 return Ok(());
             }
@@ -773,7 +899,10 @@ impl WindowManager {
             if mon_id != self.monitor_manager.active_monitor_id {
                 let _ = self.activate_monitor(mon_id);
             }
-            let _ = self.context.connection.allow_events(Allow::REPLAY_POINTER, event_time);
+            let _ = self
+                .context
+                .connection
+                .allow_events(Allow::REPLAY_POINTER, event_time);
             let _ = self.context.flush();
             return Ok(());
         };
@@ -794,12 +923,25 @@ impl WindowManager {
                     return Ok(());
                 }
 
-                let (win_x, win_y) = if let Some(reply) = self.context.connection.get_geometry(window).ok().and_then(|c| c.reply().ok()) {
+                let (win_x, win_y) = if let Some(reply) = self
+                    .context
+                    .connection
+                    .get_geometry(window)
+                    .ok()
+                    .and_then(|c| c.reply().ok())
+                {
                     (reply.x as i32, reply.y as i32)
-                } else if let Some(fg) = self.client_state.get_client(window).and_then(|c| c.floating_geometry) {
+                } else if let Some(fg) = self
+                    .client_state
+                    .get_client(window)
+                    .and_then(|c| c.floating_geometry)
+                {
                     (fg.x, fg.y)
                 } else {
-                    (event.root_x as i32 - event.event_x as i32, event.root_y as i32 - event.event_y as i32)
+                    (
+                        event.root_x as i32 - event.event_x as i32,
+                        event.root_y as i32 - event.event_y as i32,
+                    )
                 };
 
                 self.mouse_action = crate::mouse::MouseAction::Moving {
@@ -828,7 +970,9 @@ impl WindowManager {
 
                 if !is_floating {
                     if let Some(ws) = self.workspace_manager.get(current_ws)
-                        && (ws.layout == LayoutType::Monocle || ws.layout == LayoutType::Tabbed || ws.layout == LayoutType::Stacked)
+                        && (ws.layout == LayoutType::Monocle
+                            || ws.layout == LayoutType::Tabbed
+                            || ws.layout == LayoutType::Stacked)
                     {
                         self.context.flush()?;
                         return Ok(());
@@ -837,7 +981,10 @@ impl WindowManager {
                     let initial_rect = pairs
                         .get_or_insert_with(|| {
                             let usable_rect = {
-                                let mon = self.monitor_manager.get_monitor(mon_id).unwrap_or_else(|| self.monitor_manager.active_monitor());
+                                let mon = self
+                                    .monitor_manager
+                                    .get_monitor(mon_id)
+                                    .unwrap_or_else(|| self.monitor_manager.active_monitor());
                                 self.usable_rect_for_monitor(mon)
                             };
                             self.get_workspace_window_geometries(current_ws, &usable_rect)
@@ -846,8 +993,19 @@ impl WindowManager {
                         .find(|(w, _)| *w == window)
                         .map(|(_, r)| *r)
                         .unwrap_or_else(|| {
-                            if let Some(reply) = self.context.connection.get_geometry(window).ok().and_then(|c| c.reply().ok()) {
-                                Rect::new(reply.x as i32, reply.y as i32, reply.width as u32, reply.height as u32)
+                            if let Some(reply) = self
+                                .context
+                                .connection
+                                .get_geometry(window)
+                                .ok()
+                                .and_then(|c| c.reply().ok())
+                            {
+                                Rect::new(
+                                    reply.x as i32,
+                                    reply.y as i32,
+                                    reply.width as u32,
+                                    reply.height as u32,
+                                )
                             } else {
                                 Rect::new(0, 0, 400, 300)
                             }
@@ -876,9 +1034,19 @@ impl WindowManager {
                     return Ok(());
                 }
 
-                let (win_w, win_h) = if let Some(reply) = self.context.connection.get_geometry(window).ok().and_then(|c| c.reply().ok()) {
+                let (win_w, win_h) = if let Some(reply) = self
+                    .context
+                    .connection
+                    .get_geometry(window)
+                    .ok()
+                    .and_then(|c| c.reply().ok())
+                {
                     (reply.width as u32, reply.height as u32)
-                } else if let Some(fg) = self.client_state.get_client(window).and_then(|c| c.floating_geometry) {
+                } else if let Some(fg) = self
+                    .client_state
+                    .get_client(window)
+                    .and_then(|c| c.floating_geometry)
+                {
                     (fg.width, fg.height)
                 } else {
                     (400, 300)
@@ -907,7 +1075,10 @@ impl WindowManager {
             None => {
                 let _ = self.focus_client(window);
                 let _ = self.raise_window(window);
-                let _ = self.context.connection.allow_events(Allow::REPLAY_POINTER, event_time);
+                let _ = self
+                    .context
+                    .connection
+                    .allow_events(Allow::REPLAY_POINTER, event_time);
                 self.context.flush()?;
             }
         }
@@ -936,7 +1107,9 @@ impl WindowManager {
                         fg.x = new_x;
                         fg.y = new_y;
                     } else {
-                        client.floating_geometry = Some(crate::floating::FloatingGeometry::new(new_x, new_y, 400, 300));
+                        client.floating_geometry = Some(crate::floating::FloatingGeometry::new(
+                            new_x, new_y, 400, 300,
+                        ));
                     }
                 }
             }
@@ -976,13 +1149,22 @@ impl WindowManager {
                 };
                 let current_ws = self.workspace_manager.current_id();
                 if let Some(ws) = self.workspace_manager.get_mut(current_ws)
-                    && ws.bsp_tree.resize_by_pointer_at(window, delta_x, delta_y, initial_rect, click_x, click_y) {
-                        if ws.layout.is_master()
-                            && let Some(r) = ws.bsp_tree.master_ratio_for_layout(ws.layout) {
-                                self.layout_config.master_ratio = r;
-                            }
-                        let _ = self.retile();
+                    && ws.bsp_tree.resize_by_pointer_at(
+                        window,
+                        delta_x,
+                        delta_y,
+                        initial_rect,
+                        click_x,
+                        click_y,
+                    )
+                {
+                    if ws.layout.is_master()
+                        && let Some(r) = ws.bsp_tree.master_ratio_for_layout(ws.layout)
+                    {
+                        self.layout_config.master_ratio = r;
                     }
+                    let _ = self.retile();
+                }
             }
             crate::mouse::MouseAction::None => {}
         }
@@ -992,7 +1174,11 @@ impl WindowManager {
     /// Handles mouse button release events, terminating drag operations and ungrabbing the pointer.
     pub fn handle_button_release(&mut self, event: &ButtonReleaseEvent) -> Result<(), X11Error> {
         if self.mouse_action.is_active() {
-            let event_time = if event.time != 0 { event.time } else { x11rb::CURRENT_TIME };
+            let event_time = if event.time != 0 {
+                event.time
+            } else {
+                x11rb::CURRENT_TIME
+            };
             let _ = self.context.connection.ungrab_pointer(event_time);
             self.context.flush()?;
             self.mouse_action = crate::mouse::MouseAction::None;
@@ -1056,9 +1242,10 @@ impl WindowManager {
             let window = event.window;
             if self.client_state.contains(window) {
                 if let Some(ws) = self.workspace_manager.find_workspace_for(window)
-                    && ws != self.current_workspace {
-                        self.switch_workspace(ws)?;
-                    }
+                    && ws != self.current_workspace
+                {
+                    self.switch_workspace(ws)?;
+                }
                 self.focus_client(window)?;
             }
         } else if event.type_ == atoms.net_current_desktop {
@@ -1080,8 +1267,10 @@ impl WindowManager {
 
             if let Some(action) = NetWmStateAction::from_u32(action_num) {
                 let window = event.window;
-                let is_fullscreen_target = prop1 == atoms.net_wm_state_fullscreen || prop2 == atoms.net_wm_state_fullscreen;
-                let is_above_target = prop1 == atoms.net_wm_state_above || prop2 == atoms.net_wm_state_above;
+                let is_fullscreen_target = prop1 == atoms.net_wm_state_fullscreen
+                    || prop2 == atoms.net_wm_state_fullscreen;
+                let is_above_target =
+                    prop1 == atoms.net_wm_state_above || prop2 == atoms.net_wm_state_above;
 
                 if is_fullscreen_target {
                     let current_fullscreen = self
@@ -1098,7 +1287,11 @@ impl WindowManager {
                 }
 
                 if is_above_target {
-                    let currently_floating = self.client_state.get_client(window).map(|c| c.floating).unwrap_or(false);
+                    let currently_floating = self
+                        .client_state
+                        .get_client(window)
+                        .map(|c| c.floating)
+                        .unwrap_or(false);
                     let new_floating = match action {
                         NetWmStateAction::Remove => false,
                         NetWmStateAction::Add => true,

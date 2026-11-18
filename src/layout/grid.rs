@@ -1,17 +1,13 @@
 //! Grid layout algorithm.
 
-use x11rb::protocol::xproto::Window;
 use super::{LayoutConfig, Rect};
+use x11rb::protocol::xproto::Window;
 
 /// Calculates the bounding rectangles for a grid layout.
 ///
 /// Divides `n` windows into an even grid of rows and columns.
 /// Windows in each row share the full usable width evenly.
-pub fn calculate_grid(
-    clients: &[Window],
-    screen_rect: &Rect,
-    config: &LayoutConfig,
-) -> Vec<Rect> {
+pub fn calculate_grid(clients: &[Window], screen_rect: &Rect, config: &LayoutConfig) -> Vec<Rect> {
     let n = clients.len();
     if n == 0 {
         return Vec::new();

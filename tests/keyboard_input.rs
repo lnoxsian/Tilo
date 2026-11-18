@@ -2,8 +2,8 @@ use std::process::{Child, Command};
 use tilo::config::Config;
 use tilo::focus::Direction;
 use tilo::keybind::{
-    Action, Keysym, MOD_SHIFT, MOD_SUPER, XK_DOWN, XK_H, XK_J, XK_K, XK_L, XK_LEFT, XK_Q, XK_RIGHT,
-    XK_UP, XK_1, XK_2, XK_3, XK_4, XK_5, XK_6, XK_7, XK_8, XK_9,
+    Action, Keysym, MOD_SHIFT, MOD_SUPER, XK_1, XK_2, XK_3, XK_4, XK_5, XK_6, XK_7, XK_8, XK_9,
+    XK_DOWN, XK_H, XK_J, XK_K, XK_L, XK_LEFT, XK_Q, XK_RIGHT, XK_UP,
 };
 use tilo::wm::WindowManager;
 use tilo::x11::X11Context;
@@ -68,11 +68,12 @@ fn test_keyboard_input_and_actions_in_xephyr() {
 
     let xephyr = XephyrServer::start(96);
     if let Some(server) = xephyr {
-        let wm_ctx = X11Context::connect_to(Some(&server.display))
-            .expect("WM context connect failed");
+        let wm_ctx =
+            X11Context::connect_to(Some(&server.display)).expect("WM context connect failed");
         assert!(wm_ctx.become_wm().is_ok());
 
-        let mut wm = WindowManager::new_with_config(wm_ctx, Config::default()).expect("Failed to initialize WM");
+        let mut wm = WindowManager::new_with_config(wm_ctx, Config::default())
+            .expect("Failed to initialize WM");
 
         // Client connection to create windows
         let (client_conn, screen_num) =
@@ -142,8 +143,14 @@ fn test_keyboard_input_and_actions_in_xephyr() {
         assert!(wm.running);
         wm.execute_action(Action::Exit).unwrap();
         assert!(wm.launcher.as_ref().unwrap().visible);
-        assert_eq!(wm.launcher.as_ref().unwrap().mode, tilo::launcher::LauncherMode::Exit);
-        assert_eq!(wm.launcher.as_ref().unwrap().filtered_results(8), vec!["Logout", "Reboot", "Poweroff"]);
+        assert_eq!(
+            wm.launcher.as_ref().unwrap().mode,
+            tilo::launcher::LauncherMode::Exit
+        );
+        assert_eq!(
+            wm.launcher.as_ref().unwrap().filtered_results(8),
+            vec!["Logout", "Reboot", "Poweroff"]
+        );
         // Executing Logout stops the WM
         wm.execute_power_action("logout");
         assert!(!wm.running);
@@ -163,12 +170,17 @@ fn test_keypress_event_handling_in_xephyr() {
 
     let xephyr = XephyrServer::start(97);
     if let Some(server) = xephyr {
-        let wm_ctx = X11Context::connect_to(Some(&server.display))
-            .expect("WM context connect failed");
+        let wm_ctx =
+            X11Context::connect_to(Some(&server.display)).expect("WM context connect failed");
         assert!(wm_ctx.become_wm().is_ok());
 
-        let mut wm = WindowManager::new_with_config(wm_ctx, Config::default()).expect("Failed to initialize WM");
-        let mapping = wm.input_manager.mapping.as_ref().expect("Keyboard mapping missing");
+        let mut wm = WindowManager::new_with_config(wm_ctx, Config::default())
+            .expect("Failed to initialize WM");
+        let mapping = wm
+            .input_manager
+            .mapping
+            .as_ref()
+            .expect("Keyboard mapping missing");
 
         // Find keycode for 'q'
         let q_keycodes = mapping.keysym_to_keycodes(XK_Q);
@@ -210,11 +222,12 @@ fn test_mod4_shift_numbers_move_focused_window_in_xephyr() {
 
     let xephyr = XephyrServer::start(98);
     if let Some(server) = xephyr {
-        let wm_ctx = X11Context::connect_to(Some(&server.display))
-            .expect("WM context connect failed");
+        let wm_ctx =
+            X11Context::connect_to(Some(&server.display)).expect("WM context connect failed");
         assert!(wm_ctx.become_wm().is_ok());
 
-        let mut wm = WindowManager::new_with_config(wm_ctx, Config::default()).expect("Failed to initialize WM");
+        let mut wm = WindowManager::new_with_config(wm_ctx, Config::default())
+            .expect("Failed to initialize WM");
 
         // Client connection to create windows
         let (client_conn, screen_num) =
@@ -341,7 +354,10 @@ fn test_mod4_shift_numbers_move_focused_window_in_xephyr() {
             };
 
             wm.handle_key_press(&ev_move).unwrap();
-            assert_eq!(wm.workspace_manager.find_workspace_for(win1), Some(target_ws));
+            assert_eq!(
+                wm.workspace_manager.find_workspace_for(win1),
+                Some(target_ws)
+            );
         }
 
         // 3. Switch to workspace 2 using Mod4 + 2
@@ -400,11 +416,12 @@ fn test_window_movement_and_focus_with_vim_and_arrow_keys_in_xephyr() {
 
     let xephyr = XephyrServer::start(99);
     if let Some(server) = xephyr {
-        let wm_ctx = X11Context::connect_to(Some(&server.display))
-            .expect("WM context connect failed");
+        let wm_ctx =
+            X11Context::connect_to(Some(&server.display)).expect("WM context connect failed");
         assert!(wm_ctx.become_wm().is_ok());
 
-        let mut wm = WindowManager::new_with_config(wm_ctx, Config::default()).expect("Failed to initialize WM");
+        let mut wm = WindowManager::new_with_config(wm_ctx, Config::default())
+            .expect("Failed to initialize WM");
 
         // Client connection to create windows
         let (client_conn, screen_num) =
@@ -512,25 +529,37 @@ fn test_window_movement_and_focus_with_vim_and_arrow_keys_in_xephyr() {
         send_key(&mut wm, XK_K, true);
         assert_eq!(wm.client_state.focused_window(), Some(win3));
         assert_eq!(wm.client_state.client_order, vec![win1, win3, win2]);
-        assert_eq!(wm.workspace_manager.get(1).unwrap().clients, vec![win1, win3, win2]);
+        assert_eq!(
+            wm.workspace_manager.get(1).unwrap().clients,
+            vec![win1, win3, win2]
+        );
 
         // Move Left (Mod + Shift + h): swaps win3 into Master position with win1
         send_key(&mut wm, XK_H, true);
         assert_eq!(wm.client_state.focused_window(), Some(win3));
         assert_eq!(wm.client_state.client_order, vec![win3, win1, win2]);
-        assert_eq!(wm.workspace_manager.get(1).unwrap().clients, vec![win3, win1, win2]);
+        assert_eq!(
+            wm.workspace_manager.get(1).unwrap().clients,
+            vec![win3, win1, win2]
+        );
 
         // Move Right (Mod + Shift + l): swaps win3 back into Stack with win1
         send_key(&mut wm, XK_L, true);
         assert_eq!(wm.client_state.focused_window(), Some(win3));
         assert_eq!(wm.client_state.client_order, vec![win1, win3, win2]);
-        assert_eq!(wm.workspace_manager.get(1).unwrap().clients, vec![win1, win3, win2]);
+        assert_eq!(
+            wm.workspace_manager.get(1).unwrap().clients,
+            vec![win1, win3, win2]
+        );
 
         // Move Down (Mod + Shift + j): swaps win3 back to bottom of stack
         send_key(&mut wm, XK_J, true);
         assert_eq!(wm.client_state.focused_window(), Some(win3));
         assert_eq!(wm.client_state.client_order, vec![win1, win2, win3]);
-        assert_eq!(wm.workspace_manager.get(1).unwrap().clients, vec![win1, win2, win3]);
+        assert_eq!(
+            wm.workspace_manager.get(1).unwrap().clients,
+            vec![win1, win2, win3]
+        );
 
         // 4. Test window reordering/swapping with Arrow keys (Mod + Shift + [Left, Down, Up, Right])
         // Move focus to win1 in master pane
@@ -541,13 +570,19 @@ fn test_window_movement_and_focus_with_vim_and_arrow_keys_in_xephyr() {
         send_key(&mut wm, XK_RIGHT, true);
         assert_eq!(wm.client_state.focused_window(), Some(win1));
         assert_eq!(wm.client_state.client_order, vec![win2, win1, win3]);
-        assert_eq!(wm.workspace_manager.get(1).unwrap().clients, vec![win2, win1, win3]);
+        assert_eq!(
+            wm.workspace_manager.get(1).unwrap().clients,
+            vec![win2, win1, win3]
+        );
 
         // Move Left (Mod + Shift + Left): swaps win1 back to Master
         send_key(&mut wm, XK_LEFT, true);
         assert_eq!(wm.client_state.focused_window(), Some(win1));
         assert_eq!(wm.client_state.client_order, vec![win1, win2, win3]);
-        assert_eq!(wm.workspace_manager.get(1).unwrap().clients, vec![win1, win2, win3]);
+        assert_eq!(
+            wm.workspace_manager.get(1).unwrap().clients,
+            vec![win1, win2, win3]
+        );
 
         // Move focus to win2 (top stack)
         send_key(&mut wm, XK_RIGHT, false);
@@ -557,13 +592,19 @@ fn test_window_movement_and_focus_with_vim_and_arrow_keys_in_xephyr() {
         send_key(&mut wm, XK_DOWN, true);
         assert_eq!(wm.client_state.focused_window(), Some(win2));
         assert_eq!(wm.client_state.client_order, vec![win1, win3, win2]);
-        assert_eq!(wm.workspace_manager.get(1).unwrap().clients, vec![win1, win3, win2]);
+        assert_eq!(
+            wm.workspace_manager.get(1).unwrap().clients,
+            vec![win1, win3, win2]
+        );
 
         // Move Up (Mod + Shift + Up): swaps win2 back with win3
         send_key(&mut wm, XK_UP, true);
         assert_eq!(wm.client_state.focused_window(), Some(win2));
         assert_eq!(wm.client_state.client_order, vec![win1, win2, win3]);
-        assert_eq!(wm.workspace_manager.get(1).unwrap().clients, vec![win1, win2, win3]);
+        assert_eq!(
+            wm.workspace_manager.get(1).unwrap().clients,
+            vec![win1, win2, win3]
+        );
     }
 }
 
@@ -588,7 +629,8 @@ fn test_bsp_keyboard_tile_resizing_and_preselection_in_xephyr() {
     };
 
     let ctx = X11Context::connect_to(Some(":151")).expect("Connect to Xephyr");
-    let mut wm = WindowManager::new_with_config(ctx, Config::default()).expect("Create WindowManager");
+    let mut wm =
+        WindowManager::new_with_config(ctx, Config::default()).expect("Create WindowManager");
 
     let root_depth = wm.context.connection.setup().roots[wm.context.screen_num].root_depth;
     let root_visual = wm.context.connection.setup().roots[wm.context.screen_num].root_visual;
@@ -596,65 +638,122 @@ fn test_bsp_keyboard_tile_resizing_and_preselection_in_xephyr() {
     let w1 = wm.context.connection.generate_id().unwrap();
     let w2 = wm.context.connection.generate_id().unwrap();
 
-    wm.context.connection.create_window(
-        root_depth,
-        w1,
-        root_win,
-        0, 0, 200, 200, 0,
-        WindowClass::INPUT_OUTPUT,
-        root_visual,
-        &CreateWindowAux::new().event_mask(EventMask::STRUCTURE_NOTIFY),
-    ).unwrap();
+    wm.context
+        .connection
+        .create_window(
+            root_depth,
+            w1,
+            root_win,
+            0,
+            0,
+            200,
+            200,
+            0,
+            WindowClass::INPUT_OUTPUT,
+            root_visual,
+            &CreateWindowAux::new().event_mask(EventMask::STRUCTURE_NOTIFY),
+        )
+        .unwrap();
 
-    wm.context.connection.create_window(
-        root_depth,
-        w2,
-        root_win,
-        0, 0, 200, 200, 0,
-        WindowClass::INPUT_OUTPUT,
-        root_visual,
-        &CreateWindowAux::new().event_mask(EventMask::STRUCTURE_NOTIFY),
-    ).unwrap();
+    wm.context
+        .connection
+        .create_window(
+            root_depth,
+            w2,
+            root_win,
+            0,
+            0,
+            200,
+            200,
+            0,
+            WindowClass::INPUT_OUTPUT,
+            root_visual,
+            &CreateWindowAux::new().event_mask(EventMask::STRUCTURE_NOTIFY),
+        )
+        .unwrap();
 
     wm.manage_window(w1).unwrap();
     wm.manage_window(w2).unwrap();
     wm.focus_client(w1).unwrap();
     wm.retile().unwrap();
 
-    let geom1_before = wm.context.connection.get_geometry(w1).unwrap().reply().unwrap();
+    let geom1_before = wm
+        .context
+        .connection
+        .get_geometry(w1)
+        .unwrap()
+        .reply()
+        .unwrap();
 
     // Grow tile width using Action::ResizeTile(Direction::Right)
-    wm.execute_action(Action::ResizeTile(Direction::Right)).unwrap();
-    let geom1_after_grow = wm.context.connection.get_geometry(w1).unwrap().reply().unwrap();
-    assert!(geom1_after_grow.width > geom1_before.width, "Window 1 should have grown after Right resize");
+    wm.execute_action(Action::ResizeTile(Direction::Right))
+        .unwrap();
+    let geom1_after_grow = wm
+        .context
+        .connection
+        .get_geometry(w1)
+        .unwrap()
+        .reply()
+        .unwrap();
+    assert!(
+        geom1_after_grow.width > geom1_before.width,
+        "Window 1 should have grown after Right resize"
+    );
 
     // Shrink tile width using Action::ResizeTile(Direction::Left)
-    wm.execute_action(Action::ResizeTile(Direction::Left)).unwrap();
-    let geom1_after_shrink = wm.context.connection.get_geometry(w1).unwrap().reply().unwrap();
-    assert!(geom1_after_shrink.width < geom1_after_grow.width, "Window 1 should have shrunk after Left resize");
+    wm.execute_action(Action::ResizeTile(Direction::Left))
+        .unwrap();
+    let geom1_after_shrink = wm
+        .context
+        .connection
+        .get_geometry(w1)
+        .unwrap()
+        .reply()
+        .unwrap();
+    assert!(
+        geom1_after_shrink.width < geom1_after_grow.width,
+        "Window 1 should have shrunk after Left resize"
+    );
 
     // Test split preselection: preselect vertical split
-    wm.execute_action(Action::PreselectSplit(tilo::layout::SplitType::Vertical)).unwrap();
+    wm.execute_action(Action::PreselectSplit(tilo::layout::SplitType::Vertical))
+        .unwrap();
     let w3 = wm.context.connection.generate_id().unwrap();
-    wm.context.connection.create_window(
-        root_depth,
-        w3,
-        root_win,
-        0, 0, 200, 200, 0,
-        WindowClass::INPUT_OUTPUT,
-        root_visual,
-        &CreateWindowAux::new().event_mask(EventMask::STRUCTURE_NOTIFY),
-    ).unwrap();
+    wm.context
+        .connection
+        .create_window(
+            root_depth,
+            w3,
+            root_win,
+            0,
+            0,
+            200,
+            200,
+            0,
+            WindowClass::INPUT_OUTPUT,
+            root_visual,
+            &CreateWindowAux::new().event_mask(EventMask::STRUCTURE_NOTIFY),
+        )
+        .unwrap();
 
-        wm.manage_window(w3).unwrap();
-        wm.retile().unwrap();
+    wm.manage_window(w3).unwrap();
+    wm.retile().unwrap();
 
-        // Window 1 and 3 should now be stacked vertically on the left side
-        let geom1_stacked = wm.context.connection.get_geometry(w1).unwrap().reply().unwrap();
-        let geom3_stacked = wm.context.connection.get_geometry(w3).unwrap().reply().unwrap();
-        assert_eq!(geom1_stacked.x, geom3_stacked.x);
-        assert!(geom1_stacked.y < geom3_stacked.y);
-    }
-
-
-
+    // Window 1 and 3 should now be stacked vertically on the left side
+    let geom1_stacked = wm
+        .context
+        .connection
+        .get_geometry(w1)
+        .unwrap()
+        .reply()
+        .unwrap();
+    let geom3_stacked = wm
+        .context
+        .connection
+        .get_geometry(w3)
+        .unwrap()
+        .reply()
+        .unwrap();
+    assert_eq!(geom1_stacked.x, geom3_stacked.x);
+    assert!(geom1_stacked.y < geom3_stacked.y);
+}

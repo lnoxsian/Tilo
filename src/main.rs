@@ -2,15 +2,26 @@ use tilo::wm::WindowManager;
 use tilo::x11::{X11Context, X11Error};
 
 fn main() {
+    let args: Vec<String> = std::env::args().collect();
+    if args.len() > 1 && (args[1] == "msg" || args[1] == "--msg") {
+        let code = tilo::ipc::run_cli(&args[1..]);
+        std::process::exit(code);
+    }
+
     tilo::session::init_desktop_session();
 
     let ctx = match X11Context::new() {
         Ok(ctx) => {
             println!("[INFO  tilo::x11] Connected to X11 server.");
-            println!("[INFO  tilo::x11] Managing root window: 0x{:x}", ctx.root_window);
+            println!(
+                "[INFO  tilo::x11] Managing root window: 0x{:x}",
+                ctx.root_window
+            );
             println!(
                 "[INFO  tilo::x11] Screen dimensions: {}x{}, root depth: {}",
-                ctx.screen_width, ctx.screen_height, ctx.screen().root_depth
+                ctx.screen_width,
+                ctx.screen_height,
+                ctx.screen().root_depth
             );
             ctx
         }
@@ -23,10 +34,15 @@ fn main() {
     if let Err(err) = ctx.become_wm() {
         match err {
             X11Error::AnotherWmRunning => {
-                eprintln!("[ERROR tilo::wm] Another window manager is already running on this display.");
+                eprintln!(
+                    "[ERROR tilo::wm] Another window manager is already running on this display."
+                );
             }
             _ => {
-                eprintln!("[ERROR tilo::wm] Failed to initialize window manager: {}", err);
+                eprintln!(
+                    "[ERROR tilo::wm] Failed to initialize window manager: {}",
+                    err
+                );
             }
         }
         std::process::exit(1);
@@ -44,13 +60,16 @@ fn main() {
             std::process::exit(1);
         }
     };
-    if wm.config.statusbar {
-        if let Err(err) = wm.enable_statusbar(24) {
-            eprintln!("[WARN  tilo::wm] Failed to enable statusbar: {}", err);
-        }
+    if wm.config.statusbar
+        && let Err(err) = wm.enable_statusbar(24)
+    {
+        eprintln!("[WARN  tilo::wm] Failed to enable statusbar: {}", err);
     }
     if let Err(err) = wm.manage_existing_windows() {
-        eprintln!("[WARN  tilo::wm] Failed to manage pre-existing windows: {}", err);
+        eprintln!(
+            "[WARN  tilo::wm] Failed to manage pre-existing windows: {}",
+            err
+        );
     }
     tilo::process::trim_memory();
     println!("[INFO  tilo::wm] Entering X11 event loop...");

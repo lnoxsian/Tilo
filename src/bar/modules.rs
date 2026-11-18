@@ -1,8 +1,8 @@
+use super::StatusbarError;
 use std::io::Read;
 use std::net::UdpSocket;
 use std::path::PathBuf;
 use std::time::Instant;
-use super::StatusbarError;
 
 /// Represents the data returned by a module after an update tick.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -49,12 +49,18 @@ impl BarModuleType {
     pub fn from_str_loose(s: &str) -> Result<Self, String> {
         let clean = s.trim().trim_matches(',').to_lowercase();
         match clean.as_str() {
-            "ip" | "ip_address" | "ip-address" | "ipaddress" | "network" | "net" => Ok(BarModuleType::Ip),
-            "ram" | "ram_usage" | "ram-usage" | "ramusage" | "memory" | "mem" => Ok(BarModuleType::Ram),
+            "ip" | "ip_address" | "ip-address" | "ipaddress" | "network" | "net" => {
+                Ok(BarModuleType::Ip)
+            }
+            "ram" | "ram_usage" | "ram-usage" | "ramusage" | "memory" | "mem" => {
+                Ok(BarModuleType::Ram)
+            }
             "cpu" | "cpu_usage" | "cpu-usage" | "cpuusage" => Ok(BarModuleType::Cpu),
-            "battery" | "battery_percentage" | "battery-percentage" | "batterypercentage" | "bat" => Ok(BarModuleType::Battery),
+            "battery" | "battery_percentage" | "battery-percentage" | "batterypercentage"
+            | "bat" => Ok(BarModuleType::Battery),
             "volume" | "vol" | "audio" | "sound" => Ok(BarModuleType::Volume),
-            "clock" | "time" | "date" | "datetime" | "date-time" | "day:date:time" | "day_date_time" | "day-date-time" => Ok(BarModuleType::Clock),
+            "clock" | "time" | "date" | "datetime" | "date-time" | "day:date:time"
+            | "day_date_time" | "day-date-time" => Ok(BarModuleType::Clock),
             _ => Err(format!(
                 "Unknown statusbar module '{}'. Available modules: ip, ram, cpu, battery, volume, clock",
                 s
@@ -336,7 +342,9 @@ impl StatusModule for RamModule {
             Ok(ModuleUpdate::Changed(self.cached_text.clone()))
         } else {
             self.cached_text = "RAM: ERR".to_string();
-            Ok(ModuleUpdate::Error("Malformed /proc/meminfo content".to_string()))
+            Ok(ModuleUpdate::Error(
+                "Malformed /proc/meminfo content".to_string(),
+            ))
         }
     }
 
@@ -385,10 +393,22 @@ impl CpuModule {
                 let nice = parts.next()?.parse::<u64>().ok()?;
                 let system = parts.next()?.parse::<u64>().ok()?;
                 let idle = parts.next()?.parse::<u64>().ok()?;
-                let iowait = parts.next().and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
-                let irq = parts.next().and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
-                let softirq = parts.next().and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
-                let steal = parts.next().and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
+                let iowait = parts
+                    .next()
+                    .and_then(|s| s.parse::<u64>().ok())
+                    .unwrap_or(0);
+                let irq = parts
+                    .next()
+                    .and_then(|s| s.parse::<u64>().ok())
+                    .unwrap_or(0);
+                let softirq = parts
+                    .next()
+                    .and_then(|s| s.parse::<u64>().ok())
+                    .unwrap_or(0);
+                let steal = parts
+                    .next()
+                    .and_then(|s| s.parse::<u64>().ok())
+                    .unwrap_or(0);
 
                 let idle_time = idle + iowait;
                 let total_time = user + nice + system + idle + iowait + irq + softirq + steal;
@@ -460,7 +480,8 @@ impl StatusModule for CpuModule {
             self.prev_idle = idle;
 
             if total_delta > 0 {
-                let usage = 100.0 * (total_delta.saturating_sub(idle_delta)) as f64 / total_delta as f64;
+                let usage =
+                    100.0 * (total_delta.saturating_sub(idle_delta)) as f64 / total_delta as f64;
                 let percent = (usage.round() as u32).min(100);
                 if self.cached_percent == Some(percent) {
                     return Ok(ModuleUpdate::Unchanged);
@@ -475,7 +496,9 @@ impl StatusModule for CpuModule {
             }
         } else {
             self.cached_text = "CPU: ERR".to_string();
-            Ok(ModuleUpdate::Error("Malformed /proc/stat content".to_string()))
+            Ok(ModuleUpdate::Error(
+                "Malformed /proc/stat content".to_string(),
+            ))
         }
     }
 
@@ -552,7 +575,8 @@ impl BatteryModule {
         let mut cap_file = std::fs::File::open(capacity_path)
             .map_err(|e| format!("Failed to read capacity: {}", e))?;
         let mut cap_buf = [0u8; 16];
-        let n = cap_file.read(&mut cap_buf)
+        let n = cap_file
+            .read(&mut cap_buf)
             .map_err(|e| format!("Failed to read capacity: {}", e))?;
         let cap_content = std::str::from_utf8(&cap_buf[..n])
             .map_err(|e| format!("Failed to parse capacity utf8: {}", e))?;
@@ -683,7 +707,10 @@ impl ClockModule {
                 let mday = tm.tm_mday;
                 let hour = tm.tm_hour;
                 let min = tm.tm_min;
-                format!("{}:{:04}-{:02}-{:02}:{:02}:{:02}", day_name, year, month, mday, hour, min)
+                format!(
+                    "{}:{:04}-{:02}-{:02}:{:02}:{:02}",
+                    day_name, year, month, mday, hour, min
+                )
             } else {
                 "---:0000-00-00:00:00".to_string()
             }
@@ -865,4 +892,3 @@ impl StatusModule for VolumeModule {
         Some(self)
     }
 }
-

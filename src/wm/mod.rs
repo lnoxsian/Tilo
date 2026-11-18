@@ -6,36 +6,34 @@
 
 pub mod client;
 pub mod events;
+pub mod ipc;
 pub mod ui;
 pub mod workspace;
 
-
 use crate::atoms::Atoms;
 use crate::client::ClientState;
-use crate::config::{load_config, load_config_or_default, Config, ReloadError};
-use crate::ewmh::{
-    init_ewmh, EwmhAtoms,
-};
+use crate::config::{Config, ReloadError, load_config, load_config_or_default};
+pub use crate::error::WmError;
+use crate::error::is_connection_lost_error;
+use crate::ewmh::{EwmhAtoms, init_ewmh};
 use crate::focus::{
-    set_window_border_color, set_window_border_width, BorderConfig,
-    WorkspaceFocus,
+    BorderConfig, WorkspaceFocus, set_window_border_color, set_window_border_width,
 };
-use crate::monitor::{query_monitors, setup_randr_events, MonitorManager};
 use crate::input::InputManager;
-use crate::keybind::{parse_modifier, MOD_SUPER};
+use crate::keybind::{MOD_SUPER, parse_modifier};
 use crate::layout::LayoutConfig;
+use crate::monitor::{MonitorManager, query_monitors, setup_randr_events};
 use crate::rules::WindowRule;
 use crate::statusbar::Statusbar;
 use crate::workspace::WorkspaceManager;
 use crate::x11::{X11Context, X11Error};
-use x11rb::wrapper::ConnectionExt as _;
-pub use crate::error::WmError;
-use crate::error::is_connection_lost_error;
+use std::sync::atomic::{AtomicBool, Ordering};
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::{
-    ButtonIndex, ChangeWindowAttributesAux, ConnectionExt, EventMask, InputFocus, MapState, ModMask, Window,
+    ButtonIndex, ChangeWindowAttributesAux, ConnectionExt, EventMask, InputFocus, MapState,
+    ModMask, Window,
 };
-use std::sync::atomic::{AtomicBool, Ordering};
+use x11rb::wrapper::ConnectionExt as _;
 
 /// Global flag for SIGUSR1 signal (toggles launcher).
 pub static LAUNCHER_SIGNAL: AtomicBool = AtomicBool::new(false);
@@ -138,6 +136,14 @@ pub struct WindowManager {
     pub mouse_bindings: Vec<crate::mouse::MouseBinding>,
     /// Cursors for pointer interactions (normal arrow, move fleur, resize sizing).
     pub cursor_manager: crate::cursor::CursorManager,
+    /// Background IPC server instance for runtime control.
+    pub ipc_server: Option<crate::ipc::IpcServer>,
+    /// Receiver for requests forwarded from IPC clients.
+    pub ipc_rx: Option<std::sync::mpsc::Receiver<crate::ipc::IpcWmRequest>>,
+    /// Read file descriptor of wake pipe to interrupt event loop poll on IPC requests.
+    pub wake_pipe_read: Option<i32>,
+    /// Write file descriptor of wake pipe.
+    pub wake_pipe_write: Option<i32>,
 }
 
 impl WindowManager {
@@ -182,10 +188,8 @@ impl WindowManager {
             ws.layout = config.layout;
         }
 
-        let mut monitor_manager = MonitorManager::new(
-            context.screen_width as u32,
-            context.screen_height as u32,
-        );
+        let mut monitor_manager =
+            MonitorManager::new(context.screen_width as u32, context.screen_height as u32);
         let _ = setup_randr_events(&context.connection, context.root_window);
         if let Ok(monitors) = query_monitors(
             &context.connection,
@@ -196,7 +200,13 @@ impl WindowManager {
             println!(
                 "[INFO  tilo::wm] Detected {} monitor(s): {:?}",
                 monitors.len(),
-                monitors.iter().map(|m| format!("id={} {}x{}+{}+{} ws={}", m.id, m.width, m.height, m.x, m.y, m.workspace)).collect::<Vec<_>>()
+                monitors
+                    .iter()
+                    .map(|m| format!(
+                        "id={} {}x{}+{}+{} ws={}",
+                        m.id, m.width, m.height, m.x, m.y, m.workspace
+                    ))
+                    .collect::<Vec<_>>()
             );
             let _ = monitor_manager.reconcile_monitors(monitors);
         }
@@ -211,8 +221,31 @@ impl WindowManager {
             true,
         );
 
-        let cursor_manager = crate::cursor::CursorManager::new(&context.connection, context.screen_num);
+        let cursor_manager =
+            crate::cursor::CursorManager::new(&context.connection, context.screen_num);
         let _ = cursor_manager.apply_root(&context.connection, context.root_window);
+
+        let mut pipe_fds = [0i32; 2];
+        let (wake_read, wake_write) = if unsafe {
+            libc::pipe2(pipe_fds.as_mut_ptr(), libc::O_CLOEXEC | libc::O_NONBLOCK)
+        } == 0 {
+            (Some(pipe_fds[0]), Some(pipe_fds[1]))
+        } else {
+            (None, None)
+        };
+
+        let (ipc_server, ipc_rx) = if let Some(w_fd) = wake_write {
+            let (tx, rx) = std::sync::mpsc::channel();
+            match crate::ipc::IpcServer::start(tx, w_fd) {
+                Ok(srv) => (Some(srv), Some(rx)),
+                Err(err) => {
+                    eprintln!("[WARN  tilo::wm] Failed to start IPC server: {}", err);
+                    (None, None)
+                }
+            }
+        } else {
+            (None, None)
+        };
 
         Ok(Self {
             context,
@@ -226,7 +259,7 @@ impl WindowManager {
             current_workspace: 1,
             input_manager,
             workspace_manager,
-            rules: Vec::new(),
+            rules: config.window_rules.clone(),
             ewmh_atoms,
             supporting_window,
             monitor_manager,
@@ -242,6 +275,10 @@ impl WindowManager {
             mouse_action: crate::mouse::MouseAction::None,
             mouse_bindings,
             cursor_manager,
+            ipc_server,
+            ipc_rx,
+            wake_pipe_read: wake_read,
+            wake_pipe_write: wake_write,
             config,
         })
     }
@@ -258,6 +295,7 @@ impl WindowManager {
         self.layout_config.outer_gap = config.outer_gap;
         self.layout_config.master_ratio = config.master_ratio;
         self.workspace_manager.current_workspace_mut().layout = config.layout;
+        self.rules = config.window_rules.clone();
 
         self.input_manager.re_register(
             &self.context.connection,
@@ -302,7 +340,8 @@ impl WindowManager {
                 } else {
                     self.border_config.normal_color
                 };
-                let _ = set_window_border_color(&self.context.connection, client.window, border_color);
+                let _ =
+                    set_window_border_color(&self.context.connection, client.window, border_color);
                 client.border_color = Some(border_color);
             }
         }
@@ -332,7 +371,10 @@ impl WindowManager {
         if self.config.statusbar {
             let bar_height = self.statusbar.as_ref().map(|b| b.rect.height).unwrap_or(24);
             if let Err(err) = self.enable_statusbar(bar_height) {
-                eprintln!("[WARN  tilo::wm] Failed to enable statusbar on config reload: {}", err);
+                eprintln!(
+                    "[WARN  tilo::wm] Failed to enable statusbar on config reload: {}",
+                    err
+                );
             }
         } else if self.statusbar.is_some() || !self.secondary_statusbars.is_empty() {
             let _ = self.disable_statusbar();
@@ -351,19 +393,26 @@ impl WindowManager {
                     crate::launcher::LauncherPosition::Spotlight => {
                         let width = crate::launcher::LAUNCHER_WIDTH;
                         let height = crate::launcher::LAUNCHER_HEIGHT;
-                        let x = (active_mon.x + (active_mon.width as i32 - width as i32) / 2).max(active_mon.x) as i16;
-                        let y = (active_mon.y + (active_mon.height as i32 - height as i32) / 3).max(active_mon.y) as i16;
+                        let x = (active_mon.x + (active_mon.width as i32 - width as i32) / 2)
+                            .max(active_mon.x) as i16;
+                        let y = (active_mon.y + (active_mon.height as i32 - height as i32) / 3)
+                            .max(active_mon.y) as i16;
                         (width, height, x, y)
                     }
                     crate::launcher::LauncherPosition::Dmenu => {
-                        let height = self.statusbar.as_ref().map(|b| b.rect.height as u16).unwrap_or(24);
+                        let height = self
+                            .statusbar
+                            .as_ref()
+                            .map(|b| b.rect.height as u16)
+                            .unwrap_or(24);
                         let width = active_mon.width as u16;
                         let x = active_mon.x as i16;
                         let y = active_mon.y as i16;
                         (width, height, x, y)
                     }
                 };
-                launcher.rect = crate::layout::Rect::new(x as i32, y as i32, width as u32, height as u32);
+                launcher.rect =
+                    crate::layout::Rect::new(x as i32, y as i32, width as u32, height as u32);
                 let _ = self.context.connection.configure_window(
                     launcher.window_id,
                     &x11rb::protocol::xproto::ConfigureWindowAux::new()
@@ -497,17 +546,26 @@ impl WindowManager {
                     if is_connection_lost_error(&err) {
                         return Err(WmError::ConnectionLost(err.to_string()));
                     }
-                    eprintln!("[WARN  tilo::wm] Recovered from event dispatch error: {}", err);
+                    eprintln!(
+                        "[WARN  tilo::wm] Recovered from event dispatch error: {}",
+                        err
+                    );
                 }
             }
 
             // Periodic statusbar update if statusbar is active
             let timeout_ms = if self.statusbar.is_some() || !self.secondary_statusbars.is_empty() {
-                let mut time_until_next = self.statusbar.as_ref().map(|b| b.time_until_next_update()).unwrap_or(std::time::Duration::from_secs(1));
+                let mut time_until_next = self
+                    .statusbar
+                    .as_ref()
+                    .map(|b| b.time_until_next_update())
+                    .unwrap_or(std::time::Duration::from_secs(1));
                 for b in &self.secondary_statusbars {
                     time_until_next = time_until_next.min(b.time_until_next_update());
                 }
-                if time_until_next.is_zero() || last_status_update.elapsed() >= std::time::Duration::from_millis(1000) {
+                if time_until_next.is_zero()
+                    || last_status_update.elapsed() >= std::time::Duration::from_millis(1000)
+                {
                     if self.update_statusbar() {
                         had_activity = true;
                     }
@@ -519,23 +577,42 @@ impl WindowManager {
             };
 
             // Only flush pending X11 requests when activity occurred
-            if had_activity
-                && let Err(err) = self.context.flush() {
-                    if is_connection_lost_error(&err) {
-                        return Err(WmError::ConnectionLost(err.to_string()));
-                    }
-                    eprintln!("[WARN  tilo::wm] Flush error before poll: {}", err);
+            if had_activity && let Err(err) = self.context.flush() {
+                if is_connection_lost_error(&err) {
+                    return Err(WmError::ConnectionLost(err.to_string()));
+                }
+                eprintln!("[WARN  tilo::wm] Flush error before poll: {}", err);
             }
 
-            // Wait for incoming X11 events on the connection socket, waking immediately
-            // upon input or timing out when the next periodic statusbar update is due.
-            let mut pfd = libc::pollfd {
-                fd: conn_fd,
-                events: libc::POLLIN,
-                revents: 0,
-            };
+            // Wait for incoming X11 events on the connection socket or IPC wake pipe,
+            // waking immediately upon input or timing out when the next periodic statusbar update is due.
+            let mut poll_fds = [
+                libc::pollfd {
+                    fd: conn_fd,
+                    events: libc::POLLIN,
+                    revents: 0,
+                },
+                libc::pollfd {
+                    fd: self.wake_pipe_read.unwrap_or(-1),
+                    events: libc::POLLIN,
+                    revents: 0,
+                },
+            ];
+            let nfds = if self.wake_pipe_read.is_some() { 2 } else { 1 };
             unsafe {
-                libc::poll(&mut pfd, 1, timeout_ms);
+                libc::poll(poll_fds.as_mut_ptr(), nfds, timeout_ms);
+            }
+
+            if nfds == 2 && (poll_fds[1].revents & libc::POLLIN != 0) {
+                let mut drain = [0u8; 64];
+                while unsafe {
+                    libc::read(
+                        poll_fds[1].fd,
+                        drain.as_mut_ptr() as *mut libc::c_void,
+                        drain.len(),
+                    )
+                } > 0 {}
+                let _ = self.process_pending_ipc_requests()?;
             }
         }
         if self.running {
@@ -544,6 +621,96 @@ impl WindowManager {
             let _ = self.perform_graceful_shutdown();
         }
         Ok(())
+    }
+
+    /// Processes all pending requests received over the IPC channel.
+    pub fn process_pending_ipc_requests(&mut self) -> Result<usize, WmError> {
+        let mut count = 0;
+        let mut state_changed = false;
+
+        while let Some(req) = self.ipc_rx.as_ref().and_then(|rx| rx.try_recv().ok()) {
+            count += 1;
+            match req.request {
+                crate::ipc::IpcRequest::Command(cmd_str) => {
+                    let chains = crate::ipc::split_command_chain(&cmd_str);
+                    let mut results = Vec::new();
+
+                    for chain in chains {
+                        let res = self.execute_ipc_command_line(&chain);
+                        if res.success {
+                            state_changed = true;
+                        }
+                        results.push(res);
+                    }
+
+                    let resp_json = if results.len() == 1 {
+                        let r = &results[0];
+                        if r.success {
+                            "{\"success\":true}".to_string()
+                        } else {
+                            format!(
+                                "{{\"success\":false,\"error\":{}}}",
+                                crate::ipc::JsonValue::Str(r.error.clone().unwrap_or_default())
+                                    .to_json_string()
+                            )
+                        }
+                    } else {
+                        let mut arr = crate::ipc::JsonValue::array();
+                        for r in results {
+                            let mut item = crate::ipc::JsonValue::object();
+                            item.insert("success", crate::ipc::JsonValue::Bool(r.success));
+                            if let Some(err) = r.error {
+                                item.insert("error", crate::ipc::JsonValue::Str(err));
+                            }
+                            arr.push(item);
+                        }
+                        arr.to_json_string()
+                    };
+                    let _ = req.responder.send(resp_json);
+                }
+                crate::ipc::IpcRequest::GetTree => {
+                    let tree_json = self.dump_tree_json();
+                    let _ = req.responder.send(tree_json);
+                }
+                crate::ipc::IpcRequest::GetWorkspaces => {
+                    let ws_json = self.dump_workspaces_json();
+                    let _ = req.responder.send(ws_json);
+                }
+                crate::ipc::IpcRequest::GetOutputs => {
+                    let out_json = self.dump_outputs_json();
+                    let _ = req.responder.send(out_json);
+                }
+                crate::ipc::IpcRequest::GetMarks => {
+                    let marks_json = self.dump_marks_json();
+                    let _ = req.responder.send(marks_json);
+                }
+                crate::ipc::IpcRequest::GetVersion => {
+                    let mut v = crate::ipc::JsonValue::object();
+                    v.insert("name", crate::ipc::JsonValue::Str("tilo".to_string()));
+                    v.insert(
+                        "version",
+                        crate::ipc::JsonValue::Str(env!("CARGO_PKG_VERSION").to_string()),
+                    );
+                    let _ = req.responder.send(v.to_json_string());
+                }
+                crate::ipc::IpcRequest::Subscribe(_) => {
+                    let _ = req.responder.send("{\"success\":true}".to_string());
+                }
+            }
+        }
+
+        if state_changed {
+            if let Err(e) = self.retile() {
+                if is_connection_lost_error(&e) {
+                    return Err(WmError::ConnectionLost(e.to_string()));
+                }
+            }
+            let _ = self.update_ewmh_current_desktop();
+            let _ = self.render_statusbar();
+            let _ = self.context.flush();
+        }
+
+        Ok(count)
     }
 
     /// Polls and processes all currently buffered events from the X server without blocking.
@@ -560,15 +727,19 @@ impl WindowManager {
                 if is_connection_lost_error(&err) {
                     return Err(WmError::ConnectionLost(err.to_string()));
                 }
-                eprintln!("[WARN  tilo::wm] Recovered from event dispatch error: {}", err);
+                eprintln!(
+                    "[WARN  tilo::wm] Recovered from event dispatch error: {}",
+                    err
+                );
             }
             count += 1;
         }
         if count > 0
             && let Err(err) = self.context.flush()
-                && is_connection_lost_error(&err) {
-                    return Err(WmError::ConnectionLost(err.to_string()));
-                }
+            && is_connection_lost_error(&err)
+        {
+            return Err(WmError::ConnectionLost(err.to_string()));
+        }
         Ok(count)
     }
 
@@ -576,9 +747,7 @@ impl WindowManager {
     pub fn stop(&mut self) {
         self.running = false;
     }
-
 }
-
 
 /// Reloads the configuration from disk while the window manager is running.
 ///
@@ -785,11 +954,30 @@ pub fn perform_graceful_shutdown(
     let _ = conn.ungrab_button(ButtonIndex::ANY, root, ModMask::ANY);
     let aux = ChangeWindowAttributesAux::default().event_mask(EventMask::NO_EVENT);
     let _ = conn.change_window_attributes(root, &aux);
-    let _ = state.context.connection.change_window_attributes(root, &aux);
+    let _ = state
+        .context
+        .connection
+        .change_window_attributes(root, &aux);
     let _ = state.context.flush();
 
     let _ = conn.set_input_focus(InputFocus::POINTER_ROOT, root, x11rb::CURRENT_TIME);
     let _ = conn.flush();
+
+    if let Some(ref srv) = state.ipc_server {
+        srv.broadcast_event("shutdown", "{\"event\":\"shutdown\",\"change\":\"exit\"}");
+        srv.shutdown();
+    }
+    if let Some(r_fd) = state.wake_pipe_read.take() {
+        unsafe {
+            libc::close(r_fd);
+        }
+    }
+    if let Some(w_fd) = state.wake_pipe_write.take() {
+        unsafe {
+            libc::close(w_fd);
+        }
+    }
+
     state.running = false;
     Ok(())
 }

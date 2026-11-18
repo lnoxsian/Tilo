@@ -7,8 +7,10 @@
 //! - Color parsing supporting hex formats (`#RRGGBB`, `#RGB`, `#AARRGGBB`, `0xRRGGBB`) and decimal values.
 //! - No client-side titlebar decorations by default, preserving lightweight performance.
 
-use x11rb::protocol::xproto::{ChangeWindowAttributesAux, ConfigureWindowAux, ConnectionExt, Window};
 use crate::x11::X11Error;
+use x11rb::protocol::xproto::{
+    ChangeWindowAttributesAux, ConfigureWindowAux, ConnectionExt, Window,
+};
 
 /// Configuration for window borders.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

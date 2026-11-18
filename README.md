@@ -12,24 +12,6 @@
   <em>A minimal, fast, single-binary X11 tiling window manager written in Rust.</em>
 </p>
 
-```
-X11
- │
- ▼
-┌──────────────────────────────────┐
-│              tilo                │
-│                                  │
-│  Window Manager                  │
-│  Tiling Engine  (BSP, Master,    │
-│                  Grid, Tabbed…)  │
-│  Workspace Manager  (1–9)        │
-│  Multi-Monitor  (XRandR)         │
-│  Keybindings                     │
-│  Integrated Launcher             │
-│  Integrated Status Bar           │
-│  ICCCM / EWMH                    │
-└──────────────────────────────────┘
-```
 
 **Everything runs in one process. No compositor. No external bar. No external launcher.**
 

@@ -45,7 +45,13 @@ pub fn configure_detached_command(cmd: &mut Command) {
             // 3. Mark all file descriptors >= 3 with FD_CLOEXEC so they are closed on exec.
             #[cfg(target_os = "linux")]
             {
-                if libc::syscall(libc::SYS_close_range, 3, libc::c_uint::MAX, CLOSE_RANGE_CLOEXEC) != 0 {
+                if libc::syscall(
+                    libc::SYS_close_range,
+                    3,
+                    libc::c_uint::MAX,
+                    CLOSE_RANGE_CLOEXEC,
+                ) != 0
+                {
                     set_cloexec_fallback();
                 }
             }
@@ -114,6 +120,9 @@ mod tests {
     #[test]
     fn test_spawn_detached_app_nonexistent_fails() {
         let res = spawn_detached_app("__non_existent_binary_xyz_123__", &[]);
-        assert!(res.is_err(), "nonexistent binary should fail and return error");
+        assert!(
+            res.is_err(),
+            "nonexistent binary should fail and return error"
+        );
     }
 }

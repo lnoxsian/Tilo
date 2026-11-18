@@ -22,7 +22,7 @@ pub fn parse_font_spec(font_name: &str) -> (String, f32) {
     if (clean.starts_with('"') && clean.ends_with('"'))
         || (clean.starts_with('\'') && clean.ends_with('\''))
     {
-        clean = &clean[1..clean.len() - 1].trim();
+        clean = clean[1..clean.len() - 1].trim();
     }
 
     // Look for fontconfig size syntax, e.g. "monospace:size=10"
@@ -220,19 +220,17 @@ fn search_dir_for_best_font(
                 if (ext_lower == "ttf" || ext_lower == "otf")
                     && let Some(stem) = path.file_stem().and_then(|s| s.to_str())
                     && let Some(score) = score_font_candidate(stem, target, query)
+                    && best.as_ref().is_none_or(|(_, s)| score > *s)
                 {
-                    if best.as_ref().map_or(true, |(_, s)| score > *s) {
-                        best = Some((path, score));
-                    }
+                    best = Some((path, score));
                 }
             }
         } else if path.is_dir()
             && let Some((sub_path, sub_score)) =
                 search_dir_for_best_font(&path, target, query, depth + 1)
+            && best.as_ref().is_none_or(|(_, s)| sub_score > *s)
         {
-            if best.as_ref().map_or(true, |(_, s)| sub_score > *s) {
-                best = Some((sub_path, sub_score));
-            }
+            best = Some((sub_path, sub_score));
         }
     }
 
@@ -241,9 +239,7 @@ fn search_dir_for_best_font(
 
 /// Attempts to find a font file matching a given fallback candidate in search directories.
 fn find_in_search_paths(target: &str, query: &str) -> Option<PathBuf> {
-    let clean_target = target
-        .trim_end_matches(".ttf")
-        .trim_end_matches(".otf");
+    let clean_target = target.trim_end_matches(".ttf").trim_end_matches(".otf");
 
     // 1. Check user local font directories
     if let Ok(home) = std::env::var("HOME") {
@@ -253,10 +249,10 @@ fn find_in_search_paths(target: &str, query: &str) -> Option<PathBuf> {
         ];
         for p in &user_paths {
             let path = Path::new(p);
-            if let Some((found, score)) = search_dir_for_best_font(path, clean_target, query, 0) {
-                if score >= 4000 {
-                    return Some(found);
-                }
+            if let Some((found, score)) = search_dir_for_best_font(path, clean_target, query, 0)
+                && score >= 4000
+            {
+                return Some(found);
             }
         }
     }
@@ -269,16 +265,16 @@ fn find_in_search_paths(target: &str, query: &str) -> Option<PathBuf> {
             if score >= 4000 {
                 return Some(found);
             }
-            if best_system.as_ref().map_or(true, |(_, s)| score > *s) {
+            if best_system.as_ref().is_none_or(|(_, s)| score > *s) {
                 best_system = Some((found, score));
             }
         }
     }
 
-    if let Some((found, score)) = best_system {
-        if score > -5000 {
-            return Some(found);
-        }
+    if let Some((found, score)) = best_system
+        && score > -5000
+    {
+        return Some(found);
     }
 
     None
@@ -291,12 +287,9 @@ fn resolve_via_fc_match(family: &str) -> Option<PathBuf> {
         lower.as_str(),
         "monospace" | "mono" | "sans" | "sans-serif" | "sans_serif" | "serif"
     );
-    let wants_italic = lower.contains("italic")
-        || lower.contains("oblique")
-        || lower.contains("slanted");
-    let wants_bold = lower.contains("bold")
-        || lower.contains("black")
-        || lower.contains("heavy");
+    let wants_italic =
+        lower.contains("italic") || lower.contains("oblique") || lower.contains("slanted");
+    let wants_bold = lower.contains("bold") || lower.contains("black") || lower.contains("heavy");
 
     // If family already specifies :style= or :slant=, use as-is.
     // Otherwise, append style specifiers to guarantee fontconfig matches regular/non-italic.
@@ -398,10 +391,10 @@ fn resolve_via_pure_rust_search(family: &str) -> Option<PathBuf> {
     // 4. Ultimate fallback: find ANY .ttf or .otf in system fonts (preferring non-italic regular)
     for p in FONT_SEARCH_PATHS {
         let path = Path::new(p);
-        if let Some((found, score)) = search_dir_for_best_font(path, "", &lower, 0) {
-            if score > -5000 {
-                return Some(found);
-            }
+        if let Some((found, score)) = search_dir_for_best_font(path, "", &lower, 0)
+            && score > -5000
+        {
+            return Some(found);
         }
     }
 
@@ -490,7 +483,10 @@ impl FontEngine {
                 (-lm.descent).round().max(0.0) as i16,
             )
         } else {
-            ((size_px * 0.8).round() as i16, (size_px * 0.2).round() as i16)
+            (
+                (size_px * 0.8).round() as i16,
+                (size_px * 0.2).round() as i16,
+            )
         };
 
         let char_width = font.metrics('M', size_px).advance_width.round().max(1.0) as u16;
@@ -519,9 +515,10 @@ impl FontEngine {
     pub fn with_glyph<R>(&self, ch: char, f: impl FnOnce(&fontdue::Metrics, &[u8]) -> R) -> R {
         let code = ch as u32;
         if code < 128
-            && let Some((ref metrics, ref bitmap)) = self.ascii_cache[code as usize] {
-                return f(metrics, bitmap);
-            }
+            && let Some((ref metrics, ref bitmap)) = self.ascii_cache[code as usize]
+        {
+            return f(metrics, bitmap);
+        }
         let mut cache = self.glyph_cache.borrow_mut();
         let (metrics, bitmap) = cache
             .entry(ch)
@@ -534,9 +531,10 @@ impl FontEngine {
     pub fn char_advance(&self, ch: char) -> f32 {
         let code = ch as u32;
         if code < 128
-            && let Some((ref metrics, _)) = self.ascii_cache[code as usize] {
-                return metrics.advance_width;
-            }
+            && let Some((ref metrics, _)) = self.ascii_cache[code as usize]
+        {
+            return metrics.advance_width;
+        }
         let mut cache = self.glyph_cache.borrow_mut();
         if let Some((metrics, _)) = cache.get(&ch) {
             return metrics.advance_width;
@@ -574,7 +572,10 @@ mod tests {
     #[test]
     fn test_resolve_font_file() {
         let resolved = resolve_font_file("monospace");
-        assert!(resolved.is_some(), "Monospace font should resolve on system");
+        assert!(
+            resolved.is_some(),
+            "Monospace font should resolve on system"
+        );
         let path = resolved.unwrap();
         assert!(path.exists());
         let path_str = path.to_string_lossy().to_lowercase();
@@ -588,23 +589,49 @@ mod tests {
     #[test]
     fn test_score_font_candidate_prefers_regular_over_oblique() {
         // Target: DejaVuSansMono (query: monospace)
-        let regular_score = score_font_candidate("DejaVuSansMono", "DejaVuSansMono", "monospace").unwrap();
-        let oblique_score = score_font_candidate("DejaVuSansMono-Oblique", "DejaVuSansMono", "monospace").unwrap();
-        let bold_oblique_score = score_font_candidate("DejaVuSansMono-BoldOblique", "DejaVuSansMono", "monospace").unwrap();
-        let bold_score = score_font_candidate("DejaVuSansMono-Bold", "DejaVuSansMono", "monospace").unwrap();
+        let regular_score =
+            score_font_candidate("DejaVuSansMono", "DejaVuSansMono", "monospace").unwrap();
+        let oblique_score =
+            score_font_candidate("DejaVuSansMono-Oblique", "DejaVuSansMono", "monospace").unwrap();
+        let bold_oblique_score =
+            score_font_candidate("DejaVuSansMono-BoldOblique", "DejaVuSansMono", "monospace")
+                .unwrap();
+        let bold_score =
+            score_font_candidate("DejaVuSansMono-Bold", "DejaVuSansMono", "monospace").unwrap();
 
-        assert!(regular_score > bold_score, "Regular must score higher than bold");
-        assert!(bold_score > oblique_score, "Bold must score higher than oblique");
-        assert!(oblique_score > bold_oblique_score, "Oblique must score higher than bold oblique");
-        assert!(regular_score - oblique_score >= 10000, "Regular must have a huge lead over oblique");
+        assert!(
+            regular_score > bold_score,
+            "Regular must score higher than bold"
+        );
+        assert!(
+            bold_score > oblique_score,
+            "Bold must score higher than oblique"
+        );
+        assert!(
+            oblique_score > bold_oblique_score,
+            "Oblique must score higher than bold oblique"
+        );
+        assert!(
+            regular_score - oblique_score >= 10000,
+            "Regular must have a huge lead over oblique"
+        );
     }
 
     #[test]
     fn test_score_font_candidate_honors_explicit_italic() {
-        let regular_score = score_font_candidate("DejaVuSansMono", "DejaVuSansMono", "monospace italic").unwrap();
-        let oblique_score = score_font_candidate("DejaVuSansMono-Oblique", "DejaVuSansMono", "monospace italic").unwrap();
+        let regular_score =
+            score_font_candidate("DejaVuSansMono", "DejaVuSansMono", "monospace italic").unwrap();
+        let oblique_score = score_font_candidate(
+            "DejaVuSansMono-Oblique",
+            "DejaVuSansMono",
+            "monospace italic",
+        )
+        .unwrap();
 
-        assert!(oblique_score > regular_score, "Oblique must score higher when italic is requested");
+        assert!(
+            oblique_score > regular_score,
+            "Oblique must score higher when italic is requested"
+        );
     }
 
     #[test]
@@ -622,10 +649,14 @@ mod tests {
         File::create(&bold_file).unwrap();
         File::create(&regular_file).unwrap();
 
-        let (chosen_path, score) = search_dir_for_best_font(&temp_dir, "DejaVuSansMono", "monospace", 0)
-            .expect("Should find matching font in directory");
+        let (chosen_path, score) =
+            search_dir_for_best_font(&temp_dir, "DejaVuSansMono", "monospace", 0)
+                .expect("Should find matching font in directory");
 
-        assert_eq!(chosen_path, regular_file, "Must choose regular file over oblique/bold");
+        assert_eq!(
+            chosen_path, regular_file,
+            "Must choose regular file over oblique/bold"
+        );
         assert!(score >= 4000);
 
         let _ = std::fs::remove_dir_all(&temp_dir);

@@ -116,9 +116,7 @@ pub fn run_autostart_commands(cmds: &[AutostartCmd]) -> Result<(), AutostartErro
                 );
             }
             Err(e) => {
-                eprintln!(
-                    "[WARN  tilo::autostart] {}", e
-                );
+                eprintln!("[WARN  tilo::autostart] {}", e);
             }
         }
     }
@@ -135,7 +133,8 @@ mod tests {
         assert_eq!(cmd1.program, "nm-applet");
         assert!(cmd1.args.is_empty());
 
-        let cmd2 = AutostartCmd::from_command_line("feh --bg-fill '/path/to my/wallpaper.jpg'").unwrap();
+        let cmd2 =
+            AutostartCmd::from_command_line("feh --bg-fill '/path/to my/wallpaper.jpg'").unwrap();
         assert_eq!(cmd2.program, "feh");
         assert_eq!(cmd2.args, vec!["--bg-fill", "/path/to my/wallpaper.jpg"]);
 

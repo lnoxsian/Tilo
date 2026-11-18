@@ -8,9 +8,9 @@
 //! - Directional spatial focus algorithm with projection overlap heuristic and optional wrapping.
 //! - ICCCM `WM_TAKE_FOCUS` protocol and X11 input focus helpers.
 
-use std::collections::HashMap;
 use crate::layout::Rect;
 use crate::x11::X11Error;
+use std::collections::HashMap;
 use x11rb::protocol::xproto::{ConnectionExt, InputFocus, Window};
 
 /// Direction for spatial focus and movement.
@@ -45,8 +45,8 @@ impl Direction {
 }
 
 pub use crate::decoration::{
-    parse_color, set_window_border_color, set_window_border_width, update_window_border,
-    BorderConfig,
+    BorderConfig, parse_color, set_window_border_color, set_window_border_width,
+    update_window_border,
 };
 
 /// Represents the focus state of a given workspace.
@@ -325,12 +325,8 @@ pub fn focus_direction_wrap(
     find_neighbor(direction, current, clients, true)
 }
 
-
 /// Sets input focus to the specified window with `POINTER_ROOT` revert mode.
-pub fn set_input_focus<C: ConnectionExt>(
-    conn: &C,
-    window: Window,
-) -> Result<(), X11Error> {
+pub fn set_input_focus<C: ConnectionExt>(conn: &C, window: Window) -> Result<(), X11Error> {
     conn.set_input_focus(InputFocus::POINTER_ROOT, window, x11rb::CURRENT_TIME)?;
     Ok(())
 }
@@ -438,37 +434,82 @@ mod tests {
         let s2 = 3;
 
         let clients = vec![
-            (master, Rect { x: 0, y: 0, width: 960, height: 1080 }),
-            (s1, Rect { x: 960, y: 0, width: 960, height: 540 }),
-            (s2, Rect { x: 960, y: 540, width: 960, height: 540 }),
+            (
+                master,
+                Rect {
+                    x: 0,
+                    y: 0,
+                    width: 960,
+                    height: 1080,
+                },
+            ),
+            (
+                s1,
+                Rect {
+                    x: 960,
+                    y: 0,
+                    width: 960,
+                    height: 540,
+                },
+            ),
+            (
+                s2,
+                Rect {
+                    x: 960,
+                    y: 540,
+                    width: 960,
+                    height: 540,
+                },
+            ),
         ];
 
         // From Master -> Right goes to S1 (first candidate in order)
-        assert_eq!(focus_direction(Direction::Right, Some(master), &clients), Some(s1));
+        assert_eq!(
+            focus_direction(Direction::Right, Some(master), &clients),
+            Some(s1)
+        );
 
         // From Master -> Left (no wrap) is None
-        assert_eq!(focus_direction(Direction::Left, Some(master), &clients), None);
+        assert_eq!(
+            focus_direction(Direction::Left, Some(master), &clients),
+            None
+        );
 
         // From Master -> Left (with wrap) wraps to right stack window
-        assert_eq!(focus_direction_wrap(Direction::Left, Some(master), &clients), Some(s1));
+        assert_eq!(
+            focus_direction_wrap(Direction::Left, Some(master), &clients),
+            Some(s1)
+        );
 
         // From S1 -> Down goes to S2
-        assert_eq!(focus_direction(Direction::Down, Some(s1), &clients), Some(s2));
+        assert_eq!(
+            focus_direction(Direction::Down, Some(s1), &clients),
+            Some(s2)
+        );
 
         // From S1 -> Left goes to Master
-        assert_eq!(focus_direction(Direction::Left, Some(s1), &clients), Some(master));
+        assert_eq!(
+            focus_direction(Direction::Left, Some(s1), &clients),
+            Some(master)
+        );
 
         // From S2 -> Up goes to S1
         assert_eq!(focus_direction(Direction::Up, Some(s2), &clients), Some(s1));
 
         // From S2 -> Left goes to Master
-        assert_eq!(focus_direction(Direction::Left, Some(s2), &clients), Some(master));
+        assert_eq!(
+            focus_direction(Direction::Left, Some(s2), &clients),
+            Some(master)
+        );
 
         // From S2 -> Right (no wrap) is None
         assert_eq!(focus_direction(Direction::Right, Some(s2), &clients), None);
 
         // From S2 -> Right (with wrap) wraps to Master
-        assert_eq!(focus_direction_wrap(Direction::Right, Some(s2), &clients), Some(master));
+        assert_eq!(
+            focus_direction_wrap(Direction::Right, Some(s2), &clients),
+            Some(master)
+        );
     }
 
     #[test]
@@ -482,14 +523,49 @@ mod tests {
         let d = 40;
 
         let clients = vec![
-            (a, Rect { x: 0, y: 0, width: 500, height: 500 }),
-            (b, Rect { x: 500, y: 0, width: 500, height: 500 }),
-            (c, Rect { x: 0, y: 500, width: 500, height: 500 }),
-            (d, Rect { x: 500, y: 500, width: 500, height: 500 }),
+            (
+                a,
+                Rect {
+                    x: 0,
+                    y: 0,
+                    width: 500,
+                    height: 500,
+                },
+            ),
+            (
+                b,
+                Rect {
+                    x: 500,
+                    y: 0,
+                    width: 500,
+                    height: 500,
+                },
+            ),
+            (
+                c,
+                Rect {
+                    x: 0,
+                    y: 500,
+                    width: 500,
+                    height: 500,
+                },
+            ),
+            (
+                d,
+                Rect {
+                    x: 500,
+                    y: 500,
+                    width: 500,
+                    height: 500,
+                },
+            ),
         ];
 
         // From A
-        assert_eq!(focus_direction(Direction::Right, Some(a), &clients), Some(b));
+        assert_eq!(
+            focus_direction(Direction::Right, Some(a), &clients),
+            Some(b)
+        );
         assert_eq!(focus_direction(Direction::Down, Some(a), &clients), Some(c));
         assert_eq!(focus_direction(Direction::Left, Some(a), &clients), None);
         assert_eq!(focus_direction(Direction::Up, Some(a), &clients), None);
@@ -500,7 +576,10 @@ mod tests {
 
         // From C
         assert_eq!(focus_direction(Direction::Up, Some(c), &clients), Some(a));
-        assert_eq!(focus_direction(Direction::Right, Some(c), &clients), Some(d));
+        assert_eq!(
+            focus_direction(Direction::Right, Some(c), &clients),
+            Some(d)
+        );
 
         // From D
         assert_eq!(focus_direction(Direction::Up, Some(d), &clients), Some(b));

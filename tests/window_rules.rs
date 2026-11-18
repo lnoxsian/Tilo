@@ -3,9 +3,7 @@ use tilo::rules::{RuleAction, RuleCondition, WindowRule};
 use tilo::wm::WindowManager;
 use tilo::x11::X11Context;
 use x11rb::connection::Connection;
-use x11rb::protocol::xproto::{
-    AtomEnum, ConnectionExt, CreateWindowAux, PropMode, WindowClass,
-};
+use x11rb::protocol::xproto::{AtomEnum, ConnectionExt, CreateWindowAux, PropMode, WindowClass};
 use x11rb::wrapper::ConnectionExt as _;
 
 struct XephyrServer {
@@ -63,8 +61,8 @@ fn test_window_rules_in_xephyr() {
 
     let xephyr = XephyrServer::start(96);
     if let Some(server) = xephyr {
-        let wm_ctx = X11Context::connect_to(Some(&server.display))
-            .expect("WM context connect failed");
+        let wm_ctx =
+            X11Context::connect_to(Some(&server.display)).expect("WM context connect failed");
         assert!(wm_ctx.become_wm().is_ok());
 
         let mut wm = WindowManager::new(wm_ctx).expect("Failed to initialize WM");
@@ -171,8 +169,17 @@ fn test_window_rules_in_xephyr() {
         let client_firefox = wm.client_state.get_client(win_firefox).unwrap();
         assert_eq!(client_firefox.workspace, 2);
         assert!(!client_firefox.floating);
-        assert!(!client_firefox.mapped, "Firefox should spawn unmapped on background workspace");
-        assert!(wm.workspace_manager.get(2).unwrap().clients.contains(&win_firefox));
+        assert!(
+            !client_firefox.mapped,
+            "Firefox should spawn unmapped on background workspace"
+        );
+        assert!(
+            wm.workspace_manager
+                .get(2)
+                .unwrap()
+                .clients
+                .contains(&win_firefox)
+        );
 
         // 4. Window matching Rule 3 (Title="Special App" -> workspace=3, floating=true)
         let win_special = create_win();
@@ -194,8 +201,17 @@ fn test_window_rules_in_xephyr() {
         let client_special = wm.client_state.get_client(win_special).unwrap();
         assert_eq!(client_special.workspace, 3);
         assert!(client_special.floating);
-        assert!(!client_special.mapped, "Special App should spawn unmapped on background workspace");
-        assert!(wm.workspace_manager.get(3).unwrap().clients.contains(&win_special));
+        assert!(
+            !client_special.mapped,
+            "Special App should spawn unmapped on background workspace"
+        );
+        assert!(
+            wm.workspace_manager
+                .get(3)
+                .unwrap()
+                .clients
+                .contains(&win_special)
+        );
 
         // 5. Switch to Workspace 2 -> Firefox becomes visible and active
         wm.switch_workspace(2).expect("Switch to ws 2 failed");

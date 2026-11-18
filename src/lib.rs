@@ -5,9 +5,12 @@ pub mod autostart;
 pub mod bar;
 pub mod client;
 pub mod config;
+pub mod container;
+pub mod criteria;
 pub mod input;
-pub mod layout;
+pub mod ipc;
 pub mod launcher;
+pub mod layout;
 pub mod monitor;
 pub mod process;
 pub mod render;
@@ -16,11 +19,11 @@ pub mod wm;
 pub mod workspace;
 pub mod x11;
 
-pub use audio::{get_volume, adjust_volume, toggle_mute, VolumeState, AudioBackend};
+pub use audio::{AudioBackend, VolumeState, adjust_volume, get_volume, toggle_mute};
 pub use bar as statusbar;
-pub use workspace::focus;
 pub use input::keybind;
 pub use input::mouse;
+pub use workspace::focus;
 
 pub use client::decoration;
 pub use client::floating;

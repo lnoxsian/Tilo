@@ -1,7 +1,7 @@
 //! Tabbed layout algorithm.
 
+use super::{LayoutConfig, Rect, calculate_monocle};
 use x11rb::protocol::xproto::Window;
-use super::{calculate_monocle, LayoutConfig, Rect};
 
 /// Calculates the bounding rectangles for a tabbed layout.
 ///

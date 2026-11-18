@@ -18,18 +18,16 @@ use std::time::SystemTime;
 
 use crate::input::KeyboardMapping;
 use crate::keybind::{
-    MOD_CONTROL, MOD_SHIFT, MOD_SUPER, XK_A, XK_B, XK_BACKSPACE, XK_C, XK_D, XK_DOWN, XK_E,
-    XK_END, XK_ESCAPE, XK_F, XK_F5, XK_HOME, XK_LEFT, XK_N, XK_P, XK_PAGE_DOWN, XK_PAGE_UP,
-    XK_Q, XK_R, XK_RETURN, XK_RIGHT, XK_TAB, XK_U, XK_UP, XK_W,
+    MOD_CONTROL, MOD_SHIFT, MOD_SUPER, XK_A, XK_B, XK_BACKSPACE, XK_C, XK_D, XK_DOWN, XK_E, XK_END,
+    XK_ESCAPE, XK_F, XK_F5, XK_HOME, XK_LEFT, XK_N, XK_P, XK_PAGE_DOWN, XK_PAGE_UP, XK_Q, XK_R,
+    XK_RETURN, XK_RIGHT, XK_TAB, XK_U, XK_UP, XK_W,
 };
 use crate::layout::Rect;
 use crate::render::Renderer;
 use crate::statusbar::{ColorScheme, StatusbarError};
 use crate::x11::X11Error;
 use x11rb::connection::Connection;
-use x11rb::protocol::xproto::{
-    ConnectionExt, CreateWindowAux, EventMask, Screen, WindowClass,
-};
+use x11rb::protocol::xproto::{ConnectionExt, CreateWindowAux, EventMask, Screen, WindowClass};
 
 /// Type alias for keyboard mapping matching Plan.md specification.
 pub type KeysymMap = KeyboardMapping;
@@ -281,7 +279,8 @@ impl Launcher {
 
     /// Refreshes the executable cache immediately using system `$PATH`.
     pub fn refresh(&mut self) -> bool {
-        let path_var = std::env::var("PATH").unwrap_or_else(|_| "/usr/local/bin:/usr/bin:/bin".to_string());
+        let path_var =
+            std::env::var("PATH").unwrap_or_else(|_| "/usr/local/bin:/usr/bin:/bin".to_string());
         self.refresh_from(&path_var, &[])
     }
 
@@ -339,7 +338,10 @@ impl Launcher {
                 || (q_lower == "quit" && *opt == "Logout")
                 || (q_lower == "exit" && *opt == "Logout")
                 || (q_lower == "restart" && *opt == "Reboot")
-                || ((q_lower == "screenlock" || q_lower == "lockscreen" || q_lower == "screen_lock") && *opt == "Lock")
+                || ((q_lower == "screenlock"
+                    || q_lower == "lockscreen"
+                    || q_lower == "screen_lock")
+                    && *opt == "Lock")
             {
                 scored.push((900, opt.to_string()));
             } else if let Some(score) = fuzzy_match(opt, trimmed) {
@@ -355,7 +357,8 @@ impl Launcher {
     pub fn ensure_filtered_cache(&mut self) {
         if self.filtered_cache_query != self.query
             || self.filtered_cache_mode != self.mode
-            || (self.filtered_cache.is_empty() && (!self.executable_cache.is_empty() || self.mode == LauncherMode::Exit))
+            || (self.filtered_cache.is_empty()
+                && (!self.executable_cache.is_empty() || self.mode == LauncherMode::Exit))
         {
             self.filtered_cache = if self.mode == LauncherMode::Exit {
                 Self::filter_exit_options_with_lock(&self.query, self.show_lock)
@@ -379,7 +382,12 @@ impl Launcher {
             && self.filtered_cache_query == self.query
             && self.filtered_cache_mode == self.mode
         {
-            return self.filtered_cache.iter().take(max_results).cloned().collect();
+            return self
+                .filtered_cache
+                .iter()
+                .take(max_results)
+                .cloned()
+                .collect();
         }
         if self.mode == LauncherMode::Exit {
             Self::filter_exit_options_with_lock(&self.query, self.show_lock)
@@ -461,15 +469,7 @@ impl Launcher {
         let h = self.rect.height as u16;
 
         // 1. Fill entire launcher background
-        renderer.fill_rect(
-            conn,
-            renderer.pixmap,
-            0,
-            0,
-            w,
-            h,
-            self.color_scheme.bg,
-        )?;
+        renderer.fill_rect(conn, renderer.pixmap, 0, 0, w, h, self.color_scheme.bg)?;
 
         // 2. Draw border around the launcher overlay
         let border_color = self.border_color.unwrap_or(self.color_scheme.border);
@@ -531,7 +531,12 @@ impl Launcher {
         )?;
 
         // Draw vertical cursor bar at cursor_position
-        let byte_offset = self.query.char_indices().nth(self.cursor_position).map(|(i, _)| i).unwrap_or(self.query.len());
+        let byte_offset = self
+            .query
+            .char_indices()
+            .nth(self.cursor_position)
+            .map(|(i, _)| i)
+            .unwrap_or(self.query.len());
         let cursor_offset = renderer.text_width(&self.query[..byte_offset]);
         let cursor_x = 16 + prefix_width as i16 + cursor_offset as i16;
         let cursor_y = 10i16;
@@ -547,7 +552,15 @@ impl Launcher {
         )?;
 
         // 4. Draw separator line below input field
-        renderer.fill_rect(conn, renderer.pixmap, 8, 36, w.saturating_sub(16), 1, self.color_scheme.border)?;
+        renderer.fill_rect(
+            conn,
+            renderer.pixmap,
+            8,
+            36,
+            w.saturating_sub(16),
+            1,
+            self.color_scheme.border,
+        )?;
 
         // 5. Draw filtered result items (windowed slice)
         let mut cur_y = 42i16;
@@ -566,7 +579,15 @@ impl Launcher {
             let item_index = self.scroll_offset + idx;
             let is_selected = item_index == self.selected_index;
             let item_baseline = cur_y + 18;
-            self.item_rects.push((item_index, Rect::new(8, cur_y as i32, w.saturating_sub(16) as u32, row_height as u32)));
+            self.item_rects.push((
+                item_index,
+                Rect::new(
+                    8,
+                    cur_y as i32,
+                    w.saturating_sub(16) as u32,
+                    row_height as u32,
+                ),
+            ));
 
             if is_selected {
                 // Highlight row background
@@ -663,7 +684,9 @@ impl Launcher {
         let input_start_x = start_x as u16 + prefix_width;
         let query_w = renderer.text_width(&self.query);
         // Reserve stable input width so items don't jitter horizontally while typing
-        let input_box_w = (w / 4).max(query_w + 24).min(w.saturating_sub(input_start_x) / 2);
+        let input_box_w = (w / 4)
+            .max(query_w + 24)
+            .min(w.saturating_sub(input_start_x) / 2);
 
         if !self.query.is_empty() {
             renderer.draw_text(
@@ -691,7 +714,12 @@ impl Launcher {
         }
 
         // Draw cursor bar
-        let byte_offset = self.query.char_indices().nth(self.cursor_position).map(|(i, _)| i).unwrap_or(self.query.len());
+        let byte_offset = self
+            .query
+            .char_indices()
+            .nth(self.cursor_position)
+            .map(|(i, _)| i)
+            .unwrap_or(self.query.len());
         let cursor_offset = renderer.text_width(&self.query[..byte_offset]);
         let cursor_x = input_start_x as i16 + cursor_offset as i16;
         let cursor_y = (h.saturating_sub(16)) as i16 / 2;
@@ -752,10 +780,20 @@ impl Launcher {
 
             // Check if selected_index fits starting from self.scroll_offset
             let mut fits = true;
-            let mut used_w = if self.scroll_offset > 0 { left_ind_w } else { 0 };
+            let mut used_w = if self.scroll_offset > 0 {
+                left_ind_w
+            } else {
+                0
+            };
             for idx in self.scroll_offset..=self.selected_index {
                 let item_w = renderer.text_width(&self.filtered_cache[idx]) + (item_pad * 2);
-                let needed = used_w + item_w + if idx + 1 < total_count { right_ind_w } else { 0 };
+                let needed = used_w
+                    + item_w
+                    + if idx + 1 < total_count {
+                        right_ind_w
+                    } else {
+                        0
+                    };
                 if needed > avail_w {
                     fits = false;
                     break;
@@ -765,13 +803,16 @@ impl Launcher {
 
             if !fits {
                 // Shift scroll_offset forward so selected_index fits
-                let sel_w = renderer.text_width(&self.filtered_cache[self.selected_index]) + (item_pad * 2);
+                let sel_w =
+                    renderer.text_width(&self.filtered_cache[self.selected_index]) + (item_pad * 2);
                 let mut backwards_used = sel_w + right_ind_w;
                 let mut new_offset = self.selected_index;
                 while new_offset > 0 {
                     let prev_idx = new_offset - 1;
-                    let prev_w = renderer.text_width(&self.filtered_cache[prev_idx]) + (item_pad * 2);
-                    let needed = backwards_used + prev_w + if prev_idx > 0 { left_ind_w } else { 0 };
+                    let prev_w =
+                        renderer.text_width(&self.filtered_cache[prev_idx]) + (item_pad * 2);
+                    let needed =
+                        backwards_used + prev_w + if prev_idx > 0 { left_ind_w } else { 0 };
                     if needed <= avail_w {
                         backwards_used += prev_w;
                         new_offset = prev_idx;
@@ -816,7 +857,8 @@ impl Launcher {
                     break;
                 }
 
-                self.item_rects.push((idx, Rect::new(cur_x as i32, 0, item_w as u32, h as u32)));
+                self.item_rects
+                    .push((idx, Rect::new(cur_x as i32, 0, item_w as u32, h as u32)));
 
                 if idx == self.selected_index {
                     // Highlight selected item with active_bg pill
@@ -980,9 +1022,7 @@ pub fn handle_launcher_keypress(
         }
         0xfe20 => Some(LauncherAction::SelectPrevious), // XK_ISO_Left_Tab (Shift+Tab)
         XK_F5 => Some(LauncherAction::Refresh),
-        s if (0x20..=0x7e).contains(&s) => {
-            Some(LauncherAction::InsertChar(s as u8 as char))
-        }
+        s if (0x20..=0x7e).contains(&s) => Some(LauncherAction::InsertChar(s as u8 as char)),
         _ => None,
     }
 }
@@ -991,7 +1031,12 @@ pub fn handle_launcher_keypress(
 pub fn update_launcher_state(launcher: &mut Launcher, action: LauncherAction) {
     match action {
         LauncherAction::InsertChar(c) => {
-            let byte_offset = launcher.query.char_indices().nth(launcher.cursor_position).map(|(i, _)| i).unwrap_or(launcher.query.len());
+            let byte_offset = launcher
+                .query
+                .char_indices()
+                .nth(launcher.cursor_position)
+                .map(|(i, _)| i)
+                .unwrap_or(launcher.query.len());
             launcher.query.insert(byte_offset, c);
             launcher.cursor_position += 1;
             launcher.selected_index = 0;
@@ -1024,8 +1069,18 @@ pub fn update_launcher_state(launcher: &mut Launcher, action: LauncherAction) {
                 while i > 0 && !chars[i - 1].is_whitespace() {
                     i -= 1;
                 }
-                let start_byte = launcher.query.char_indices().nth(i).map(|(b, _)| b).unwrap_or(0);
-                let end_byte = launcher.query.char_indices().nth(pos).map(|(b, _)| b).unwrap_or(launcher.query.len());
+                let start_byte = launcher
+                    .query
+                    .char_indices()
+                    .nth(i)
+                    .map(|(b, _)| b)
+                    .unwrap_or(0);
+                let end_byte = launcher
+                    .query
+                    .char_indices()
+                    .nth(pos)
+                    .map(|(b, _)| b)
+                    .unwrap_or(launcher.query.len());
                 launcher.query.drain(start_byte..end_byte);
                 launcher.cursor_position = i;
                 launcher.selected_index = 0;
@@ -1036,7 +1091,12 @@ pub fn update_launcher_state(launcher: &mut Launcher, action: LauncherAction) {
         LauncherAction::DeleteLine => {
             let total_chars = launcher.query.chars().count();
             let pos = launcher.cursor_position.min(total_chars);
-            let end_byte = launcher.query.char_indices().nth(pos).map(|(b, _)| b).unwrap_or(launcher.query.len());
+            let end_byte = launcher
+                .query
+                .char_indices()
+                .nth(pos)
+                .map(|(b, _)| b)
+                .unwrap_or(launcher.query.len());
             launcher.query.drain(0..end_byte);
             launcher.cursor_position = 0;
             launcher.selected_index = 0;
@@ -1129,7 +1189,8 @@ pub fn update_launcher_state(launcher: &mut Launcher, action: LauncherAction) {
             launcher.ensure_filtered_cache();
             let count = launcher.filtered_cache.len();
             if count > 0 {
-                launcher.selected_index = (launcher.selected_index + LAUNCHER_MAX_RESULTS).min(count - 1);
+                launcher.selected_index =
+                    (launcher.selected_index + LAUNCHER_MAX_RESULTS).min(count - 1);
                 if launcher.position == LauncherPosition::Spotlight {
                     launcher.adjust_scroll(count, LAUNCHER_MAX_RESULTS);
                 }
@@ -1139,7 +1200,8 @@ pub fn update_launcher_state(launcher: &mut Launcher, action: LauncherAction) {
             launcher.ensure_filtered_cache();
             let count = launcher.filtered_cache.len();
             if count > 0 {
-                launcher.selected_index = launcher.selected_index.saturating_sub(LAUNCHER_MAX_RESULTS);
+                launcher.selected_index =
+                    launcher.selected_index.saturating_sub(LAUNCHER_MAX_RESULTS);
                 if launcher.position == LauncherPosition::Spotlight {
                     launcher.adjust_scroll(count, LAUNCHER_MAX_RESULTS);
                 }
@@ -1200,10 +1262,7 @@ mod tests {
 
     #[test]
     fn test_parse_command_line_simple_and_with_args() {
-        assert_eq!(
-            parse_command_line("firefox"),
-            vec!["firefox"]
-        );
+        assert_eq!(parse_command_line("firefox"), vec!["firefox"]);
         assert_eq!(
             parse_command_line("firefox --private-window"),
             vec!["firefox", "--private-window"]
@@ -1255,7 +1314,11 @@ mod tests {
     #[test]
     fn test_launcher_state_transitions() {
         let mut launcher = Launcher::new();
-        launcher.executable_cache = vec!["firefox".to_string(), "foot".to_string(), "xterm".to_string()];
+        launcher.executable_cache = vec![
+            "firefox".to_string(),
+            "foot".to_string(),
+            "xterm".to_string(),
+        ];
 
         update_launcher_state(&mut launcher, LauncherAction::InsertChar('f'));
         update_launcher_state(&mut launcher, LauncherAction::InsertChar('i'));
@@ -1491,41 +1554,109 @@ mod tests {
             },
         };
 
-        assert_eq!(handle_launcher_keypress(10, 0, &mapping), Some(LauncherAction::Execute));
-        assert_eq!(handle_launcher_keypress(11, 0, &mapping), Some(LauncherAction::Cancel));
-        assert_eq!(handle_launcher_keypress(12, 0, &mapping), Some(LauncherAction::DeleteChar));
-        assert_eq!(handle_launcher_keypress(13, 0, &mapping), Some(LauncherAction::SelectPrevious));
-        assert_eq!(handle_launcher_keypress(14, 0, &mapping), Some(LauncherAction::SelectNext));
-        assert_eq!(handle_launcher_keypress(15, 0, &mapping), Some(LauncherAction::MoveCursorLeft));
-        assert_eq!(handle_launcher_keypress(16, 0, &mapping), Some(LauncherAction::MoveCursorRight));
-        assert_eq!(handle_launcher_keypress(17, 0, &mapping), Some(LauncherAction::AutoComplete));
-        assert_eq!(handle_launcher_keypress(18, 0, &mapping), Some(LauncherAction::MoveToStart));
-        assert_eq!(handle_launcher_keypress(19, 0, &mapping), Some(LauncherAction::MoveToEnd));
-        assert_eq!(handle_launcher_keypress(28, 0, &mapping), Some(LauncherAction::Refresh));
+        assert_eq!(
+            handle_launcher_keypress(10, 0, &mapping),
+            Some(LauncherAction::Execute)
+        );
+        assert_eq!(
+            handle_launcher_keypress(11, 0, &mapping),
+            Some(LauncherAction::Cancel)
+        );
+        assert_eq!(
+            handle_launcher_keypress(12, 0, &mapping),
+            Some(LauncherAction::DeleteChar)
+        );
+        assert_eq!(
+            handle_launcher_keypress(13, 0, &mapping),
+            Some(LauncherAction::SelectPrevious)
+        );
+        assert_eq!(
+            handle_launcher_keypress(14, 0, &mapping),
+            Some(LauncherAction::SelectNext)
+        );
+        assert_eq!(
+            handle_launcher_keypress(15, 0, &mapping),
+            Some(LauncherAction::MoveCursorLeft)
+        );
+        assert_eq!(
+            handle_launcher_keypress(16, 0, &mapping),
+            Some(LauncherAction::MoveCursorRight)
+        );
+        assert_eq!(
+            handle_launcher_keypress(17, 0, &mapping),
+            Some(LauncherAction::AutoComplete)
+        );
+        assert_eq!(
+            handle_launcher_keypress(18, 0, &mapping),
+            Some(LauncherAction::MoveToStart)
+        );
+        assert_eq!(
+            handle_launcher_keypress(19, 0, &mapping),
+            Some(LauncherAction::MoveToEnd)
+        );
+        assert_eq!(
+            handle_launcher_keypress(28, 0, &mapping),
+            Some(LauncherAction::Refresh)
+        );
 
         // Ctrl combinations
-        assert_eq!(handle_launcher_keypress(20, MOD_CONTROL, &mapping), Some(LauncherAction::DeleteWord));
-        assert_eq!(handle_launcher_keypress(21, MOD_CONTROL, &mapping), Some(LauncherAction::DeleteLine));
-        assert_eq!(handle_launcher_keypress(22, MOD_CONTROL, &mapping), Some(LauncherAction::MoveToStart));
-        assert_eq!(handle_launcher_keypress(23, MOD_CONTROL, &mapping), Some(LauncherAction::MoveToEnd));
-        assert_eq!(handle_launcher_keypress(24, MOD_CONTROL, &mapping), Some(LauncherAction::SelectPrevious));
-        assert_eq!(handle_launcher_keypress(25, MOD_CONTROL, &mapping), Some(LauncherAction::SelectNext));
-        assert_eq!(handle_launcher_keypress(27, MOD_CONTROL, &mapping), Some(LauncherAction::Refresh));
+        assert_eq!(
+            handle_launcher_keypress(20, MOD_CONTROL, &mapping),
+            Some(LauncherAction::DeleteWord)
+        );
+        assert_eq!(
+            handle_launcher_keypress(21, MOD_CONTROL, &mapping),
+            Some(LauncherAction::DeleteLine)
+        );
+        assert_eq!(
+            handle_launcher_keypress(22, MOD_CONTROL, &mapping),
+            Some(LauncherAction::MoveToStart)
+        );
+        assert_eq!(
+            handle_launcher_keypress(23, MOD_CONTROL, &mapping),
+            Some(LauncherAction::MoveToEnd)
+        );
+        assert_eq!(
+            handle_launcher_keypress(24, MOD_CONTROL, &mapping),
+            Some(LauncherAction::SelectPrevious)
+        );
+        assert_eq!(
+            handle_launcher_keypress(25, MOD_CONTROL, &mapping),
+            Some(LauncherAction::SelectNext)
+        );
+        assert_eq!(
+            handle_launcher_keypress(27, MOD_CONTROL, &mapping),
+            Some(LauncherAction::Refresh)
+        );
 
         // Mod4 + D cancels launcher
-        assert_eq!(handle_launcher_keypress(26, MOD_SUPER, &mapping), Some(LauncherAction::Cancel));
+        assert_eq!(
+            handle_launcher_keypress(26, MOD_SUPER, &mapping),
+            Some(LauncherAction::Cancel)
+        );
     }
 
     #[test]
     fn test_clean_exec_field() {
         assert_eq!(clean_exec_field("firefox %u"), "firefox");
-        assert_eq!(clean_exec_field("vlc --started-from-file %U"), "vlc --started-from-file");
-        assert_eq!(clean_exec_field("/usr/bin/google-chrome-stable %U"), "/usr/bin/google-chrome-stable");
         assert_eq!(
-            clean_exec_field("/usr/bin/flatpak run --branch=stable --arch=x86_64 --command=steam com.valvesoftware.Steam @@u %U @@"),
+            clean_exec_field("vlc --started-from-file %U"),
+            "vlc --started-from-file"
+        );
+        assert_eq!(
+            clean_exec_field("/usr/bin/google-chrome-stable %U"),
+            "/usr/bin/google-chrome-stable"
+        );
+        assert_eq!(
+            clean_exec_field(
+                "/usr/bin/flatpak run --branch=stable --arch=x86_64 --command=steam com.valvesoftware.Steam @@u %U @@"
+            ),
             "/usr/bin/flatpak run --branch=stable --arch=x86_64 --command=steam com.valvesoftware.Steam"
         );
-        assert_eq!(clean_exec_field("code --unity-launch %F"), "code --unity-launch");
+        assert_eq!(
+            clean_exec_field("code --unity-launch %F"),
+            "code --unity-launch"
+        );
     }
 
     #[test]
@@ -1541,7 +1672,10 @@ Icon=vscode
         let parsed = parse_desktop_file(content_valid);
         assert_eq!(
             parsed,
-            Some(("Visual Studio Code".to_string(), "code --new-window".to_string()))
+            Some((
+                "Visual Studio Code".to_string(),
+                "code --new-window".to_string()
+            ))
         );
 
         let content_no_display = r#"
@@ -1573,7 +1707,8 @@ Exec=link
 
     #[test]
     fn test_dynamic_refresh_on_new_binary() {
-        let temp_dir = std::env::temp_dir().join(format!("tilo_launcher_dyn_refresh_{}", std::process::id()));
+        let temp_dir =
+            std::env::temp_dir().join(format!("tilo_launcher_dyn_refresh_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&temp_dir);
         let _ = std::fs::create_dir_all(&temp_dir);
 
@@ -1622,7 +1757,11 @@ Exec=link
         // Monitored directories must not contain standard .desktop application paths
         for dir in &monitored {
             let s = dir.to_string_lossy();
-            assert!(!s.ends_with("share/applications"), "Monitored dirs should not contain desktop application dirs: {}", s);
+            assert!(
+                !s.ends_with("share/applications"),
+                "Monitored dirs should not contain desktop application dirs: {}",
+                s
+            );
         }
     }
 

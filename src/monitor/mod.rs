@@ -59,14 +59,16 @@ impl Monitor {
     }
 
     /// Creates a new primary `Monitor` with the given parameters and workspace matching its ID.
-    pub const fn new_primary(
-        id: MonitorId,
-        x: i32,
-        y: i32,
-        width: u32,
-        height: u32,
-    ) -> Self {
-        Self::new(id, x, y, width, height, crate::workspace::monitor_workspace_id(id, 1), true)
+    pub const fn new_primary(id: MonitorId, x: i32, y: i32, width: u32, height: u32) -> Self {
+        Self::new(
+            id,
+            x,
+            y,
+            width,
+            height,
+            crate::workspace::monitor_workspace_id(id, 1),
+            true,
+        )
     }
 
     /// Returns the bounding [`Rect`] geometry of the monitor.
@@ -115,7 +117,9 @@ impl MonitorManager {
         if let Some(pos) = self.monitors.iter().position(|m| m.id == id) {
             &mut self.monitors[pos]
         } else {
-            self.monitors.first_mut().expect("At least one monitor must exist")
+            self.monitors
+                .first_mut()
+                .expect("At least one monitor must exist")
         }
     }
 
@@ -197,7 +201,10 @@ impl MonitorManager {
     ///
     /// Returns a list of `(removed_monitor_id, old_workspace_id)` for monitors
     /// that were disconnected, allowing the window manager to migrate clients.
-    pub fn reconcile_monitors(&mut self, mut new_monitors: Vec<Monitor>) -> Vec<(MonitorId, WorkspaceId)> {
+    pub fn reconcile_monitors(
+        &mut self,
+        mut new_monitors: Vec<Monitor>,
+    ) -> Vec<(MonitorId, WorkspaceId)> {
         if new_monitors.is_empty() {
             return Vec::new();
         }
@@ -213,7 +220,10 @@ impl MonitorManager {
 
         // Reconcile: match by ID or position
         for new_m in &mut new_monitors {
-            if let Some(old_m) = old_monitors.iter().find(|o| o.id == new_m.id || (o.x == new_m.x && o.y == new_m.y)) {
+            if let Some(old_m) = old_monitors
+                .iter()
+                .find(|o| o.id == new_m.id || (o.x == new_m.x && o.y == new_m.y))
+            {
                 new_m.workspace = old_m.workspace;
                 assigned_workspaces.push(old_m.workspace);
             }
@@ -228,7 +238,13 @@ impl MonitorManager {
 
         // Assign monitor-specific initial workspace (tag 1) to brand new monitors
         for new_m in &mut new_monitors {
-            if new_m.workspace == 0 || assigned_workspaces.iter().filter(|&&w| w == new_m.workspace).count() > 1 {
+            if new_m.workspace == 0
+                || assigned_workspaces
+                    .iter()
+                    .filter(|&&w| w == new_m.workspace)
+                    .count()
+                    > 1
+            {
                 let init_ws = crate::workspace::monitor_workspace_id(new_m.id, 1);
                 new_m.workspace = init_ws;
                 assigned_workspaces.push(init_ws);
@@ -246,12 +262,10 @@ impl MonitorManager {
 }
 
 /// Sets up XRandR event selection on the root window.
-pub fn setup_randr_events(
-    conn: &impl Connection,
-    root: Window,
-) -> Result<(), X11Error> {
+pub fn setup_randr_events(conn: &impl Connection, root: Window) -> Result<(), X11Error> {
     // Check if XRandR extension is present (try 1.4 down to 1.1)
-    let version = conn.randr_query_version(1, 4)
+    let version = conn
+        .randr_query_version(1, 4)
         .or_else(|_| conn.randr_query_version(1, 1))?
         .reply()?;
     if version.major_version < 1 {
@@ -279,7 +293,8 @@ pub fn query_monitors(
     fallback_width: u32,
     fallback_height: u32,
 ) -> Result<Vec<Monitor>, X11Error> {
-    let version_reply = conn.randr_query_version(1, 4)
+    let version_reply = conn
+        .randr_query_version(1, 4)
         .or_else(|_| conn.randr_query_version(1, 1));
     if version_reply.is_err() {
         return Ok(vec![Monitor::new(
@@ -313,7 +328,7 @@ pub fn query_monitors(
                     fallback_height,
                     1,
                     true,
-                )])
+                )]);
             }
         },
     };
@@ -322,7 +337,10 @@ pub fn query_monitors(
     let mut seen_crtcs = Vec::new();
 
     for (idx, &output) in outputs.iter().enumerate() {
-        let output_info = match conn.randr_get_output_info(output, config_timestamp)?.reply() {
+        let output_info = match conn
+            .randr_get_output_info(output, config_timestamp)?
+            .reply()
+        {
             Ok(info) => info,
             Err(_) => continue,
         };
@@ -337,7 +355,10 @@ pub fn query_monitors(
         }
         seen_crtcs.push(output_info.crtc);
 
-        let crtc_info = match conn.randr_get_crtc_info(output_info.crtc, config_timestamp)?.reply() {
+        let crtc_info = match conn
+            .randr_get_crtc_info(output_info.crtc, config_timestamp)?
+            .reply()
+        {
             Ok(info) => info,
             Err(_) => continue,
         };
@@ -365,7 +386,8 @@ pub fn query_monitors(
         if let Ok(reply) = x11rb::protocol::xinerama::ConnectionExt::xinerama_is_active(conn)
             && let Ok(active) = reply.reply()
             && active.state != 0
-            && let Ok(screens_reply) = x11rb::protocol::xinerama::ConnectionExt::xinerama_query_screens(conn)
+            && let Ok(screens_reply) =
+                x11rb::protocol::xinerama::ConnectionExt::xinerama_query_screens(conn)
             && let Ok(screens) = screens_reply.reply()
             && screens.screen_info.len() > 1
         {

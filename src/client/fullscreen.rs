@@ -28,7 +28,12 @@ pub struct Geometry {
 impl Geometry {
     /// Creates a new `Geometry`.
     pub const fn new(x: i32, y: i32, width: u32, height: u32) -> Self {
-        Self { x, y, width, height }
+        Self {
+            x,
+            y,
+            width,
+            height,
+        }
     }
 }
 
@@ -98,7 +103,6 @@ impl FullscreenState {
     }
 }
 
-
 /// Constructs a `ConfigureWindowAux` to apply fullscreen geometry to a window.
 pub fn fullscreen_configure_aux(monitor: &Monitor) -> ConfigureWindowAux {
     ConfigureWindowAux::new()
@@ -129,7 +133,6 @@ pub fn update_net_wm_state_fullscreen(
 ) -> Result<(), crate::x11::X11Error> {
     crate::ewmh::update_net_wm_state_fullscreen(conn, client_id, is_fullscreen, atoms)
 }
-
 
 #[cfg(test)]
 mod tests {

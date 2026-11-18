@@ -1,15 +1,13 @@
 use std::process::{Child, Command};
-use tilo::config::{parse, tokenize, Config};
+use tilo::config::{Config, parse, tokenize};
 use tilo::decoration::{
-    parse_color, set_window_border_color, set_window_border_width, update_window_border,
-    BorderConfig,
+    BorderConfig, parse_color, set_window_border_color, set_window_border_width,
+    update_window_border,
 };
 use tilo::wm::WindowManager;
 use tilo::x11::X11Context;
 use x11rb::connection::Connection;
-use x11rb::protocol::xproto::{
-    ConnectionExt, CreateWindowAux, EventMask, Window, WindowClass,
-};
+use x11rb::protocol::xproto::{ConnectionExt, CreateWindowAux, EventMask, Window, WindowClass};
 
 struct XephyrServer {
     child: Child,
@@ -149,7 +147,8 @@ fn test_window_decoration_in_xephyr() {
         ..Default::default()
     };
 
-    let mut wm = WindowManager::new_with_config(context, config).expect("WindowManager should initialize");
+    let mut wm =
+        WindowManager::new_with_config(context, config).expect("WindowManager should initialize");
 
     let win1 = create_client_window(&wm.context.connection, root, 50, 50, 200, 150);
     let win2 = create_client_window(&wm.context.connection, root, 300, 50, 200, 150);
@@ -161,14 +160,32 @@ fn test_window_decoration_in_xephyr() {
     wm.manage_window(win2).unwrap();
 
     // Verify both windows received configured initial border width
-    let geom1 = wm.context.connection.get_geometry(win1).unwrap().reply().unwrap();
-    let geom2 = wm.context.connection.get_geometry(win2).unwrap().reply().unwrap();
+    let geom1 = wm
+        .context
+        .connection
+        .get_geometry(win1)
+        .unwrap()
+        .reply()
+        .unwrap();
+    let geom2 = wm
+        .context
+        .connection
+        .get_geometry(win2)
+        .unwrap()
+        .reply()
+        .unwrap();
     assert_eq!(geom1.border_width, 4);
     assert_eq!(geom2.border_width, 4);
 
     // Test direct border setters
     set_window_border_width(&wm.context.connection, win1, 6).unwrap();
-    let geom1_updated = wm.context.connection.get_geometry(win1).unwrap().reply().unwrap();
+    let geom1_updated = wm
+        .context
+        .connection
+        .get_geometry(win1)
+        .unwrap()
+        .reply()
+        .unwrap();
     assert_eq!(geom1_updated.border_width, 6);
 
     set_window_border_color(&wm.context.connection, win1, 0x00ff0000).unwrap();
@@ -181,7 +198,13 @@ fn test_window_decoration_in_xephyr() {
         urgent_color: 0x00ff0000,
     };
     update_window_border(&wm.context.connection, win1, &border_cfg, true, false).unwrap();
-    let geom1_helper = wm.context.connection.get_geometry(win1).unwrap().reply().unwrap();
+    let geom1_helper = wm
+        .context
+        .connection
+        .get_geometry(win1)
+        .unwrap()
+        .reply()
+        .unwrap();
     assert_eq!(geom1_helper.border_width, 3);
 
     // Test focus change updates borders
@@ -207,8 +230,20 @@ fn test_window_decoration_in_xephyr() {
     assert_eq!(wm.border_config.normal_color, 0x00555555);
     assert_eq!(wm.border_config.urgent_color, 0x00ff00ff);
 
-    let geom1_after_apply = wm.context.connection.get_geometry(win1).unwrap().reply().unwrap();
-    let geom2_after_apply = wm.context.connection.get_geometry(win2).unwrap().reply().unwrap();
+    let geom1_after_apply = wm
+        .context
+        .connection
+        .get_geometry(win1)
+        .unwrap()
+        .reply()
+        .unwrap();
+    let geom2_after_apply = wm
+        .context
+        .connection
+        .get_geometry(win2)
+        .unwrap()
+        .reply()
+        .unwrap();
     assert_eq!(geom1_after_apply.border_width, 7);
     assert_eq!(geom2_after_apply.border_width, 7);
 }
@@ -254,7 +289,14 @@ fn test_newly_spawned_window_focus_and_border_highlight_in_xephyr() {
         wm.client_state.get_client(win1).unwrap().border_color,
         Some(0x00bd93f9)
     );
-    let focus1 = wm.context.connection.get_input_focus().unwrap().reply().unwrap().focus;
+    let focus1 = wm
+        .context
+        .connection
+        .get_input_focus()
+        .unwrap()
+        .reply()
+        .unwrap()
+        .focus;
     assert_eq!(focus1, win1);
 
     // 2. Spawn and manage window 2
@@ -270,7 +312,14 @@ fn test_newly_spawned_window_focus_and_border_highlight_in_xephyr() {
         wm.client_state.get_client(win2).unwrap().border_color,
         Some(0x00bd93f9)
     );
-    let focus2 = wm.context.connection.get_input_focus().unwrap().reply().unwrap().focus;
+    let focus2 = wm
+        .context
+        .connection
+        .get_input_focus()
+        .unwrap()
+        .reply()
+        .unwrap()
+        .focus;
     assert_eq!(focus2, win2);
 
     // Crucially verify window 1's highlight did NOT persist: it is normal color and unfocused!
@@ -293,7 +342,14 @@ fn test_newly_spawned_window_focus_and_border_highlight_in_xephyr() {
         wm.client_state.get_client(win3).unwrap().border_color,
         Some(0x00bd93f9)
     );
-    let focus3 = wm.context.connection.get_input_focus().unwrap().reply().unwrap().focus;
+    let focus3 = wm
+        .context
+        .connection
+        .get_input_focus()
+        .unwrap()
+        .reply()
+        .unwrap()
+        .focus;
     assert_eq!(focus3, win3);
 
     // Both window 1 and window 2 are unhighlighted
@@ -337,7 +393,13 @@ fn test_newly_spawned_window_focus_and_border_highlight_in_xephyr() {
         wm.client_state.get_client(win3).unwrap().border_color,
         Some(0x0044475a)
     );
-    let focus_back = wm.context.connection.get_input_focus().unwrap().reply().unwrap().focus;
+    let focus_back = wm
+        .context
+        .connection
+        .get_input_focus()
+        .unwrap()
+        .reply()
+        .unwrap()
+        .focus;
     assert_eq!(focus_back, win1);
 }
-

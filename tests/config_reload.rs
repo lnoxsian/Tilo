@@ -5,9 +5,7 @@ use tilo::keybind::{Action, KeyBind, MOD_SUPER, XK_RETURN};
 use tilo::wm::WindowManager;
 use tilo::x11::X11Context;
 use x11rb::connection::Connection;
-use x11rb::protocol::xproto::{
-    ConnectionExt, CreateWindowAux, EventMask, Window, WindowClass,
-};
+use x11rb::protocol::xproto::{ConnectionExt, CreateWindowAux, EventMask, Window, WindowClass};
 
 struct XephyrServer {
     child: Child,
@@ -51,7 +49,14 @@ impl Drop for XephyrServer {
     }
 }
 
-fn create_client_window(conn: &impl Connection, root: Window, x: i16, y: i16, w: u16, h: u16) -> Window {
+fn create_client_window(
+    conn: &impl Connection,
+    root: Window,
+    x: i16,
+    y: i16,
+    w: u16,
+    h: u16,
+) -> Window {
     let win = conn.generate_id().unwrap();
     let aux = CreateWindowAux::new()
         .event_mask(EventMask::STRUCTURE_NOTIFY | EventMask::PROPERTY_CHANGE)
@@ -102,8 +107,8 @@ fn test_config_reload_live_in_xephyr() {
 
     let xephyr = XephyrServer::start(98);
     if let Some(server) = xephyr {
-        let wm_ctx = X11Context::connect_to(Some(&server.display))
-            .expect("WM context connect failed");
+        let wm_ctx =
+            X11Context::connect_to(Some(&server.display)).expect("WM context connect failed");
         assert!(wm_ctx.become_wm().is_ok());
 
         let temp_dir = std::env::temp_dir().join("tilo_reload_test");
@@ -136,8 +141,22 @@ bind Mod4+Return spawn foot
 
         // 2. Open two client windows
         let client_conn = X11Context::connect_to(Some(&server.display)).unwrap();
-        let win1 = create_client_window(&client_conn.connection, wm.context.root_window, 50, 50, 200, 200);
-        let win2 = create_client_window(&client_conn.connection, wm.context.root_window, 100, 100, 200, 200);
+        let win1 = create_client_window(
+            &client_conn.connection,
+            wm.context.root_window,
+            50,
+            50,
+            200,
+            200,
+        );
+        let win2 = create_client_window(
+            &client_conn.connection,
+            wm.context.root_window,
+            100,
+            100,
+            200,
+            200,
+        );
 
         for _ in 0..30 {
             let _ = wm.process_pending_events();
@@ -149,7 +168,12 @@ bind Mod4+Return spawn foot
         assert_eq!(wm.client_state.all_clients().len(), 2);
 
         // Verify initial window border width on win1
-        let geom1 = client_conn.connection.get_geometry(win1).unwrap().reply().unwrap();
+        let geom1 = client_conn
+            .connection
+            .get_geometry(win1)
+            .unwrap()
+            .reply()
+            .unwrap();
         assert_eq!(geom1.border_width, 3);
 
         // 3. Update configuration file on disk with new border width, gaps, ratio, bindings
@@ -178,9 +202,19 @@ bind Mod4+Shift+r reload
         assert_eq!(wm.config.terminal, "alacritty");
 
         // Verify existing client window borders were updated immediately in X11
-        let geom1_updated = client_conn.connection.get_geometry(win1).unwrap().reply().unwrap();
+        let geom1_updated = client_conn
+            .connection
+            .get_geometry(win1)
+            .unwrap()
+            .reply()
+            .unwrap();
         assert_eq!(geom1_updated.border_width, 7);
-        let geom2_updated = client_conn.connection.get_geometry(win2).unwrap().reply().unwrap();
+        let geom2_updated = client_conn
+            .connection
+            .get_geometry(win2)
+            .unwrap()
+            .reply()
+            .unwrap();
         assert_eq!(geom2_updated.border_width, 7);
 
         // 5. Test invalid config reload attempt: should fail gracefully, retaining previous config
@@ -194,15 +228,13 @@ unknown_directive foo bar
         let reload_res = wm.reload_config_from_path(&config_path);
         assert!(reload_res.is_err());
         match reload_res.unwrap_err() {
-            ReloadError::ConfigInvalid(err) => {
-                match err {
-                    ConfigError::InvalidValue { line, value } => {
-                        assert_eq!(line, 1);
-                        assert_eq!(value, "not_a_number");
-                    }
-                    other => panic!("Unexpected ConfigError: {:?}", other),
+            ReloadError::ConfigInvalid(err) => match err {
+                ConfigError::InvalidValue { line, value } => {
+                    assert_eq!(line, 1);
+                    assert_eq!(value, "not_a_number");
                 }
-            }
+                other => panic!("Unexpected ConfigError: {:?}", other),
+            },
             other => panic!("Expected ConfigInvalid error, got: {:?}", other),
         }
 
@@ -214,7 +246,12 @@ unknown_directive foo bar
         assert!((wm.layout_config.master_ratio - 0.75).abs() < f32::EPSILON);
         assert_eq!(wm.config.terminal, "alacritty");
 
-        let geom1_after_corrupt = client_conn.connection.get_geometry(win1).unwrap().reply().unwrap();
+        let geom1_after_corrupt = client_conn
+            .connection
+            .get_geometry(win1)
+            .unwrap()
+            .reply()
+            .unwrap();
         assert_eq!(geom1_after_corrupt.border_width, 7);
 
         // 6. Test non-existent file handling
@@ -224,14 +261,19 @@ unknown_directive foo bar
         assert_eq!(wm.border_config.width, 7);
 
         // 7. Test re_register_keybindings helper directly
-        let test_bindings = vec![
-            KeyBind::new(MOD_SUPER, XK_RETURN, Action::Spawn("foot".to_string())),
-        ];
-        assert!(re_register_keybindings(
-            &wm.context.connection,
-            &test_bindings,
-            wm.context.root_window
-        ).is_ok());
+        let test_bindings = vec![KeyBind::new(
+            MOD_SUPER,
+            XK_RETURN,
+            Action::Spawn("foot".to_string()),
+        )];
+        assert!(
+            re_register_keybindings(
+                &wm.context.connection,
+                &test_bindings,
+                wm.context.root_window
+            )
+            .is_ok()
+        );
 
         // 8. Test reload_config_from_path
         // Write valid config again
@@ -253,7 +295,9 @@ unknown_directive foo bar
             root_y: 0,
             event_x: 0,
             event_y: 0,
-            state: x11rb::protocol::xproto::KeyButMask::from(tilo::keybind::MOD_SUPER | tilo::keybind::MOD_SHIFT),
+            state: x11rb::protocol::xproto::KeyButMask::from(
+                tilo::keybind::MOD_SUPER | tilo::keybind::MOD_SHIFT,
+            ),
             same_screen: true,
         };
         assert_eq!(wm.input_manager.handle_event(&ev), Some(Action::Reload));
@@ -276,11 +320,12 @@ fn test_default_keybinding_mod4_shift_r_reload_in_xephyr() {
 
     let xephyr = XephyrServer::start(97);
     if let Some(server) = xephyr {
-        let wm_ctx = X11Context::connect_to(Some(&server.display))
-            .expect("WM context connect failed");
+        let wm_ctx =
+            X11Context::connect_to(Some(&server.display)).expect("WM context connect failed");
         assert!(wm_ctx.become_wm().is_ok());
 
-        let mut wm = WindowManager::new_with_config(wm_ctx, Config::default()).expect("Failed to initialize WM");
+        let mut wm = WindowManager::new_with_config(wm_ctx, Config::default())
+            .expect("Failed to initialize WM");
 
         // Verify default keybindings include Mod4 + Shift + r mapped to Action::Reload
         assert!(wm.config.bindings.iter().any(|b| {
@@ -304,7 +349,9 @@ fn test_default_keybinding_mod4_shift_r_reload_in_xephyr() {
             root_y: 0,
             event_x: 0,
             event_y: 0,
-            state: x11rb::protocol::xproto::KeyButMask::from(tilo::keybind::MOD_SUPER | tilo::keybind::MOD_SHIFT),
+            state: x11rb::protocol::xproto::KeyButMask::from(
+                tilo::keybind::MOD_SUPER | tilo::keybind::MOD_SHIFT,
+            ),
             same_screen: true,
         };
         assert_eq!(wm.input_manager.handle_event(&ev), Some(Action::Reload));
@@ -314,11 +361,10 @@ fn test_default_keybinding_mod4_shift_r_reload_in_xephyr() {
 
 #[test]
 fn test_config_reload_updates_statusbar_modules() {
-    let mut config = Config::default();
-    config.bar_modules = vec![
-        tilo::bar::BarModuleType::Ip,
-        tilo::bar::BarModuleType::Ram,
-    ];
+    let config = Config {
+        bar_modules: vec![tilo::bar::BarModuleType::Ip, tilo::bar::BarModuleType::Ram],
+        ..Default::default()
+    };
 
     let mut bar = tilo::bar::Statusbar::with_modules(
         100,
@@ -345,10 +391,8 @@ fn test_config_reload_updates_statusbar_modules() {
 
 #[test]
 fn test_config_reload_updates_workspace_tags() {
-    let mut bar = tilo::bar::Statusbar::default_with_window(
-        100,
-        tilo::layout::Rect::new(0, 0, 1000, 24),
-    );
+    let mut bar =
+        tilo::bar::Statusbar::default_with_window(100, tilo::layout::Rect::new(0, 0, 1000, 24));
     assert_eq!(bar.workspace_tags[0], "1");
 
     // Simulate reload with custom icons
@@ -382,12 +426,14 @@ fn test_config_reload_toggles_statusbar_in_xephyr() {
 
     let xephyr = XephyrServer::start(210);
     if let Some(server) = xephyr {
-        let wm_ctx = X11Context::connect_to(Some(&server.display))
-            .expect("WM context connect failed");
+        let wm_ctx =
+            X11Context::connect_to(Some(&server.display)).expect("WM context connect failed");
         assert!(wm_ctx.become_wm().is_ok());
 
-        let mut config = Config::default();
-        config.statusbar = true;
+        let config = Config {
+            statusbar: true,
+            ..Default::default()
+        };
 
         let mut wm = WindowManager::new_with_config(wm_ctx, config.clone())
             .expect("Failed to initialize WM");
@@ -400,12 +446,18 @@ fn test_config_reload_toggles_statusbar_in_xephyr() {
         let mut disabled_cfg = config.clone();
         disabled_cfg.statusbar = false;
         assert!(wm.apply_config(disabled_cfg).is_ok());
-        assert!(wm.statusbar.is_none(), "Statusbar should be destroyed when disabled in config");
+        assert!(
+            wm.statusbar.is_none(),
+            "Statusbar should be destroyed when disabled in config"
+        );
 
         // 2. Reload with statusbar = true
         let mut enabled_cfg = config.clone();
         enabled_cfg.statusbar = true;
         assert!(wm.apply_config(enabled_cfg).is_ok());
-        assert!(wm.statusbar.is_some(), "Statusbar should be re-created when re-enabled in config");
+        assert!(
+            wm.statusbar.is_some(),
+            "Statusbar should be re-created when re-enabled in config"
+        );
     }
 }

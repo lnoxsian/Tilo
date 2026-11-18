@@ -330,19 +330,15 @@ pub fn get_net_wm_state(
     window: Window,
     atoms: &EwmhAtoms,
 ) -> Result<Vec<Atom>, X11Error> {
-    let reply = conn.get_property(
-        false,
-        window,
-        atoms.net_wm_state,
-        AtomEnum::ATOM,
-        0,
-        32,
-    )?.reply();
+    let reply = conn
+        .get_property(false, window, atoms.net_wm_state, AtomEnum::ATOM, 0, 32)?
+        .reply();
 
     if let Ok(prop) = reply
-        && let Some(val32) = prop.value32() {
-            return Ok(val32.collect());
-        }
+        && let Some(val32) = prop.value32()
+    {
+        return Ok(val32.collect());
+    }
     Ok(Vec::new())
 }
 
@@ -390,7 +386,13 @@ pub fn update_net_wm_state_fullscreen(
     is_fullscreen: bool,
     atoms: &EwmhAtoms,
 ) -> Result<(), X11Error> {
-    update_net_wm_state_atom(conn, window, atoms.net_wm_state_fullscreen, is_fullscreen, atoms)
+    update_net_wm_state_atom(
+        conn,
+        window,
+        atoms.net_wm_state_fullscreen,
+        is_fullscreen,
+        atoms,
+    )
 }
 
 /// Updates `_NET_WM_STATE_ABOVE` on a window.
@@ -409,21 +411,17 @@ pub fn get_net_active_window(
     root: Window,
     atoms: &EwmhAtoms,
 ) -> Result<Option<Window>, X11Error> {
-    let reply = conn.get_property(
-        false,
-        root,
-        atoms.net_active_window,
-        AtomEnum::WINDOW,
-        0,
-        1,
-    )?.reply();
+    let reply = conn
+        .get_property(false, root, atoms.net_active_window, AtomEnum::WINDOW, 0, 1)?
+        .reply();
 
     if let Ok(prop) = reply
         && let Some(mut val32) = prop.value32()
-            && let Some(w) = val32.next()
-                && w != 0 {
-                    return Ok(Some(w));
-                }
+        && let Some(w) = val32.next()
+        && w != 0
+    {
+        return Ok(Some(w));
+    }
     Ok(None)
 }
 
@@ -433,19 +431,22 @@ pub fn get_net_client_list(
     root: Window,
     atoms: &EwmhAtoms,
 ) -> Result<Vec<Window>, X11Error> {
-    let reply = conn.get_property(
-        false,
-        root,
-        atoms.net_client_list,
-        AtomEnum::WINDOW,
-        0,
-        1024,
-    )?.reply();
+    let reply = conn
+        .get_property(
+            false,
+            root,
+            atoms.net_client_list,
+            AtomEnum::WINDOW,
+            0,
+            1024,
+        )?
+        .reply();
 
     if let Ok(prop) = reply
-        && let Some(val32) = prop.value32() {
-            return Ok(val32.collect());
-        }
+        && let Some(val32) = prop.value32()
+    {
+        return Ok(val32.collect());
+    }
     Ok(Vec::new())
 }
 
@@ -455,19 +456,22 @@ pub fn get_net_current_desktop(
     root: Window,
     atoms: &EwmhAtoms,
 ) -> Result<Option<u32>, X11Error> {
-    let reply = conn.get_property(
-        false,
-        root,
-        atoms.net_current_desktop,
-        AtomEnum::CARDINAL,
-        0,
-        1,
-    )?.reply();
+    let reply = conn
+        .get_property(
+            false,
+            root,
+            atoms.net_current_desktop,
+            AtomEnum::CARDINAL,
+            0,
+            1,
+        )?
+        .reply();
 
     if let Ok(prop) = reply
-        && let Some(mut val32) = prop.value32() {
-            return Ok(val32.next());
-        }
+        && let Some(mut val32) = prop.value32()
+    {
+        return Ok(val32.next());
+    }
     Ok(None)
 }
 
@@ -477,19 +481,22 @@ pub fn get_supporting_wm_check(
     root: Window,
     atoms: &EwmhAtoms,
 ) -> Result<Option<Window>, X11Error> {
-    let reply = conn.get_property(
-        false,
-        root,
-        atoms.net_supporting_wm_check,
-        AtomEnum::WINDOW,
-        0,
-        1,
-    )?.reply();
+    let reply = conn
+        .get_property(
+            false,
+            root,
+            atoms.net_supporting_wm_check,
+            AtomEnum::WINDOW,
+            0,
+            1,
+        )?
+        .reply();
 
     if let Ok(prop) = reply
-        && let Some(mut val32) = prop.value32() {
-            return Ok(val32.next());
-        }
+        && let Some(mut val32) = prop.value32()
+    {
+        return Ok(val32.next());
+    }
     Ok(None)
 }
 
@@ -499,18 +506,14 @@ pub fn get_wm_pid(
     window: Window,
     net_wm_pid: Atom,
 ) -> Result<Option<u32>, X11Error> {
-    let reply = conn.get_property(
-        false,
-        window,
-        net_wm_pid,
-        AtomEnum::CARDINAL,
-        0,
-        1,
-    )?.reply();
+    let reply = conn
+        .get_property(false, window, net_wm_pid, AtomEnum::CARDINAL, 0, 1)?
+        .reply();
 
     if let Ok(prop) = reply
-        && let Some(mut val32) = prop.value32() {
-            return Ok(val32.next());
-        }
+        && let Some(mut val32) = prop.value32()
+    {
+        return Ok(val32.next());
+    }
     Ok(None)
 }

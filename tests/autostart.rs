@@ -1,8 +1,8 @@
 use std::fs;
 use std::process::{Child, Command};
 use std::time::{Duration, Instant};
-use tilo::autostart::{run_autostart_commands, AutostartCmd};
-use tilo::config::{parse, tokenize, Config};
+use tilo::autostart::{AutostartCmd, run_autostart_commands};
+use tilo::config::{Config, parse, tokenize};
 use tilo::wm::WindowManager;
 use tilo::x11::X11Context;
 
@@ -50,7 +50,8 @@ impl Drop for XephyrServer {
 
 #[test]
 fn test_autostart_configuration_and_process_execution() {
-    let witness_path = std::env::temp_dir().join(format!("tilo_autostart_test_{}", std::process::id()));
+    let witness_path =
+        std::env::temp_dir().join(format!("tilo_autostart_test_{}", std::process::id()));
     if witness_path.exists() {
         let _ = fs::remove_file(&witness_path);
     }
@@ -69,13 +70,22 @@ autostart "true"
 
     assert_eq!(config.autostart.len(), 3);
     assert_eq!(config.autostart[0].program, "touch");
-    assert_eq!(config.autostart[0].args, vec![witness_path.display().to_string()]);
-    assert_eq!(config.autostart[1].program, "__non_existent_binary_xyz123__");
+    assert_eq!(
+        config.autostart[0].args,
+        vec![witness_path.display().to_string()]
+    );
+    assert_eq!(
+        config.autostart[1].program,
+        "__non_existent_binary_xyz123__"
+    );
     assert_eq!(config.autostart[2].program, "true");
 
     // Execute autostart commands
     let result = run_autostart_commands(&config.autostart);
-    assert!(result.is_ok(), "run_autostart_commands must not fail even if some commands are missing");
+    assert!(
+        result.is_ok(),
+        "run_autostart_commands must not fail even if some commands are missing"
+    );
 
     // Poll for the witness file created by `touch`
     let start = Instant::now();
@@ -92,7 +102,10 @@ autostart "true"
         let _ = fs::remove_file(&witness_path);
     }
 
-    assert!(created, "Autostart command failed to execute and touch witness file");
+    assert!(
+        created,
+        "Autostart command failed to execute and touch witness file"
+    );
 }
 
 #[test]
@@ -113,7 +126,8 @@ fn test_wm_autostart_integration_in_xephyr() {
         }
     };
 
-    let witness_path = std::env::temp_dir().join(format!("tilo_wm_autostart_test_{}", std::process::id()));
+    let witness_path =
+        std::env::temp_dir().join(format!("tilo_wm_autostart_test_{}", std::process::id()));
     if witness_path.exists() {
         let _ = fs::remove_file(&witness_path);
     }
@@ -126,7 +140,8 @@ fn test_wm_autostart_integration_in_xephyr() {
         ..Default::default()
     };
 
-    let wm = WindowManager::new_with_config(ctx, config).expect("Failed to initialize WindowManager");
+    let wm =
+        WindowManager::new_with_config(ctx, config).expect("Failed to initialize WindowManager");
     let autostart_res = wm.run_autostart();
     assert!(autostart_res.is_ok());
 
@@ -144,5 +159,8 @@ fn test_wm_autostart_integration_in_xephyr() {
         let _ = fs::remove_file(&witness_path);
     }
 
-    assert!(created, "WindowManager::run_autostart failed to execute commands");
+    assert!(
+        created,
+        "WindowManager::run_autostart failed to execute commands"
+    );
 }

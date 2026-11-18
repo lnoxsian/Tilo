@@ -1,12 +1,12 @@
 use std::process::{Child, Command};
 use tilo::keybind::Action;
-use tilo::monitor::{focus_monitor_left, focus_monitor_right, move_to_monitor, Monitor, MonitorManager};
+use tilo::monitor::{
+    Monitor, MonitorManager, focus_monitor_left, focus_monitor_right, move_to_monitor,
+};
 use tilo::wm::WindowManager;
 use tilo::x11::X11Context;
 use x11rb::connection::Connection;
-use x11rb::protocol::xproto::{
-    ConnectionExt, CreateWindowAux, WindowClass,
-};
+use x11rb::protocol::xproto::{ConnectionExt, CreateWindowAux, WindowClass};
 use x11rb::wrapper::ConnectionExt as _;
 
 struct XephyrServer {
@@ -90,8 +90,8 @@ fn test_multi_monitor_in_xephyr() {
 
     let xephyr = XephyrServer::start(96);
     if let Some(server) = xephyr {
-        let wm_ctx = X11Context::connect_to(Some(&server.display))
-            .expect("WM context connect failed");
+        let wm_ctx =
+            X11Context::connect_to(Some(&server.display)).expect("WM context connect failed");
         assert!(wm_ctx.become_wm().is_ok());
 
         let mut wm = WindowManager::new(wm_ctx).expect("Failed to initialize WM");
@@ -199,15 +199,30 @@ fn test_multi_monitor_in_xephyr() {
         // When active monitor is 1, Action::Workspace(2) switches Monitor 1 to its workspace 2 (12)!
         wm.execute_action(Action::Workspace(2)).unwrap();
         assert_eq!(wm.current_workspace, 12);
-        assert_eq!(wm.monitor_manager.monitors[0].workspace, 1, "Monitor 0 must remain on workspace 1");
-        assert_eq!(wm.monitor_manager.monitors[1].workspace, 12, "Monitor 1 must be on workspace 12");
-        assert_eq!(wm.client_state.get_client(win2).unwrap().mapped, false, "win2 on ws 11 should be unmapped");
-        assert_eq!(wm.client_state.get_client(win1).unwrap().mapped, true, "win1 on ws 1 should remain mapped");
+        assert_eq!(
+            wm.monitor_manager.monitors[0].workspace, 1,
+            "Monitor 0 must remain on workspace 1"
+        );
+        assert_eq!(
+            wm.monitor_manager.monitors[1].workspace, 12,
+            "Monitor 1 must be on workspace 12"
+        );
+        assert!(
+            !wm.client_state.get_client(win2).unwrap().mapped,
+            "win2 on ws 11 should be unmapped"
+        );
+        assert!(
+            wm.client_state.get_client(win1).unwrap().mapped,
+            "win1 on ws 1 should remain mapped"
+        );
 
         // Switch Monitor 1 back to workspace 1
         wm.execute_action(Action::Workspace(1)).unwrap();
         assert_eq!(wm.current_workspace, 11);
-        assert_eq!(wm.client_state.get_client(win2).unwrap().mapped, true, "win2 on ws 11 should be remapped");
+        assert!(
+            wm.client_state.get_client(win2).unwrap().mapped,
+            "win2 on ws 11 should be remapped"
+        );
 
         // 7. Test keybind Action::FocusMonitorLeft and Action::FocusMonitorRight (Mod + < and Mod + >)
         wm.execute_action(Action::FocusMonitorLeft).unwrap();
@@ -220,21 +235,33 @@ fn test_multi_monitor_in_xephyr() {
 
         // 7. Test pointer-aware launcher positioning
         // Warp mouse cursor to Monitor 1 (x: 750, y: 400)
-        client_conn.warp_pointer(x11rb::NONE, root, 0, 0, 0, 0, 750, 400).unwrap();
+        client_conn
+            .warp_pointer(x11rb::NONE, root, 0, 0, 0, 0, 750, 400)
+            .unwrap();
         client_conn.sync().unwrap();
         wm.open_launcher().unwrap();
         assert_eq!(wm.monitor_manager.active_monitor_id, 1);
         let launcher_rect_mon1 = wm.launcher.as_ref().unwrap().rect;
-        assert!(launcher_rect_mon1.x >= 500, "Launcher x ({}) should be >= 500 on Monitor 1", launcher_rect_mon1.x);
+        assert!(
+            launcher_rect_mon1.x >= 500,
+            "Launcher x ({}) should be >= 500 on Monitor 1",
+            launcher_rect_mon1.x
+        );
         wm.close_launcher().unwrap();
 
         // Warp mouse cursor to Monitor 0 (x: 250, y: 400)
-        client_conn.warp_pointer(x11rb::NONE, root, 0, 0, 0, 0, 250, 400).unwrap();
+        client_conn
+            .warp_pointer(x11rb::NONE, root, 0, 0, 0, 0, 250, 400)
+            .unwrap();
         client_conn.sync().unwrap();
         wm.open_launcher().unwrap();
         assert_eq!(wm.monitor_manager.active_monitor_id, 0);
         let launcher_rect_mon0 = wm.launcher.as_ref().unwrap().rect;
-        assert!(launcher_rect_mon0.x < 500, "Launcher x ({}) should be < 500 on Monitor 0", launcher_rect_mon0.x);
+        assert!(
+            launcher_rect_mon0.x < 500,
+            "Launcher x ({}) should be < 500 on Monitor 0",
+            launcher_rect_mon0.x
+        );
         wm.close_launcher().unwrap();
 
         // 8. Test focus_client synchronization across monitors
@@ -283,7 +310,11 @@ fn test_multi_monitor_in_xephyr() {
         assert_eq!(prim_bar.rect.x, 0);
         assert_eq!(prim_bar.rect.width, 500);
 
-        assert_eq!(wm.secondary_statusbars.len(), 1, "Secondary statusbar must exist on Monitor 1");
+        assert_eq!(
+            wm.secondary_statusbars.len(),
+            1,
+            "Secondary statusbar must exist on Monitor 1"
+        );
         let sec_bar_win = wm.secondary_statusbars[0].window_id;
         {
             let sec_bar = &wm.secondary_statusbars[0];
@@ -309,8 +340,14 @@ fn test_multi_monitor_in_xephyr() {
         let geom1_bar = client_conn.get_geometry(win1).unwrap().reply().unwrap();
         let geom2_bar = client_conn.get_geometry(win2).unwrap().reply().unwrap();
         let expected_y = 24 + wm.config.outer_gap as i16;
-        assert_eq!(geom1_bar.y, expected_y, "Monitor 0 window y offset should reserve 24px for primary statusbar + outer gap");
-        assert_eq!(geom2_bar.y, expected_y, "Monitor 1 window y offset should reserve 24px for secondary statusbar + outer gap");
+        assert_eq!(
+            geom1_bar.y, expected_y,
+            "Monitor 0 window y offset should reserve 24px for primary statusbar + outer gap"
+        );
+        assert_eq!(
+            geom2_bar.y, expected_y,
+            "Monitor 1 window y offset should reserve 24px for secondary statusbar + outer gap"
+        );
 
         // Verify clicking the secondary statusbar activates Monitor 1
         let click_sec_bar = x11rb::protocol::xproto::ButtonPressEvent {
@@ -334,7 +371,10 @@ fn test_multi_monitor_in_xephyr() {
 
         // Click secondary bar on Monitor 1
         wm.handle_button_press(&click_sec_bar).unwrap();
-        assert_eq!(wm.monitor_manager.active_monitor_id, 1, "Clicking secondary statusbar should activate Monitor 1");
+        assert_eq!(
+            wm.monitor_manager.active_monitor_id, 1,
+            "Clicking secondary statusbar should activate Monitor 1"
+        );
 
         // Click tag 3 on secondary statusbar (x ~ 60)
         let click_tag3_sec = x11rb::protocol::xproto::ButtonPressEvent {
@@ -354,8 +394,14 @@ fn test_multi_monitor_in_xephyr() {
         };
         wm.handle_button_press(&click_tag3_sec).unwrap();
         assert_eq!(wm.monitor_manager.active_monitor_id, 1);
-        assert_eq!(wm.current_workspace, 13, "Clicking tag 3 on secondary status bar should switch Monitor 1 to workspace 13");
-        assert_eq!(wm.monitor_manager.monitors[0].workspace, 1, "Monitor 0 must remain on workspace 1");
+        assert_eq!(
+            wm.current_workspace, 13,
+            "Clicking tag 3 on secondary status bar should switch Monitor 1 to workspace 13"
+        );
+        assert_eq!(
+            wm.monitor_manager.monitors[0].workspace, 1,
+            "Monitor 0 must remain on workspace 1"
+        );
 
         // Disable statusbar
         wm.disable_statusbar().unwrap();
@@ -374,7 +420,7 @@ fn test_multi_monitor_in_xephyr() {
         assert_eq!(wm.monitor_manager.active_monitor_id, 0);
 
         // 12. Test keysym parsing for Mod + < and Mod + >
-        use tilo::keybind::{parse_keysym, XK_LESS, XK_GREATER};
+        use tilo::keybind::{XK_GREATER, XK_LESS, parse_keysym};
         assert_eq!(parse_keysym("<"), Some(XK_LESS));
         assert_eq!(parse_keysym(">"), Some(XK_GREATER));
         assert_eq!(parse_keysym("less"), Some(XK_LESS));

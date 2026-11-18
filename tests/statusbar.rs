@@ -2,8 +2,8 @@ use std::process::{Child, Command};
 use tilo::layout::Rect;
 use tilo::render::Renderer;
 use tilo::statusbar::{
-    create_statusbar_window, BatteryModule, ClockModule, CpuModule, IpModule, LayoutModule,
-    ModuleUpdate, RamModule, StatusModule, TitleModule, WorkspaceModule,
+    BatteryModule, ClockModule, CpuModule, IpModule, LayoutModule, ModuleUpdate, RamModule,
+    StatusModule, TitleModule, WorkspaceModule, create_statusbar_window,
 };
 use tilo::wm::WindowManager;
 use tilo::x11::X11Context;
@@ -55,7 +55,14 @@ impl Drop for XephyrServer {
     }
 }
 
-fn create_client_window(conn: &impl Connection, root: Window, x: i16, y: i16, w: u16, h: u16) -> Window {
+fn create_client_window(
+    conn: &impl Connection,
+    root: Window,
+    x: i16,
+    y: i16,
+    w: u16,
+    h: u16,
+) -> Window {
     let win = conn.generate_id().unwrap();
     let aux = CreateWindowAux::new()
         .event_mask(EventMask::STRUCTURE_NOTIFY | EventMask::PROPERTY_CHANGE)
@@ -159,8 +166,8 @@ fn test_statusbar_creation_in_xephyr() {
 
     let xephyr = XephyrServer::start(99);
     if let Some(server) = xephyr {
-        let wm_ctx = X11Context::connect_to(Some(&server.display))
-            .expect("WM context connect failed");
+        let wm_ctx =
+            X11Context::connect_to(Some(&server.display)).expect("WM context connect failed");
         assert!(wm_ctx.become_wm().is_ok());
 
         // 1. Direct creation of statusbar window with create_statusbar_window
@@ -170,25 +177,66 @@ fn test_statusbar_creation_in_xephyr() {
             .expect("Failed to create statusbar window");
 
         // Verify window attributes: override_redirect must be true
-        let attrs = wm_ctx.connection.get_window_attributes(win_id).unwrap().reply().unwrap();
+        let attrs = wm_ctx
+            .connection
+            .get_window_attributes(win_id)
+            .unwrap()
+            .reply()
+            .unwrap();
         assert!(attrs.override_redirect);
 
         // Verify window geometry: x=0, y=0, w=screen_width, h=26
-        let geom = wm_ctx.connection.get_geometry(win_id).unwrap().reply().unwrap();
+        let geom = wm_ctx
+            .connection
+            .get_geometry(win_id)
+            .unwrap()
+            .reply()
+            .unwrap();
         assert_eq!(geom.x, 0);
         assert_eq!(geom.y, 0);
         assert_eq!(geom.width, wm_ctx.screen_width);
         assert_eq!(geom.height, 26);
 
         // Verify _NET_WM_WINDOW_TYPE = _NET_WM_WINDOW_TYPE_DOCK
-        let net_wm_window_type = wm_ctx.connection.intern_atom(false, b"_NET_WM_WINDOW_TYPE").unwrap().reply().unwrap().atom;
-        let net_wm_window_type_dock = wm_ctx.connection.intern_atom(false, b"_NET_WM_WINDOW_TYPE_DOCK").unwrap().reply().unwrap().atom;
-        let prop = wm_ctx.connection.get_property(false, win_id, net_wm_window_type, AtomEnum::ATOM, 0, 1).unwrap().reply().unwrap();
-        assert_eq!(prop.value32().unwrap().next(), Some(net_wm_window_type_dock));
+        let net_wm_window_type = wm_ctx
+            .connection
+            .intern_atom(false, b"_NET_WM_WINDOW_TYPE")
+            .unwrap()
+            .reply()
+            .unwrap()
+            .atom;
+        let net_wm_window_type_dock = wm_ctx
+            .connection
+            .intern_atom(false, b"_NET_WM_WINDOW_TYPE_DOCK")
+            .unwrap()
+            .reply()
+            .unwrap()
+            .atom;
+        let prop = wm_ctx
+            .connection
+            .get_property(false, win_id, net_wm_window_type, AtomEnum::ATOM, 0, 1)
+            .unwrap()
+            .reply()
+            .unwrap();
+        assert_eq!(
+            prop.value32().unwrap().next(),
+            Some(net_wm_window_type_dock)
+        );
 
         // Verify _NET_WM_STRUT = [0, 0, 26, 0]
-        let net_wm_strut = wm_ctx.connection.intern_atom(false, b"_NET_WM_STRUT").unwrap().reply().unwrap().atom;
-        let strut_prop = wm_ctx.connection.get_property(false, win_id, net_wm_strut, AtomEnum::CARDINAL, 0, 4).unwrap().reply().unwrap();
+        let net_wm_strut = wm_ctx
+            .connection
+            .intern_atom(false, b"_NET_WM_STRUT")
+            .unwrap()
+            .reply()
+            .unwrap()
+            .atom;
+        let strut_prop = wm_ctx
+            .connection
+            .get_property(false, win_id, net_wm_strut, AtomEnum::CARDINAL, 0, 4)
+            .unwrap()
+            .reply()
+            .unwrap();
         let strut_vals: Vec<u32> = strut_prop.value32().unwrap().collect();
         assert_eq!(strut_vals, vec![0, 0, 26, 0]);
 
@@ -210,8 +258,8 @@ fn test_wm_statusbar_integration_and_space_reservation_in_xephyr() {
 
     let xephyr = XephyrServer::start(100);
     if let Some(server) = xephyr {
-        let wm_ctx = X11Context::connect_to(Some(&server.display))
-            .expect("WM context connect failed");
+        let wm_ctx =
+            X11Context::connect_to(Some(&server.display)).expect("WM context connect failed");
         assert!(wm_ctx.become_wm().is_ok());
 
         let mut wm = WindowManager::new(wm_ctx).expect("Failed to create WM");
@@ -224,13 +272,25 @@ fn test_wm_statusbar_integration_and_space_reservation_in_xephyr() {
 
         // 2. Open client window
         let client_conn = X11Context::connect_to(Some(&server.display)).unwrap();
-        let win = create_client_window(&client_conn.connection, wm.context.root_window, 10, 10, 300, 300);
+        let win = create_client_window(
+            &client_conn.connection,
+            wm.context.root_window,
+            10,
+            10,
+            300,
+            300,
+        );
 
         wm.process_pending_events().unwrap();
         assert_eq!(wm.client_state.all_clients().len(), 1);
 
         // 3. Verify client window starts BELOW statusbar (y >= 24)
-        let geom = client_conn.connection.get_geometry(win).unwrap().reply().unwrap();
+        let geom = client_conn
+            .connection
+            .get_geometry(win)
+            .unwrap()
+            .reply()
+            .unwrap();
         assert!(
             geom.y >= 24,
             "Client window y ({}) should be at or below statusbar height (24)",
@@ -247,7 +307,12 @@ fn test_wm_statusbar_integration_and_space_reservation_in_xephyr() {
         wm.disable_statusbar().expect("Failed to disable statusbar");
         assert!(wm.statusbar.is_none());
 
-        let geom_after = client_conn.connection.get_geometry(win).unwrap().reply().unwrap();
+        let geom_after = client_conn
+            .connection
+            .get_geometry(win)
+            .unwrap()
+            .reply()
+            .unwrap();
         // Outer gap is default 0 or border; y should be at top edge now
         assert!(geom_after.y < geom.y);
     }
@@ -266,15 +331,16 @@ fn test_statusbar_renderer_in_xephyr() {
 
     let xephyr = XephyrServer::start(101);
     if let Some(server) = xephyr {
-        let wm_ctx = X11Context::connect_to(Some(&server.display))
-            .expect("WM context connect failed");
+        let wm_ctx =
+            X11Context::connect_to(Some(&server.display)).expect("WM context connect failed");
         assert!(wm_ctx.become_wm().is_ok());
 
         let mut wm = WindowManager::new(wm_ctx).expect("Failed to create WM");
 
         // 1. Test standalone Renderer font fallback and drawing
-        let font_fallback = Renderer::load_font(&wm.context.connection, "non_existent_fancy_font_xyz")
-            .expect("Font fallback should successfully load fixed or core font");
+        let font_fallback =
+            Renderer::load_font(&wm.context.connection, "non_existent_fancy_font_xyz")
+                .expect("Font fallback should successfully load fixed or core font");
         assert!(font_fallback > 0);
 
         // 2. Enable statusbar with height 26
@@ -291,11 +357,26 @@ fn test_statusbar_renderer_in_xephyr() {
 
         // 3. Test direct rendering functions on pixmap
         renderer
-            .fill_rect(&wm.context.connection, renderer.pixmap, 0, 0, 100, 26, 0x1a1b26)
+            .fill_rect(
+                &wm.context.connection,
+                renderer.pixmap,
+                0,
+                0,
+                100,
+                26,
+                0x1a1b26,
+            )
             .expect("fill_rect on pixmap should succeed");
 
         renderer
-            .draw_text(&wm.context.connection, renderer.pixmap, 10, 16, "Statusbar Test", 0xc0caf5)
+            .draw_text(
+                &wm.context.connection,
+                renderer.pixmap,
+                10,
+                16,
+                "Statusbar Test",
+                0xc0caf5,
+            )
             .expect("draw_text on pixmap should succeed");
 
         // 4. Test blitting to statusbar window (double buffering)
@@ -304,22 +385,45 @@ fn test_statusbar_renderer_in_xephyr() {
             .expect("flush_to_window should succeed");
 
         // 5. Test statusbar rendering through WindowManager
-        wm.render_statusbar().expect("render_statusbar should succeed");
+        wm.render_statusbar()
+            .expect("render_statusbar should succeed");
 
         // 6. Test active window title and workspace switching re-renders
         let client_conn = X11Context::connect_to(Some(&server.display)).unwrap();
-        let win = create_client_window(&client_conn.connection, wm.context.root_window, 20, 40, 200, 200);
+        let win = create_client_window(
+            &client_conn.connection,
+            wm.context.root_window,
+            20,
+            40,
+            200,
+            200,
+        );
 
         // Set window name
-        let net_wm_name = client_conn.connection.intern_atom(false, b"_NET_WM_NAME").unwrap().reply().unwrap().atom;
-        let utf8_string = client_conn.connection.intern_atom(false, b"UTF8_STRING").unwrap().reply().unwrap().atom;
-        client_conn.connection.change_property8(
-            x11rb::protocol::xproto::PropMode::REPLACE,
-            win,
-            net_wm_name,
-            utf8_string,
-            b"Terminal 1",
-        ).unwrap();
+        let net_wm_name = client_conn
+            .connection
+            .intern_atom(false, b"_NET_WM_NAME")
+            .unwrap()
+            .reply()
+            .unwrap()
+            .atom;
+        let utf8_string = client_conn
+            .connection
+            .intern_atom(false, b"UTF8_STRING")
+            .unwrap()
+            .reply()
+            .unwrap()
+            .atom;
+        client_conn
+            .connection
+            .change_property8(
+                x11rb::protocol::xproto::PropMode::REPLACE,
+                win,
+                net_wm_name,
+                utf8_string,
+                b"Terminal 1",
+            )
+            .unwrap();
         client_conn.flush().unwrap();
 
         wm.process_pending_events().unwrap();
@@ -335,43 +439,63 @@ fn test_statusbar_renderer_in_xephyr() {
 
         // Verify statusbar title does NOT persist on empty workspace 2
         let bar = wm.statusbar.as_ref().unwrap();
-        assert!(!bar.full_text().contains("Terminal 1"), "Statusbar title must be cleared on empty workspace");
+        assert!(
+            !bar.full_text().contains("Terminal 1"),
+            "Statusbar title must be cleared on empty workspace"
+        );
 
         // Module update re-render
         let _ = wm.update_statusbar();
         let bar = wm.statusbar.as_ref().unwrap();
-        assert!(!bar.full_text().contains("Terminal 1"), "Statusbar title must remain cleared after module update");
+        assert!(
+            !bar.full_text().contains("Terminal 1"),
+            "Statusbar title must remain cleared after module update"
+        );
 
         // Switch back to workspace 1: title should be restored
-        wm.switch_workspace(1).expect("Failed to switch back to workspace 1");
+        wm.switch_workspace(1)
+            .expect("Failed to switch back to workspace 1");
         assert_eq!(wm.current_workspace, 1);
         let bar = wm.statusbar.as_ref().unwrap();
-        assert!(bar.full_text().contains("Terminal 1"), "Statusbar title must be restored when returning to workspace 1");
+        assert!(
+            bar.full_text().contains("Terminal 1"),
+            "Statusbar title must be restored when returning to workspace 1"
+        );
 
         // Switch to workspace 2 again for image test
         wm.switch_workspace(2).expect("Failed to switch workspace");
         assert_eq!(wm.current_workspace, 2);
 
         // 7. Verify actual rendered pixels on statusbar window using get_image
-        let img = wm.context.connection.get_image(
-            x11rb::protocol::xproto::ImageFormat::Z_PIXMAP,
-            bar_win,
-            0,
-            0,
-            200,
-            26,
-            !0,
-        ).unwrap().reply().unwrap();
+        let img = wm
+            .context
+            .connection
+            .get_image(
+                x11rb::protocol::xproto::ImageFormat::Z_PIXMAP,
+                bar_win,
+                0,
+                0,
+                200,
+                26,
+                !0,
+            )
+            .unwrap()
+            .reply()
+            .unwrap();
         // Check that pixels with color scheme active_bg (0x7aa2f7) or fg (0xc0caf5) were actually written
         // In 32-bit/24-bit visual, pixels are stored in BGR or RGB format
         let has_colored_pixels = img.data.as_chunks::<4>().0.iter().any(|p| {
             let color = (p[2] as u32) << 16 | (p[1] as u32) << 8 | (p[0] as u32);
             color == 0x7aa2f7 || color == 0xc0caf5 || color == 0x15161e
         });
-        assert!(has_colored_pixels, "Statusbar window must contain rendered text / pill pixels");
+        assert!(
+            has_colored_pixels,
+            "Statusbar window must contain rendered text / pill pixels"
+        );
 
         // Disable statusbar
-        wm.disable_statusbar().expect("disable_statusbar should succeed");
+        wm.disable_statusbar()
+            .expect("disable_statusbar should succeed");
     }
 }
 
@@ -391,20 +515,54 @@ fn test_statusbar_dynamic_screen_resize() {
 
     // 1. Enable statusbar with initial width (1000px)
     let bar_win = wm.enable_statusbar(26).expect("Failed to enable statusbar");
-    let initial_geom = wm.context.connection.get_geometry(bar_win).unwrap().reply().unwrap();
+    let initial_geom = wm
+        .context
+        .connection
+        .get_geometry(bar_win)
+        .unwrap()
+        .reply()
+        .unwrap();
     assert_eq!(initial_geom.width, 1000);
     assert_eq!(wm.statusbar.as_ref().unwrap().rect.width, 1000);
-    assert_eq!(wm.statusbar.as_ref().unwrap().renderer.as_ref().unwrap().width, 1000);
+    assert_eq!(
+        wm.statusbar
+            .as_ref()
+            .unwrap()
+            .renderer
+            .as_ref()
+            .unwrap()
+            .width,
+        1000
+    );
 
     // 2. Perform dynamic resize to a new resolution (1366x768)
     let new_rect = Rect::new(0, 0, 1366, 26);
-    wm.statusbar.as_mut().unwrap().resize(&wm.context.connection, new_rect, root_depth).expect("Resize should succeed");
+    wm.statusbar
+        .as_mut()
+        .unwrap()
+        .resize(&wm.context.connection, new_rect, root_depth)
+        .expect("Resize should succeed");
 
     // 3. Verify that the X11 statusbar window and internal renderer were updated
-    let updated_geom = wm.context.connection.get_geometry(bar_win).unwrap().reply().unwrap();
+    let updated_geom = wm
+        .context
+        .connection
+        .get_geometry(bar_win)
+        .unwrap()
+        .reply()
+        .unwrap();
     assert_eq!(updated_geom.width, 1366);
     assert_eq!(wm.statusbar.as_ref().unwrap().rect.width, 1366);
-    assert_eq!(wm.statusbar.as_ref().unwrap().renderer.as_ref().unwrap().width, 1366);
+    assert_eq!(
+        wm.statusbar
+            .as_ref()
+            .unwrap()
+            .renderer
+            .as_ref()
+            .unwrap()
+            .width,
+        1366
+    );
 
     // 4. Verify statusbar re-renders cleanly at the new width without errors
     let render_res = wm.render_statusbar();
@@ -412,13 +570,33 @@ fn test_statusbar_dynamic_screen_resize() {
 
     // 5. Test another resize to 1920x1080
     let fhd_rect = Rect::new(0, 0, 1920, 26);
-    wm.statusbar.as_mut().unwrap().resize(&wm.context.connection, fhd_rect, root_depth).expect("FHD resize should succeed");
-    let fhd_geom = wm.context.connection.get_geometry(bar_win).unwrap().reply().unwrap();
+    wm.statusbar
+        .as_mut()
+        .unwrap()
+        .resize(&wm.context.connection, fhd_rect, root_depth)
+        .expect("FHD resize should succeed");
+    let fhd_geom = wm
+        .context
+        .connection
+        .get_geometry(bar_win)
+        .unwrap()
+        .reply()
+        .unwrap();
     assert_eq!(fhd_geom.width, 1920);
     assert_eq!(wm.statusbar.as_ref().unwrap().rect.width, 1920);
-    assert_eq!(wm.statusbar.as_ref().unwrap().renderer.as_ref().unwrap().width, 1920);
+    assert_eq!(
+        wm.statusbar
+            .as_ref()
+            .unwrap()
+            .renderer
+            .as_ref()
+            .unwrap()
+            .width,
+        1920
+    );
 
-    wm.disable_statusbar().expect("disable_statusbar should succeed");
+    wm.disable_statusbar()
+        .expect("disable_statusbar should succeed");
 }
 
 #[test]
@@ -472,14 +650,20 @@ fn test_statusbar_mouse_workspace_interaction_in_xephyr() {
     let click_x = ws3.x as i16 + (ws3.width as i16 / 2);
     let click_y = ws3.y as i16 + (ws3.height as i16 / 2);
     simulate_click(&mut wm, click_x, click_y, 1, 0).expect("Click ws 3 failed");
-    assert_eq!(wm.current_workspace, 3, "Left click on workspace 3 must switch to workspace 3");
+    assert_eq!(
+        wm.current_workspace, 3,
+        "Left click on workspace 3 must switch to workspace 3"
+    );
 
     // 2. Click on Workspace 7
     let ws7 = rects[6].1;
     let click_x = ws7.x as i16 + (ws7.width as i16 / 2);
     let click_y = ws7.y as i16 + (ws7.height as i16 / 2);
     simulate_click(&mut wm, click_x, click_y, 1, 0).expect("Click ws 7 failed");
-    assert_eq!(wm.current_workspace, 7, "Left click on workspace 7 must switch to workspace 7");
+    assert_eq!(
+        wm.current_workspace, 7,
+        "Left click on workspace 7 must switch to workspace 7"
+    );
 
     // 3. Click on Workspace 7 again (already active, no-op)
     simulate_click(&mut wm, click_x, click_y, 1, 0).expect("Click active ws 7 failed");
@@ -495,19 +679,31 @@ fn test_statusbar_mouse_workspace_interaction_in_xephyr() {
     // 5. Test mouse wheel scrolling on workspace region
     // Wheel down (detail = 5): workspace 1 -> 2
     simulate_click(&mut wm, click_x, click_y, 5, 0).expect("Wheel down failed");
-    assert_eq!(wm.current_workspace, 2, "Wheel down must switch to next workspace");
+    assert_eq!(
+        wm.current_workspace, 2,
+        "Wheel down must switch to next workspace"
+    );
 
     // Wheel up (detail = 4): workspace 2 -> 1
     simulate_click(&mut wm, click_x, click_y, 4, 0).expect("Wheel up failed");
-    assert_eq!(wm.current_workspace, 1, "Wheel up must switch to previous workspace");
+    assert_eq!(
+        wm.current_workspace, 1,
+        "Wheel up must switch to previous workspace"
+    );
 
     // Wheel up wrap-around: workspace 1 -> 9
     simulate_click(&mut wm, click_x, click_y, 4, 0).expect("Wheel up wrap failed");
-    assert_eq!(wm.current_workspace, 9, "Wheel up on ws 1 must wrap to ws 9");
+    assert_eq!(
+        wm.current_workspace, 9,
+        "Wheel up on ws 1 must wrap to ws 9"
+    );
 
     // Wheel down wrap-around: workspace 9 -> 1
     simulate_click(&mut wm, click_x, click_y, 5, 0).expect("Wheel down wrap failed");
-    assert_eq!(wm.current_workspace, 1, "Wheel down on ws 9 must wrap to ws 1");
+    assert_eq!(
+        wm.current_workspace, 1,
+        "Wheel down on ws 9 must wrap to ws 1"
+    );
 
     // 6. Test Right-Click and Shift+Left-Click to move client window to workspace
     let client_conn = X11Context::connect_to(Some(&server.display)).unwrap();
@@ -531,7 +727,10 @@ fn test_statusbar_mouse_workspace_interaction_in_xephyr() {
     let click_x = ws5.x as i16 + (ws5.width as i16 / 2);
     let click_y = ws5.y as i16 + (ws5.height as i16 / 2);
     simulate_click(&mut wm, click_x, click_y, 1, 0).expect("Click ws 5 failed");
-    assert_eq!(wm.current_workspace, 1, "Clicking workspace when workspace_mouse is false must be ignored");
+    assert_eq!(
+        wm.current_workspace, 1,
+        "Clicking workspace when workspace_mouse is false must be ignored"
+    );
 
     wm.disable_statusbar().expect("disable_statusbar failed");
 }
@@ -546,7 +745,12 @@ fn test_statusbar_custom_modules_and_reconfiguration() {
         BarModuleType::Volume,
         BarModuleType::Battery,
     ];
-    let mut bar = Statusbar::with_modules(100, Rect::new(0, 0, 1920, 24), &custom_modules, ColorScheme::default());
+    let mut bar = Statusbar::with_modules(
+        100,
+        Rect::new(0, 0, 1920, 24),
+        &custom_modules,
+        ColorScheme::default(),
+    );
     bar.set_title("Terminal");
     let _ = bar.update_all();
 
@@ -620,5 +824,3 @@ fn test_statusbar_custom_workspace_tags() {
     assert!(text.contains("󰊴"));
     assert!(!text.contains("[1]"));
 }
-
-

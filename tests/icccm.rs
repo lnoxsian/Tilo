@@ -1,12 +1,10 @@
 use std::process::{Child, Command};
-use tilo::icccm::{get_wm_hints, get_wm_normal_hints, WmState};
+use tilo::icccm::{WmState, get_wm_hints, get_wm_normal_hints};
 use tilo::wm::WindowManager;
 use tilo::x11::X11Context;
 use x11rb::connection::Connection;
-use x11rb::protocol::xproto::{
-    AtomEnum, ConnectionExt, CreateWindowAux, PropMode, WindowClass,
-};
 use x11rb::protocol::Event;
+use x11rb::protocol::xproto::{AtomEnum, ConnectionExt, CreateWindowAux, PropMode, WindowClass};
 use x11rb::wrapper::ConnectionExt as _;
 
 struct XephyrServer {
@@ -64,8 +62,8 @@ fn test_icccm_protocols_and_wm_state_in_xephyr() {
 
     let xephyr = XephyrServer::start(95);
     if let Some(server) = xephyr {
-        let wm_ctx = X11Context::connect_to(Some(&server.display))
-            .expect("WM context connect failed");
+        let wm_ctx =
+            X11Context::connect_to(Some(&server.display)).expect("WM context connect failed");
         assert!(wm_ctx.become_wm().is_ok());
 
         let mut wm = WindowManager::new(wm_ctx).expect("Failed to initialize WM");
@@ -139,15 +137,20 @@ fn test_icccm_protocols_and_wm_state_in_xephyr() {
         let mut received_take_focus = false;
         while let Some(event) = client_conn.poll_for_event().unwrap() {
             if let Event::ClientMessage(msg) = event
-                && msg.window == win1 && msg.type_ == wm_protocols {
-                    let data = msg.data.as_data32();
-                    if data[0] == wm_take_focus {
-                        received_take_focus = true;
-                        break;
-                    }
+                && msg.window == win1
+                && msg.type_ == wm_protocols
+            {
+                let data = msg.data.as_data32();
+                if data[0] == wm_take_focus {
+                    received_take_focus = true;
+                    break;
                 }
+            }
         }
-        assert!(received_take_focus, "Client should receive WM_TAKE_FOCUS ClientMessage");
+        assert!(
+            received_take_focus,
+            "Client should receive WM_TAKE_FOCUS ClientMessage"
+        );
 
         // WM requests window close
         wm.kill_client(win1).expect("kill_client failed");
@@ -157,15 +160,20 @@ fn test_icccm_protocols_and_wm_state_in_xephyr() {
         let mut received_delete = false;
         while let Some(event) = client_conn.poll_for_event().unwrap() {
             if let Event::ClientMessage(msg) = event
-                && msg.window == win1 && msg.type_ == wm_protocols {
-                    let data = msg.data.as_data32();
-                    if data[0] == wm_delete {
-                        received_delete = true;
-                        break;
-                    }
+                && msg.window == win1
+                && msg.type_ == wm_protocols
+            {
+                let data = msg.data.as_data32();
+                if data[0] == wm_delete {
+                    received_delete = true;
+                    break;
                 }
+            }
         }
-        assert!(received_delete, "Client should receive WM_DELETE_WINDOW ClientMessage");
+        assert!(
+            received_delete,
+            "Client should receive WM_DELETE_WINDOW ClientMessage"
+        );
 
         // 3. Test KillClient fallback for client without WM_DELETE_WINDOW
         let (doomed_conn, _) =

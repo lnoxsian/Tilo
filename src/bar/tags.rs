@@ -1,8 +1,8 @@
 //! UI tag and layout status modules.
 
-use std::time::Instant;
-use super::modules::{ModuleUpdate, StatusModule};
 use super::StatusbarError;
+use super::modules::{ModuleUpdate, StatusModule};
+use std::time::Instant;
 
 /// Workspace status module displaying active and occupied workspace tags.
 #[derive(Debug, Clone)]

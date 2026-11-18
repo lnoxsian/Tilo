@@ -1,7 +1,7 @@
 //! Monocle layout algorithm.
 
-use x11rb::protocol::xproto::Window;
 use super::{LayoutConfig, Rect};
+use x11rb::protocol::xproto::Window;
 
 /// Calculates the bounding rectangles for a monocle layout.
 ///

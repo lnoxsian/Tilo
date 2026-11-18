@@ -1,13 +1,11 @@
 use std::process::{Child, Command};
 use tilo::scratchpad::{
-    calculate_scratchpad_geometry, set_scratchpad_client, toggle_scratchpad, Scratchpad,
+    Scratchpad, calculate_scratchpad_geometry, set_scratchpad_client, toggle_scratchpad,
 };
 use tilo::wm::WindowManager;
 use tilo::x11::X11Context;
 use x11rb::connection::Connection;
-use x11rb::protocol::xproto::{
-    ConnectionExt as _, CreateWindowAux, EventMask, WindowClass,
-};
+use x11rb::protocol::xproto::{ConnectionExt as _, CreateWindowAux, EventMask, WindowClass};
 
 struct XephyrServer {
     child: Child,
@@ -122,23 +120,34 @@ fn test_scratchpad_in_xephyr() {
     assert!(wm.scratchpad.is_visible);
 
     let client = wm.client_state.get_client(client_win).unwrap();
-    assert!(client.floating, "Scratchpad client must be marked as floating");
+    assert!(
+        client.floating,
+        "Scratchpad client must be marked as floating"
+    );
 
     // 3. Toggle scratchpad: visible -> hidden
     wm.toggle_scratchpad().unwrap();
     assert!(!wm.scratchpad.is_visible);
     let client = wm.client_state.get_client(client_win).unwrap();
-    assert!(!client.mapped, "Scratchpad client must be unmapped when hidden");
+    assert!(
+        !client.mapped,
+        "Scratchpad client must be unmapped when hidden"
+    );
 
     // 4. Toggle scratchpad: hidden -> visible
     wm.toggle_scratchpad().unwrap();
     assert!(wm.scratchpad.is_visible);
     let client = wm.client_state.get_client(client_win).unwrap();
-    assert!(client.mapped, "Scratchpad client must be mapped when visible");
+    assert!(
+        client.mapped,
+        "Scratchpad client must be mapped when visible"
+    );
     assert!(client.floating);
 
     // Verify centered geometry
-    let geom = client.floating_geometry.expect("Must have floating geometry");
+    let geom = client
+        .floating_geometry
+        .expect("Must have floating geometry");
     let mon = wm.monitor_manager.active_monitor();
     let expected_geom = calculate_scratchpad_geometry(mon.x, mon.y, mon.width, mon.height);
     assert_eq!(geom.x, expected_geom.x);
@@ -151,12 +160,18 @@ fn test_scratchpad_in_xephyr() {
     assert_eq!(wm.current_workspace, 2);
     assert!(wm.scratchpad.is_visible);
     let client = wm.client_state.get_client(client_win).unwrap();
-    assert_eq!(client.workspace, 2, "Scratchpad should move with user to new workspace");
+    assert_eq!(
+        client.workspace, 2,
+        "Scratchpad should move with user to new workspace"
+    );
     assert!(client.mapped);
 
     // 6. Destroy scratchpad window and verify cleanup
     wm.handle_destroy_notify(client_win).unwrap();
-    assert_eq!(wm.scratchpad.client, None, "Scratchpad client must be cleared on DestroyNotify");
+    assert_eq!(
+        wm.scratchpad.client, None,
+        "Scratchpad client must be cleared on DestroyNotify"
+    );
     assert!(!wm.scratchpad.is_visible);
 }
 

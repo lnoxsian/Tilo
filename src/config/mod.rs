@@ -7,13 +7,13 @@
 //! - Safe configuration reload without restarting the window manager ([`ReloadError`]).
 
 pub mod theme;
-pub use theme::*;
 pub use crate::launcher::LauncherPosition;
+pub use theme::*;
 
 use crate::autostart::AutostartCmd;
 use crate::bar::BarModuleType;
 use crate::focus::Direction;
-use crate::keybind::{default_keybindings, parse_keybind, Action, KeyBind};
+use crate::keybind::{Action, KeyBind, default_keybindings, parse_keybind};
 use crate::x11::X11Error;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
@@ -118,6 +118,8 @@ pub struct Config {
     /// Optional command used to lock the screen (e.g. "i3lock -c 000000", "betterlockscreen -l").
     /// When None (the default), screen locking is disabled and omitted from the power/exit launcher.
     pub lock_command: Option<String>,
+    /// Configured window rules for matching window properties and criteria.
+    pub window_rules: Vec<crate::rules::WindowRule>,
 }
 
 impl Config {
@@ -144,11 +146,11 @@ impl Config {
     /// Returns the configured tag/icon for the given 1-based workspace ID.
     pub fn workspace_tag(&self, ws_id: u32) -> &str {
         if ws_id >= 1
-            && let Some(tag) = self.workspace_tags.get((ws_id - 1) as usize) {
-                if !tag.is_empty() {
-                    return tag.as_str();
-                }
-            }
+            && let Some(tag) = self.workspace_tags.get((ws_id - 1) as usize)
+            && !tag.is_empty()
+        {
+            return tag.as_str();
+        }
         match ws_id {
             1 => "1",
             2 => "2",
@@ -208,6 +210,7 @@ impl Default for Config {
             launcher_position: LauncherPosition::Spotlight,
             focus_on_hover: false,
             lock_command: None,
+            window_rules: Vec::new(),
         }
     }
 }
@@ -243,9 +246,8 @@ pub fn tokenize(content: &str) -> Result<Vec<Token>, ConfigError> {
                 } else {
                     None
                 };
-                let is_end_of_token = next_char.is_none_or(|ch| {
-                    ch.is_whitespace() || ch == '\n' || ch == '\r' || ch == '#'
-                });
+                let is_end_of_token = next_char
+                    .is_none_or(|ch| ch.is_whitespace() || ch == '\n' || ch == '\r' || ch == '#');
 
                 if (hex_len == 3 || hex_len == 6 || hex_len == 8) && is_end_of_token {
                     let mut color_token = String::with_capacity(1 + hex_len);
@@ -298,7 +300,12 @@ pub fn tokenize(content: &str) -> Result<Vec<Token>, ConfigError> {
 
         // 5. Accumulate word or numeric literal
         let mut buffer = String::new();
-        while i < len && !chars[i].is_whitespace() && chars[i] != '#' && chars[i] != '\n' && chars[i] != '\r' {
+        while i < len
+            && !chars[i].is_whitespace()
+            && chars[i] != '#'
+            && chars[i] != '\n'
+            && chars[i] != '\r'
+        {
             buffer.push(chars[i]);
             i += 1;
         }
@@ -345,14 +352,26 @@ pub fn parse(tokens: &[Token]) -> Result<Config, ConfigError> {
         match token {
             Token::Newline => {
                 if !current_line.is_empty() {
-                    parse_line(&current_line, line_number, &mut config, &mut custom_bindings, &mut has_custom_bindings)?;
+                    parse_line(
+                        &current_line,
+                        line_number,
+                        &mut config,
+                        &mut custom_bindings,
+                        &mut has_custom_bindings,
+                    )?;
                     current_line.clear();
                 }
                 line_number += 1;
             }
             Token::Eof => {
                 if !current_line.is_empty() {
-                    parse_line(&current_line, line_number, &mut config, &mut custom_bindings, &mut has_custom_bindings)?;
+                    parse_line(
+                        &current_line,
+                        line_number,
+                        &mut config,
+                        &mut custom_bindings,
+                        &mut has_custom_bindings,
+                    )?;
                     current_line.clear();
                 }
                 break;
@@ -396,7 +415,10 @@ fn parse_line(
             if line.len() < 2 {
                 return Err(ConfigError::ParseError {
                     line: line_number,
-                    message: format!("Directive '{}' requires a key argument (e.g. '{} Mod4')", directive, directive),
+                    message: format!(
+                        "Directive '{}' requires a key argument (e.g. '{} Mod4')",
+                        directive, directive
+                    ),
                 });
             }
             let key = token_to_string(line[1]);
@@ -427,7 +449,10 @@ fn parse_line(
             if line.len() < 2 {
                 return Err(ConfigError::ParseError {
                     line: line_number,
-                    message: format!("Directive '{}' requires a color argument (e.g. #1a1b26)", directive),
+                    message: format!(
+                        "Directive '{}' requires a color argument (e.g. #1a1b26)",
+                        directive
+                    ),
                 });
             }
             let color = token_to_color(line[1], line_number, directive)?;
@@ -437,7 +462,10 @@ fn parse_line(
             if line.len() < 2 {
                 return Err(ConfigError::ParseError {
                     line: line_number,
-                    message: format!("Directive '{}' requires a color argument (e.g. #c0caf5)", directive),
+                    message: format!(
+                        "Directive '{}' requires a color argument (e.g. #c0caf5)",
+                        directive
+                    ),
                 });
             }
             let color = token_to_color(line[1], line_number, directive)?;
@@ -447,7 +475,10 @@ fn parse_line(
             if line.len() < 2 {
                 return Err(ConfigError::ParseError {
                     line: line_number,
-                    message: format!("Directive '{}' requires a color argument (e.g. #7aa2f7)", directive),
+                    message: format!(
+                        "Directive '{}' requires a color argument (e.g. #7aa2f7)",
+                        directive
+                    ),
                 });
             }
             let color = token_to_color(line[1], line_number, directive)?;
@@ -457,7 +488,10 @@ fn parse_line(
             if line.len() < 2 {
                 return Err(ConfigError::ParseError {
                     line: line_number,
-                    message: format!("Directive '{}' requires a color argument (e.g. #15161e)", directive),
+                    message: format!(
+                        "Directive '{}' requires a color argument (e.g. #15161e)",
+                        directive
+                    ),
                 });
             }
             let color = token_to_color(line[1], line_number, directive)?;
@@ -467,7 +501,10 @@ fn parse_line(
             if line.len() < 2 {
                 return Err(ConfigError::ParseError {
                     line: line_number,
-                    message: format!("Directive '{}' requires a color argument (e.g. #f7768e)", directive),
+                    message: format!(
+                        "Directive '{}' requires a color argument (e.g. #f7768e)",
+                        directive
+                    ),
                 });
             }
             let color = token_to_color(line[1], line_number, directive)?;
@@ -477,7 +514,10 @@ fn parse_line(
             if line.len() < 2 {
                 return Err(ConfigError::ParseError {
                     line: line_number,
-                    message: format!("Directive '{}' requires a color argument (e.g. #15161e)", directive),
+                    message: format!(
+                        "Directive '{}' requires a color argument (e.g. #15161e)",
+                        directive
+                    ),
                 });
             }
             let color = token_to_color(line[1], line_number, directive)?;
@@ -487,7 +527,10 @@ fn parse_line(
             if line.len() < 2 {
                 return Err(ConfigError::ParseError {
                     line: line_number,
-                    message: format!("Directive '{}' requires a color argument (e.g. #555566)", directive),
+                    message: format!(
+                        "Directive '{}' requires a color argument (e.g. #555566)",
+                        directive
+                    ),
                 });
             }
             let color = token_to_color(line[1], line_number, directive)?;
@@ -497,7 +540,10 @@ fn parse_line(
             if line.len() < 2 {
                 return Err(ConfigError::ParseError {
                     line: line_number,
-                    message: format!("Directive '{}' requires a color argument (e.g. #444444)", directive),
+                    message: format!(
+                        "Directive '{}' requires a color argument (e.g. #444444)",
+                        directive
+                    ),
                 });
             }
             let color = token_to_color(line[1], line_number, directive)?;
@@ -510,7 +556,10 @@ fn parse_line(
             if line.len() < 2 {
                 return Err(ConfigError::ParseError {
                     line: line_number,
-                    message: format!("Directive '{}' requires a color argument (e.g. #ffffff)", directive),
+                    message: format!(
+                        "Directive '{}' requires a color argument (e.g. #ffffff)",
+                        directive
+                    ),
                 });
             }
             let color = token_to_color(line[1], line_number, directive)?;
@@ -521,7 +570,10 @@ fn parse_line(
             if line.len() < 2 {
                 return Err(ConfigError::ParseError {
                     line: line_number,
-                    message: format!("Directive '{}' requires a color argument (e.g. #444444)", directive),
+                    message: format!(
+                        "Directive '{}' requires a color argument (e.g. #444444)",
+                        directive
+                    ),
                 });
             }
             let color = token_to_color(line[1], line_number, directive)?;
@@ -532,7 +584,10 @@ fn parse_line(
             if line.len() < 2 {
                 return Err(ConfigError::ParseError {
                     line: line_number,
-                    message: format!("Directive '{}' requires a color argument (e.g. #ff0000)", directive),
+                    message: format!(
+                        "Directive '{}' requires a color argument (e.g. #ff0000)",
+                        directive
+                    ),
                 });
             }
             let color = token_to_color(line[1], line_number, directive)?;
@@ -736,7 +791,10 @@ fn parse_line(
             if line.len() < 2 {
                 return Err(ConfigError::ParseError {
                     line: line_number,
-                    message: format!("Directive '{}' requires a position argument ('spotlight' or 'dmenu')", directive),
+                    message: format!(
+                        "Directive '{}' requires a position argument ('spotlight' or 'dmenu')",
+                        directive
+                    ),
                 });
             }
             let val = token_to_string(line[1]).to_lowercase();
@@ -746,7 +804,10 @@ fn parse_line(
                 _ => {
                     return Err(ConfigError::InvalidValue {
                         line: line_number,
-                        value: format!("Unknown launcher position '{}'. Supported: 'spotlight', 'dmenu'", val),
+                        value: format!(
+                            "Unknown launcher position '{}'. Supported: 'spotlight', 'dmenu'",
+                            val
+                        ),
                     });
                 }
             }
@@ -818,9 +879,11 @@ fn parse_line(
                 });
             }
             let name = token_to_string(line[1]);
-            let lt = name.parse::<crate::layout::LayoutType>().map_err(|_| ConfigError::InvalidValue {
-                line: line_number,
-                value: name,
+            let lt = name.parse::<crate::layout::LayoutType>().map_err(|_| {
+                ConfigError::InvalidValue {
+                    line: line_number,
+                    value: name,
+                }
             })?;
             config.layout = lt;
         }
@@ -828,7 +891,8 @@ fn parse_line(
             if line.len() < 3 {
                 return Err(ConfigError::ParseError {
                     line: line_number,
-                    message: "Directive 'bind' requires '<KeyCombo> <Action> [Args...]'".to_string(),
+                    message: "Directive 'bind' requires '<KeyCombo> <Action> [Args...]'"
+                        .to_string(),
                 });
             }
             let raw_combo = token_to_string(line[1]);
@@ -868,7 +932,8 @@ fn parse_line(
             if line.len() < 2 {
                 return Err(ConfigError::ParseError {
                     line: line_number,
-                    message: "Directive 'lock_cmd' requires a command argument or 'none'".to_string(),
+                    message: "Directive 'lock_cmd' requires a command argument or 'none'"
+                        .to_string(),
                 });
             }
             let words: Vec<String> = line[1..].iter().map(|t| token_to_string(t)).collect();
@@ -899,7 +964,8 @@ fn parse_line(
             if line.len() < 2 {
                 return Err(ConfigError::ParseError {
                     line: line_number,
-                    message: "Directive 'tab_max_width' requires a numeric value in pixels".to_string(),
+                    message: "Directive 'tab_max_width' requires a numeric value in pixels"
+                        .to_string(),
                 });
             }
             let width = token_to_u32(line[1], line_number, "tab_max_width")?;
@@ -939,7 +1005,8 @@ fn parse_line(
             if line.len() < 2 {
                 return Err(ConfigError::ParseError {
                     line: line_number,
-                    message: "Directive 'workspace_wheel_switch' requires 'true' or 'false'".to_string(),
+                    message: "Directive 'workspace_wheel_switch' requires 'true' or 'false'"
+                        .to_string(),
                 });
             }
             let val = token_to_string(line[1]).to_lowercase();
@@ -958,7 +1025,9 @@ fn parse_line(
             if line.len() < 2 {
                 return Err(ConfigError::ParseError {
                     line: line_number,
-                    message: "Directive 'shutdown_timeout' requires a numeric value in milliseconds".to_string(),
+                    message:
+                        "Directive 'shutdown_timeout' requires a numeric value in milliseconds"
+                            .to_string(),
                 });
             }
             let timeout = token_to_u32(line[1], line_number, "shutdown_timeout")?;
@@ -966,7 +1035,8 @@ fn parse_line(
         }
 
         // --- Statusbar Enable / Disable ---
-        "statusbar" | "bar" | "enable_statusbar" | "statusbar_enabled" | "statusbar_enable" | "bar_enabled" | "bar_enable" => {
+        "statusbar" | "bar" | "enable_statusbar" | "statusbar_enabled" | "statusbar_enable"
+        | "bar_enabled" | "bar_enable" => {
             if line.len() < 2 {
                 return Err(ConfigError::ParseError {
                     line: line_number,
@@ -974,7 +1044,12 @@ fn parse_line(
                 });
             }
             let val = token_to_string(line[1]).to_lowercase();
-            config.statusbar = val == "true" || val == "1" || val == "yes" || val == "on" || val == "enable" || val == "enabled";
+            config.statusbar = val == "true"
+                || val == "1"
+                || val == "yes"
+                || val == "on"
+                || val == "enable"
+                || val == "enabled";
         }
 
         // --- Statusbar Modules Configuration ---
@@ -1029,25 +1104,36 @@ fn parse_line(
                 });
             }
             let mod_name = token_to_string(line[1]);
-            let mod_type = BarModuleType::from_str_loose(&mod_name).map_err(|_| ConfigError::InvalidValue {
-                line: line_number,
-                value: format!("Unknown statusbar module '{}'", mod_name),
+            let mod_type = BarModuleType::from_str_loose(&mod_name).map_err(|_| {
+                ConfigError::InvalidValue {
+                    line: line_number,
+                    value: format!("Unknown statusbar module '{}'", mod_name),
+                }
             })?;
             let val = token_to_string(line[2]).to_lowercase();
-            let enabled = val == "true" || val == "1" || val == "yes" || val == "on" || val == "enable" || val == "enabled";
+            let enabled = val == "true"
+                || val == "1"
+                || val == "yes"
+                || val == "on"
+                || val == "enable"
+                || val == "enabled";
             set_module_enabled(&mut config.bar_modules, mod_type, enabled);
         }
         "enable_module" => {
             if line.len() < 2 {
                 return Err(ConfigError::ParseError {
                     line: line_number,
-                    message: "Directive 'enable_module' requires a module name (e.g. 'enable_module ip')".to_string(),
+                    message:
+                        "Directive 'enable_module' requires a module name (e.g. 'enable_module ip')"
+                            .to_string(),
                 });
             }
             let mod_name = token_to_string(line[1]);
-            let mod_type = BarModuleType::from_str_loose(&mod_name).map_err(|_| ConfigError::InvalidValue {
-                line: line_number,
-                value: format!("Unknown statusbar module '{}'", mod_name),
+            let mod_type = BarModuleType::from_str_loose(&mod_name).map_err(|_| {
+                ConfigError::InvalidValue {
+                    line: line_number,
+                    value: format!("Unknown statusbar module '{}'", mod_name),
+                }
             })?;
             set_module_enabled(&mut config.bar_modules, mod_type, true);
         }
@@ -1059,9 +1145,11 @@ fn parse_line(
                 });
             }
             let mod_name = token_to_string(line[1]);
-            let mod_type = BarModuleType::from_str_loose(&mod_name).map_err(|_| ConfigError::InvalidValue {
-                line: line_number,
-                value: format!("Unknown statusbar module '{}'", mod_name),
+            let mod_type = BarModuleType::from_str_loose(&mod_name).map_err(|_| {
+                ConfigError::InvalidValue {
+                    line: line_number,
+                    value: format!("Unknown statusbar module '{}'", mod_name),
+                }
             })?;
             set_module_enabled(&mut config.bar_modules, mod_type, false);
         }
@@ -1073,7 +1161,8 @@ fn parse_line(
                 });
             }
             let val = token_to_string(line[1]).to_lowercase();
-            let enabled = val == "true" || val == "1" || val == "yes" || val == "on" || val == "enable";
+            let enabled =
+                val == "true" || val == "1" || val == "yes" || val == "on" || val == "enable";
             set_module_enabled(&mut config.bar_modules, BarModuleType::Ip, enabled);
         }
         "bar_module_ram" | "bar_ram" => {
@@ -1084,7 +1173,8 @@ fn parse_line(
                 });
             }
             let val = token_to_string(line[1]).to_lowercase();
-            let enabled = val == "true" || val == "1" || val == "yes" || val == "on" || val == "enable";
+            let enabled =
+                val == "true" || val == "1" || val == "yes" || val == "on" || val == "enable";
             set_module_enabled(&mut config.bar_modules, BarModuleType::Ram, enabled);
         }
         "bar_module_cpu" | "bar_cpu" => {
@@ -1095,7 +1185,8 @@ fn parse_line(
                 });
             }
             let val = token_to_string(line[1]).to_lowercase();
-            let enabled = val == "true" || val == "1" || val == "yes" || val == "on" || val == "enable";
+            let enabled =
+                val == "true" || val == "1" || val == "yes" || val == "on" || val == "enable";
             set_module_enabled(&mut config.bar_modules, BarModuleType::Cpu, enabled);
         }
         "bar_module_battery" | "bar_battery" | "bar_module_bat" | "bar_bat" => {
@@ -1106,7 +1197,8 @@ fn parse_line(
                 });
             }
             let val = token_to_string(line[1]).to_lowercase();
-            let enabled = val == "true" || val == "1" || val == "yes" || val == "on" || val == "enable";
+            let enabled =
+                val == "true" || val == "1" || val == "yes" || val == "on" || val == "enable";
             set_module_enabled(&mut config.bar_modules, BarModuleType::Battery, enabled);
         }
         "bar_module_volume" | "bar_volume" | "bar_module_vol" | "bar_vol" => {
@@ -1117,7 +1209,8 @@ fn parse_line(
                 });
             }
             let val = token_to_string(line[1]).to_lowercase();
-            let enabled = val == "true" || val == "1" || val == "yes" || val == "on" || val == "enable";
+            let enabled =
+                val == "true" || val == "1" || val == "yes" || val == "on" || val == "enable";
             set_module_enabled(&mut config.bar_modules, BarModuleType::Volume, enabled);
         }
         "bar_module_clock" | "bar_clock" | "bar_module_time" | "bar_time" => {
@@ -1128,12 +1221,14 @@ fn parse_line(
                 });
             }
             let val = token_to_string(line[1]).to_lowercase();
-            let enabled = val == "true" || val == "1" || val == "yes" || val == "on" || val == "enable";
+            let enabled =
+                val == "true" || val == "1" || val == "yes" || val == "on" || val == "enable";
             set_module_enabled(&mut config.bar_modules, BarModuleType::Clock, enabled);
         }
 
         // --- Workspace Identifiers / Tags ---
-        "workspace_tags" | "bar_workspace_tags" | "workspace_icons" | "workspaces_icons" | "workspace_labels" | "workspaces_tags" => {
+        "workspace_tags" | "bar_workspace_tags" | "workspace_icons" | "workspaces_icons"
+        | "workspace_labels" | "workspaces_tags" => {
             if line.len() < 2 {
                 config.workspace_tags = (1..=9).map(|i| i.to_string()).collect();
             } else {
@@ -1192,7 +1287,9 @@ fn parse_line(
                 });
             }
             let suffix = dir.rsplit('_').next().unwrap_or("");
-            if let Ok(ws_id) = suffix.parse::<u32>() && (1..=9).contains(&ws_id) {
+            if let Ok(ws_id) = suffix.parse::<u32>()
+                && (1..=9).contains(&ws_id)
+            {
                 let tag = token_to_string(line[1]);
                 while config.workspace_tags.len() < 9 {
                     let next_num = config.workspace_tags.len() + 1;
@@ -1205,6 +1302,110 @@ fn parse_line(
                     value: directive.to_string(),
                 });
             }
+        }
+        "for_window" => {
+            if line.len() < 2 {
+                return Err(ConfigError::ParseError {
+                    line: line_number,
+                    message: "Directive 'for_window' requires criteria and action".to_string(),
+                });
+            }
+            let words: Vec<String> = line[1..].iter().map(|t| token_to_string(t)).collect();
+            let raw_str = words.join(" ");
+            let (crit, cmd) = crate::criteria::parse_criteria_and_command(&raw_str)
+                .map_err(|e| ConfigError::ParseError {
+                    line: line_number,
+                    message: e,
+                })?;
+            let crit = crit.ok_or_else(|| ConfigError::ParseError {
+                line: line_number,
+                message: "Missing criteria '[...]' in 'for_window'".to_string(),
+            })?;
+
+            let cmd_tokens: Vec<&str> = cmd.split_whitespace().collect();
+            let mut action = crate::rules::RuleAction::new();
+            let mut i = 0;
+            while i < cmd_tokens.len() {
+                match cmd_tokens[i].to_lowercase().as_str() {
+                    "floating" => {
+                        let enable = if i + 1 < cmd_tokens.len()
+                            && cmd_tokens[i + 1].eq_ignore_ascii_case("disable")
+                        {
+                            i += 1;
+                            false
+                        } else {
+                            if i + 1 < cmd_tokens.len()
+                                && cmd_tokens[i + 1].eq_ignore_ascii_case("enable")
+                            {
+                                i += 1;
+                            }
+                            true
+                        };
+                        action.floating = Some(enable);
+                    }
+                    "fullscreen" => {
+                        let enable = if i + 1 < cmd_tokens.len()
+                            && cmd_tokens[i + 1].eq_ignore_ascii_case("disable")
+                        {
+                            i += 1;
+                            false
+                        } else {
+                            if i + 1 < cmd_tokens.len()
+                                && cmd_tokens[i + 1].eq_ignore_ascii_case("enable")
+                            {
+                                i += 1;
+                            }
+                            true
+                        };
+                        action.fullscreen = Some(enable);
+                    }
+                    "workspace" => {
+                        if i + 1 < cmd_tokens.len() {
+                            let ws_arg = cmd_tokens[i + 1];
+                            i += 1;
+                            if let Ok(num) = ws_arg.parse::<u32>() {
+                                action.target_workspace = Some(num);
+                            } else {
+                                action.target_workspace_name = Some(ws_arg.to_string());
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+                i += 1;
+            }
+            config
+                .window_rules
+                .push(crate::rules::WindowRule::from_criteria(crit, action));
+        }
+        "assign" => {
+            if line.len() < 3 {
+                return Err(ConfigError::ParseError {
+                    line: line_number,
+                    message: "Directive 'assign' requires criteria and target workspace (e.g. assign [class=\"Steam\"] chat)".to_string(),
+                });
+            }
+            let words: Vec<String> = line[1..].iter().map(|t| token_to_string(t)).collect();
+            let raw_str = words.join(" ");
+            let (crit, ws_str) = crate::criteria::parse_criteria_and_command(&raw_str)
+                .map_err(|e| ConfigError::ParseError {
+                    line: line_number,
+                    message: e,
+                })?;
+            let crit = crit.ok_or_else(|| ConfigError::ParseError {
+                line: line_number,
+                message: "Missing criteria '[...]' in 'assign'".to_string(),
+            })?;
+            let target = ws_str.trim();
+            let mut action = crate::rules::RuleAction::new();
+            if let Ok(num) = target.parse::<u32>() {
+                action.target_workspace = Some(num);
+            } else {
+                action.target_workspace_name = Some(target.to_string());
+            }
+            config
+                .window_rules
+                .push(crate::rules::WindowRule::from_criteria(crit, action));
         }
         unknown => {
             return Err(ConfigError::InvalidValue {
@@ -1254,13 +1455,18 @@ fn token_to_u32(token: &Token, line: usize, directive: &str) -> Result<u32, Conf
 fn token_to_color(token: &Token, line: usize, directive: &str) -> Result<u32, ConfigError> {
     match token {
         Token::Number(n) => Ok(*n),
-        Token::Word(s) => crate::decoration::parse_color(s).ok_or_else(|| ConfigError::InvalidValue {
-            line,
-            value: s.clone(),
-        }),
+        Token::Word(s) => {
+            crate::decoration::parse_color(s).ok_or_else(|| ConfigError::InvalidValue {
+                line,
+                value: s.clone(),
+            })
+        }
         _ => Err(ConfigError::ParseError {
             line,
-            message: format!("Directive '{}' expects a color value (e.g. #ffffff)", directive),
+            message: format!(
+                "Directive '{}' expects a color value (e.g. #ffffff)",
+                directive
+            ),
         }),
     }
 }
@@ -1270,10 +1476,7 @@ fn token_to_bool(token: &Token, line: usize, _directive: &str) -> Result<bool, C
     match s.as_str() {
         "true" | "1" | "yes" | "on" | "enable" | "enabled" => Ok(true),
         "false" | "0" | "no" | "off" | "disable" | "disabled" => Ok(false),
-        _ => Err(ConfigError::InvalidValue {
-            line,
-            value: s,
-        }),
+        _ => Err(ConfigError::InvalidValue { line, value: s }),
     }
 }
 
@@ -1297,9 +1500,7 @@ fn parse_action(tokens: &[&Token], line: usize, config: &Config) -> Result<Actio
             let cmd: Vec<String> = tokens[1..].iter().map(|t| token_to_string(t)).collect();
             Ok(Action::Spawn(cmd.join(" ")))
         }
-        "terminal" => {
-            Ok(Action::Spawn(config.terminal.clone()))
-        }
+        "terminal" => Ok(Action::Spawn(config.terminal.clone())),
         "close" | "kill" => Ok(Action::Close),
         "launcher" => {
             if tokens.len() > 1 {
@@ -1313,7 +1514,8 @@ fn parse_action(tokens: &[&Token], line: usize, config: &Config) -> Result<Actio
             if tokens.len() < 2 {
                 return Err(ConfigError::ParseError {
                     line,
-                    message: "Action 'focus' requires a direction (left, right, up, down)".to_string(),
+                    message: "Action 'focus' requires a direction (left, right, up, down)"
+                        .to_string(),
                 });
             }
             let dir_str = token_to_string(tokens[1]);
@@ -1324,7 +1526,8 @@ fn parse_action(tokens: &[&Token], line: usize, config: &Config) -> Result<Actio
             if tokens.len() < 2 {
                 return Err(ConfigError::ParseError {
                     line,
-                    message: "Action 'move' requires a direction (left, right, up, down)".to_string(),
+                    message: "Action 'move' requires a direction (left, right, up, down)"
+                        .to_string(),
                 });
             }
             let dir_str = token_to_string(tokens[1]);
@@ -1366,10 +1569,7 @@ fn parse_action(tokens: &[&Token], line: usize, config: &Config) -> Result<Actio
             match side.as_str() {
                 "left" => Ok(Action::FocusMonitorLeft),
                 "right" => Ok(Action::FocusMonitorRight),
-                _ => Err(ConfigError::InvalidValue {
-                    line,
-                    value: side,
-                }),
+                _ => Err(ConfigError::InvalidValue { line, value: side }),
             }
         }
         "focus_monitor_left" => Ok(Action::FocusMonitorLeft),
@@ -1393,7 +1593,8 @@ fn parse_action(tokens: &[&Token], line: usize, config: &Config) -> Result<Actio
             if tokens.len() < 2 {
                 return Err(ConfigError::ParseError {
                     line,
-                    message: "Action 'resize' requires a direction (left, right, up, down)".to_string(),
+                    message: "Action 'resize' requires a direction (left, right, up, down)"
+                        .to_string(),
                 });
             }
             let dir_str = token_to_string(tokens[1]);
@@ -1410,17 +1611,18 @@ fn parse_action(tokens: &[&Token], line: usize, config: &Config) -> Result<Actio
             let s = token_to_string(tokens[1]).to_lowercase();
             match s.as_str() {
                 "vertical" | "v" => Ok(Action::PreselectSplit(crate::layout::SplitType::Vertical)),
-                "horizontal" | "h" => Ok(Action::PreselectSplit(crate::layout::SplitType::Horizontal)),
-                _ => Err(ConfigError::InvalidValue {
-                    line,
-                    value: s,
-                }),
+                "horizontal" | "h" => {
+                    Ok(Action::PreselectSplit(crate::layout::SplitType::Horizontal))
+                }
+                _ => Err(ConfigError::InvalidValue { line, value: s }),
             }
         }
         "split_vertical" => Ok(Action::PreselectSplit(crate::layout::SplitType::Vertical)),
         "split_horizontal" => Ok(Action::PreselectSplit(crate::layout::SplitType::Horizontal)),
         "cycle_layout" | "cyclelayout" => Ok(Action::CycleLayout),
-        "rotate_master" | "rotatemaster" | "rotate_layout" | "rotatelayout" => Ok(Action::RotateMaster),
+        "rotate_master" | "rotatemaster" | "rotate_layout" | "rotatelayout" => {
+            Ok(Action::RotateMaster)
+        }
         "layout" | "set_layout" => {
             if tokens.len() < 2 {
                 return Err(ConfigError::ParseError {
@@ -1429,21 +1631,29 @@ fn parse_action(tokens: &[&Token], line: usize, config: &Config) -> Result<Actio
                 });
             }
             let name = token_to_string(tokens[1]);
-            let lt = name.parse::<crate::layout::LayoutType>().map_err(|_| ConfigError::InvalidValue {
-                line,
-                value: name,
-            })?;
+            let lt = name
+                .parse::<crate::layout::LayoutType>()
+                .map_err(|_| ConfigError::InvalidValue { line, value: name })?;
             Ok(Action::SetLayout(lt))
         }
-        "layout_master" | "layout_master_left" => Ok(Action::SetLayout(crate::layout::LayoutType::MasterStack)),
+        "layout_master" | "layout_master_left" => {
+            Ok(Action::SetLayout(crate::layout::LayoutType::MasterStack))
+        }
         "layout_master_right" => Ok(Action::SetLayout(crate::layout::LayoutType::MasterRight)),
         "layout_master_top" => Ok(Action::SetLayout(crate::layout::LayoutType::MasterTop)),
         "layout_master_bottom" => Ok(Action::SetLayout(crate::layout::LayoutType::MasterBottom)),
-        "layout_center_master" | "layout_centered_master" | "layout_centermaster" | "layout_centeredmaster" => Ok(Action::SetLayout(crate::layout::LayoutType::CenterMaster)),
+        "layout_center_master"
+        | "layout_centered_master"
+        | "layout_centermaster"
+        | "layout_centeredmaster" => Ok(Action::SetLayout(crate::layout::LayoutType::CenterMaster)),
         "layout_monocle" => Ok(Action::SetLayout(crate::layout::LayoutType::Monocle)),
         "layout_tabbed" => Ok(Action::SetLayout(crate::layout::LayoutType::Tabbed)),
-        "layout_vertical" | "layout_columns" => Ok(Action::SetLayout(crate::layout::LayoutType::Vertical)),
-        "layout_horizontal" | "layout_rows" => Ok(Action::SetLayout(crate::layout::LayoutType::Horizontal)),
+        "layout_vertical" | "layout_columns" => {
+            Ok(Action::SetLayout(crate::layout::LayoutType::Vertical))
+        }
+        "layout_horizontal" | "layout_rows" => {
+            Ok(Action::SetLayout(crate::layout::LayoutType::Horizontal))
+        }
         "layout_bsp" => Ok(Action::SetLayout(crate::layout::LayoutType::Bsp)),
         "layout_grid" => Ok(Action::SetLayout(crate::layout::LayoutType::Grid)),
         "focus_next_tab" | "next_tab" => Ok(Action::FocusNextTab),
@@ -1735,7 +1945,10 @@ pub fn default_config_path() -> Option<PathBuf> {
         return Some(p);
     }
     if let Ok(home) = std::env::var("HOME") {
-        let p = PathBuf::from(home).join(".config").join("tilo").join("config");
+        let p = PathBuf::from(home)
+            .join(".config")
+            .join("tilo")
+            .join("config");
         return Some(p);
     }
     None
@@ -1760,10 +1973,11 @@ pub fn create_default_config_at_path(path: impl AsRef<Path>) -> Result<(), std::
 /// or `Err(e)` if writing the default configuration failed.
 pub fn create_default_config_if_missing() -> Result<Option<PathBuf>, std::io::Error> {
     if let Some(path) = default_config_path()
-        && !path.exists() {
-            create_default_config_at_path(&path)?;
-            return Ok(Some(path));
-        }
+        && !path.exists()
+    {
+        create_default_config_at_path(&path)?;
+        return Ok(Some(path));
+    }
     Ok(None)
 }
 
@@ -1970,7 +2184,10 @@ autostart picom -b
         assert!(config.autostart[1].args.is_empty());
 
         assert_eq!(config.autostart[2].program, "feh");
-        assert_eq!(config.autostart[2].args, vec!["--bg-fill", "/path/to/wallpaper.jpg"]);
+        assert_eq!(
+            config.autostart[2].args,
+            vec!["--bg-fill", "/path/to/wallpaper.jpg"]
+        );
 
         assert_eq!(config.autostart[3].program, "picom");
         assert_eq!(config.autostart[3].args, vec!["-b"]);
@@ -2013,12 +2230,30 @@ bind $mod+6 layout_grid
         assert_eq!(config.bindings.len(), 8);
         assert_eq!(config.bindings[0].action, Action::RotateMaster);
         assert_eq!(config.bindings[1].action, Action::RotateMaster);
-        assert_eq!(config.bindings[2].action, Action::SetLayout(crate::layout::LayoutType::MasterStack));
-        assert_eq!(config.bindings[3].action, Action::SetLayout(crate::layout::LayoutType::MasterRight));
-        assert_eq!(config.bindings[4].action, Action::SetLayout(crate::layout::LayoutType::MasterTop));
-        assert_eq!(config.bindings[5].action, Action::SetLayout(crate::layout::LayoutType::MasterBottom));
-        assert_eq!(config.bindings[6].action, Action::SetLayout(crate::layout::LayoutType::CenterMaster));
-        assert_eq!(config.bindings[7].action, Action::SetLayout(crate::layout::LayoutType::Grid));
+        assert_eq!(
+            config.bindings[2].action,
+            Action::SetLayout(crate::layout::LayoutType::MasterStack)
+        );
+        assert_eq!(
+            config.bindings[3].action,
+            Action::SetLayout(crate::layout::LayoutType::MasterRight)
+        );
+        assert_eq!(
+            config.bindings[4].action,
+            Action::SetLayout(crate::layout::LayoutType::MasterTop)
+        );
+        assert_eq!(
+            config.bindings[5].action,
+            Action::SetLayout(crate::layout::LayoutType::MasterBottom)
+        );
+        assert_eq!(
+            config.bindings[6].action,
+            Action::SetLayout(crate::layout::LayoutType::CenterMaster)
+        );
+        assert_eq!(
+            config.bindings[7].action,
+            Action::SetLayout(crate::layout::LayoutType::Grid)
+        );
     }
 
     #[test]
@@ -2054,7 +2289,8 @@ bind $mod+1 select_tab 1
 
     #[test]
     fn test_default_config_template_parsing() {
-        let tokens = tokenize(DEFAULT_CONFIG_CONTENT).expect("DEFAULT_CONFIG_CONTENT should tokenize successfully");
+        let tokens = tokenize(DEFAULT_CONFIG_CONTENT)
+            .expect("DEFAULT_CONFIG_CONTENT should tokenize successfully");
         let config = parse(&tokens).expect("DEFAULT_CONFIG_CONTENT should parse successfully");
 
         assert_eq!(config.mod_key, "Mod4");
@@ -2107,7 +2343,12 @@ bind $mod+1 select_tab 1
 
         let default_bindings = default_keybindings();
         assert_eq!(config.bindings.len(), default_bindings.len());
-        for (idx, (parsed, expected)) in config.bindings.iter().zip(default_bindings.iter()).enumerate() {
+        for (idx, (parsed, expected)) in config
+            .bindings
+            .iter()
+            .zip(default_bindings.iter())
+            .enumerate()
+        {
             assert_eq!(parsed, expected, "Mismatch at binding index {}", idx);
         }
     }
@@ -2136,10 +2377,12 @@ bind $mod+1 select_tab 1
         let config = Config::default();
         assert_eq!(config.bar_separator(), " | ");
 
-        let parsed = parse(&tokenize("bar_separator \" | \"").unwrap()).expect("Should parse quoted separator");
+        let parsed = parse(&tokenize("bar_separator \" | \"").unwrap())
+            .expect("Should parse quoted separator");
         assert_eq!(parsed.bar_separator(), " | ");
 
-        let parsed_pipe = parse(&tokenize("statusbar_separator \"|\"").unwrap()).expect("Should parse pipe separator");
+        let parsed_pipe = parse(&tokenize("statusbar_separator \"|\"").unwrap())
+            .expect("Should parse pipe separator");
         assert_eq!(parsed_pipe.bar_separator(), "|");
     }
 
@@ -2158,11 +2401,17 @@ bind $mod+F10 vol_mute
 
         assert_eq!(config.bindings.len(), 6);
         assert_eq!(config.bindings[0].action, Action::VolumeUp(5));
-        assert_eq!(config.bindings[0].keysym, crate::keybind::XF86_AUDIO_RAISE_VOLUME);
+        assert_eq!(
+            config.bindings[0].keysym,
+            crate::keybind::XF86_AUDIO_RAISE_VOLUME
+        );
         assert_eq!(config.bindings[0].modifiers, 0);
 
         assert_eq!(config.bindings[1].action, Action::VolumeDown(10));
-        assert_eq!(config.bindings[1].keysym, crate::keybind::XF86_AUDIO_LOWER_VOLUME);
+        assert_eq!(
+            config.bindings[1].keysym,
+            crate::keybind::XF86_AUDIO_LOWER_VOLUME
+        );
         assert_eq!(config.bindings[1].modifiers, 0);
 
         assert_eq!(config.bindings[2].action, Action::VolumeToggleMute);
@@ -2229,7 +2478,8 @@ bind $mod+F10 vol_mute
 
     #[test]
     fn test_parse_bar_modules_synonyms() {
-        let input = "bar_modules day:date:time ip_address ram_usage cpu_usage battery_percentage vol\n";
+        let input =
+            "bar_modules day:date:time ip_address ram_usage cpu_usage battery_percentage vol\n";
         let tokens = tokenize(input).unwrap();
         let config = parse(&tokens).unwrap();
         assert_eq!(
@@ -2350,11 +2600,17 @@ bar_workspace_icon 4 
     fn test_parse_statusbar_enabled_and_disabled() {
         let input_default = "";
         let cfg_default = parse(&tokenize(input_default).unwrap()).unwrap();
-        assert!(cfg_default.statusbar, "Statusbar should be enabled by default");
+        assert!(
+            cfg_default.statusbar,
+            "Statusbar should be enabled by default"
+        );
 
         let input_false = "statusbar false\n";
         let cfg_false = parse(&tokenize(input_false).unwrap()).unwrap();
-        assert!(!cfg_false.statusbar, "Statusbar should be disabled when false");
+        assert!(
+            !cfg_false.statusbar,
+            "Statusbar should be disabled when false"
+        );
 
         let input_true = "statusbar true\n";
         let cfg_true = parse(&tokenize(input_true).unwrap()).unwrap();
@@ -2411,7 +2667,10 @@ bar_workspace_icon 4 
     fn test_parse_focus_on_hover() {
         let input_default = "";
         let cfg_default = parse(&tokenize(input_default).unwrap()).unwrap();
-        assert!(!cfg_default.focus_on_hover, "focus_on_hover must be false by default");
+        assert!(
+            !cfg_default.focus_on_hover,
+            "focus_on_hover must be false by default"
+        );
 
         let input_false = "focus_on_hover false\n";
         let cfg_false = parse(&tokenize(input_false).unwrap()).unwrap();

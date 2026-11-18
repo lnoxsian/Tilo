@@ -1,14 +1,12 @@
 use std::process::{Child, Command};
 use std::time::Duration;
+use tilo::WmState;
 use tilo::manage_existing_windows;
 use tilo::rules::{RuleAction, RuleCondition, WindowRule};
 use tilo::wm::WindowManager;
 use tilo::x11::X11Context;
-use tilo::WmState;
 use x11rb::connection::Connection;
-use x11rb::protocol::xproto::{
-    AtomEnum, ConnectionExt, CreateWindowAux, PropMode, WindowClass,
-};
+use x11rb::protocol::xproto::{AtomEnum, ConnectionExt, CreateWindowAux, PropMode, WindowClass};
 use x11rb::wrapper::ConnectionExt as _;
 
 struct XephyrServer {
@@ -131,7 +129,9 @@ fn test_startup_existing_windows_adoption() {
                 &aux_override,
             )
             .expect("Create win3_override");
-        client_conn.map_window(win3_override).expect("Map win3_override");
+        client_conn
+            .map_window(win3_override)
+            .expect("Map win3_override");
 
         // Window 4: Unmapped window (should be IGNORED by manage_existing_windows)
         let win4_unmapped = client_conn.generate_id().expect("XID 4");
@@ -164,14 +164,28 @@ fn test_startup_existing_windows_adoption() {
 
         // Step 3: Run manage_existing_windows()
         let result = wm.manage_existing_windows();
-        assert!(result.is_ok(), "manage_existing_windows failed: {:?}", result);
+        assert!(
+            result.is_ok(),
+            "manage_existing_windows failed: {:?}",
+            result
+        );
 
         // Step 4: Verify adopted clients
-        assert_eq!(wm.client_state.len(), 2, "Only mapped non-override windows should be managed");
+        assert_eq!(
+            wm.client_state.len(),
+            2,
+            "Only mapped non-override windows should be managed"
+        );
         assert!(wm.client_state.contains(win1), "win1 must be managed");
         assert!(wm.client_state.contains(win2), "win2 must be managed");
-        assert!(!wm.client_state.contains(win3_override), "override-redirect must be ignored");
-        assert!(!wm.client_state.contains(win4_unmapped), "unmapped window must be ignored");
+        assert!(
+            !wm.client_state.contains(win3_override),
+            "override-redirect must be ignored"
+        );
+        assert!(
+            !wm.client_state.contains(win4_unmapped),
+            "unmapped window must be ignored"
+        );
 
         // Workspace allocation: both on workspace 1
         let ws1_clients = &wm.workspace_manager.get(1).expect("Workspace 1").clients;
@@ -180,7 +194,11 @@ fn test_startup_existing_windows_adoption() {
         assert!(ws1_clients.contains(&win2));
 
         // Topmost window (win2, created after win1) must have focus
-        assert_eq!(wm.focused_window(), Some(win2), "Topmost window must be focused");
+        assert_eq!(
+            wm.focused_window(),
+            Some(win2),
+            "Topmost window must be focused"
+        );
 
         // Both windows must be marked as mapped
         assert!(wm.client_state.get_client(win1).unwrap().mapped);
@@ -273,7 +291,8 @@ fn test_startup_existing_windows_with_rules() {
         ));
 
         // Adopt pre-existing windows
-        wm.manage_existing_windows().expect("manage_existing_windows");
+        wm.manage_existing_windows()
+            .expect("manage_existing_windows");
 
         assert_eq!(wm.client_state.len(), 2);
 

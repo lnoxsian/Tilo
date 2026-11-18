@@ -25,7 +25,10 @@ pub fn init_desktop_session() {
         let user_bus_path = format!("/run/user/{}/bus", uid);
         if std::path::Path::new(&user_bus_path).exists() {
             unsafe {
-                std::env::set_var("DBUS_SESSION_BUS_ADDRESS", format!("unix:path={}", user_bus_path));
+                std::env::set_var(
+                    "DBUS_SESSION_BUS_ADDRESS",
+                    format!("unix:path={}", user_bus_path),
+                );
             }
         }
     }
@@ -60,7 +63,10 @@ mod tests {
     #[test]
     fn test_init_desktop_session_sets_xdg_variables() {
         init_desktop_session();
-        assert_eq!(std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default(), "tilo");
+        assert_eq!(
+            std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default(),
+            "tilo"
+        );
         assert_eq!(std::env::var("XDG_SESSION_TYPE").unwrap_or_default(), "x11");
     }
 }

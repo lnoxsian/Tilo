@@ -12,12 +12,12 @@
 //!   - CPU module (reads `/proc/stat`)
 //!   - Clock module (system time)
 pub mod modules;
-pub mod tags;
 pub mod tabs;
+pub mod tags;
 
 pub use modules::*;
-pub use tags::*;
 pub use tabs::*;
+pub use tags::*;
 
 use crate::layout::Rect;
 use crate::x11::X11Error;
@@ -156,7 +156,10 @@ impl Statusbar {
         let mut cur_x = 8i32;
         for ws in 1..=9 {
             let pill_w = 20u32;
-            workspace_rects.push((ws, Rect::new(cur_x, 3, pill_w, rect.height.saturating_sub(6))));
+            workspace_rects.push((
+                ws,
+                Rect::new(cur_x, 3, pill_w, rect.height.saturating_sub(6)),
+            ));
             cur_x += pill_w as i32 + 4;
         }
 
@@ -243,7 +246,11 @@ impl Statusbar {
             left_modules.insert(0, Box::new(WorkspaceModule::new()));
         }
         if !has_layout {
-            let pos = left_modules.iter().position(|m| m.name() == "workspace").map(|p| p + 1).unwrap_or(0);
+            let pos = left_modules
+                .iter()
+                .position(|m| m.name() == "workspace")
+                .map(|p| p + 1)
+                .unwrap_or(0);
             left_modules.insert(pos, Box::new(LayoutModule::new()));
         }
         if !has_title {
@@ -276,9 +283,10 @@ impl Statusbar {
             }
             let interval_ms = module.update_interval();
             if let Some(last) = module.last_updated()
-                && now.duration_since(last).as_millis() < interval_ms as u128 {
-                    continue;
-                }
+                && now.duration_since(last).as_millis() < interval_ms as u128
+            {
+                continue;
+            }
             match module.update() {
                 Ok(ModuleUpdate::Changed(_)) | Ok(ModuleUpdate::Error(_)) => {
                     any_changed = true;
@@ -326,7 +334,10 @@ impl Statusbar {
     /// Updates the active and occupied workspaces in the workspace module if present.
     pub fn set_workspace(&mut self, current: u32, occupied: &[u32]) {
         for m in &mut self.modules {
-            if let Some(ws_mod) = m.as_any_mut().and_then(|a| a.downcast_mut::<WorkspaceModule>()) {
+            if let Some(ws_mod) = m
+                .as_any_mut()
+                .and_then(|a| a.downcast_mut::<WorkspaceModule>())
+            {
                 ws_mod.set_workspace(current, occupied);
             }
         }
@@ -336,7 +347,10 @@ impl Statusbar {
     pub fn set_workspace_tags(&mut self, tags: &[String]) {
         self.workspace_tags = tags.to_vec();
         for m in &mut self.modules {
-            if let Some(ws_mod) = m.as_any_mut().and_then(|a| a.downcast_mut::<WorkspaceModule>()) {
+            if let Some(ws_mod) = m
+                .as_any_mut()
+                .and_then(|a| a.downcast_mut::<WorkspaceModule>())
+            {
                 ws_mod.set_tags(tags);
             }
         }
@@ -346,7 +360,10 @@ impl Statusbar {
     /// Updates the active layout indicator in the layout module if present.
     pub fn set_layout(&mut self, layout_name: &str) {
         for m in &mut self.modules {
-            if let Some(layout_mod) = m.as_any_mut().and_then(|a| a.downcast_mut::<LayoutModule>()) {
+            if let Some(layout_mod) = m
+                .as_any_mut()
+                .and_then(|a| a.downcast_mut::<LayoutModule>())
+            {
                 layout_mod.set_layout(layout_name);
             }
         }
@@ -364,7 +381,10 @@ impl Statusbar {
     /// Updates the volume module text and cache immediately if present.
     pub fn sync_volume(&mut self, state: Option<crate::audio::VolumeState>) {
         for m in &mut self.modules {
-            if let Some(vol_mod) = m.as_any_mut().and_then(|a| a.downcast_mut::<VolumeModule>()) {
+            if let Some(vol_mod) = m
+                .as_any_mut()
+                .and_then(|a| a.downcast_mut::<VolumeModule>())
+            {
                 vol_mod.set_state(state);
             }
         }
@@ -460,7 +480,10 @@ impl Statusbar {
             let mut cur_x = 8i32;
             for ws in 1..=9 {
                 let pill_w = 20u32;
-                wss.push((ws, Rect::new(cur_x, 3, pill_w, self.rect.height.saturating_sub(6))));
+                wss.push((
+                    ws,
+                    Rect::new(cur_x, 3, pill_w, self.rect.height.saturating_sub(6)),
+                ));
                 cur_x += pill_w as i32 + 4;
             }
             self.workspace_rects = wss;
@@ -491,7 +514,13 @@ impl Statusbar {
 
         // 3. Resize the off-screen pixmap in the renderer
         if let Some(ref mut renderer) = self.renderer {
-            renderer.resize(conn, self.window_id, new_rect.width as u16, new_rect.height as u16, root_depth)?;
+            renderer.resize(
+                conn,
+                self.window_id,
+                new_rect.width as u16,
+                new_rect.height as u16,
+                root_depth,
+            )?;
         }
 
         conn.flush()?;
@@ -528,16 +557,23 @@ pub fn set_statusbar_struts(
         &[0, 0, top_strut, bottom_strut],
     )?;
 
-    let net_wm_strut_partial = conn.intern_atom(false, b"_NET_WM_STRUT_PARTIAL")?.reply()?.atom;
+    let net_wm_strut_partial = conn
+        .intern_atom(false, b"_NET_WM_STRUT_PARTIAL")?
+        .reply()?
+        .atom;
     let strut_partial: [u32; 12] = [
-        0,                                                  // left
-        0,                                                  // right
-        top_strut,                                          // top
-        bottom_strut,                                       // bottom
-        0, 0,                                               // left_start_y, left_end_y
-        0, 0,                                               // right_start_y, right_end_y
-        rect.x as u32, (rect.x + rect.width as i32) as u32, // top_start_x, top_end_x
-        rect.x as u32, (rect.x + rect.width as i32) as u32, // bottom_start_x, bottom_end_x
+        0,            // left
+        0,            // right
+        top_strut,    // top
+        bottom_strut, // bottom
+        0,
+        0, // left_start_y, left_end_y
+        0,
+        0, // right_start_y, right_end_y
+        rect.x as u32,
+        (rect.x + rect.width as i32) as u32, // top_start_x, top_end_x
+        rect.x as u32,
+        (rect.x + rect.width as i32) as u32, // bottom_start_x, bottom_end_x
     ];
     conn.change_property32(
         PropMode::REPLACE,
@@ -603,8 +639,14 @@ pub fn create_statusbar_window_with_color(
     )?;
 
     // 1. Set _NET_WM_WINDOW_TYPE = _NET_WM_WINDOW_TYPE_DOCK
-    let net_wm_window_type = conn.intern_atom(false, b"_NET_WM_WINDOW_TYPE")?.reply()?.atom;
-    let net_wm_window_type_dock = conn.intern_atom(false, b"_NET_WM_WINDOW_TYPE_DOCK")?.reply()?.atom;
+    let net_wm_window_type = conn
+        .intern_atom(false, b"_NET_WM_WINDOW_TYPE")?
+        .reply()?
+        .atom;
+    let net_wm_window_type_dock = conn
+        .intern_atom(false, b"_NET_WM_WINDOW_TYPE_DOCK")?
+        .reply()?
+        .atom;
     conn.change_property32(
         PropMode::REPLACE,
         window_id,
@@ -657,7 +699,7 @@ Cached:          2000000 kB
         assert_eq!(idle2, 900);
 
         let delta_total = total2 - total1; // 200
-        let delta_idle = idle2 - idle1;   // 100
+        let delta_idle = idle2 - idle1; // 100
         let usage = 100.0 * (delta_total - delta_idle) as f64 / delta_total as f64;
         assert_eq!(usage.round() as u32, 50);
     }
@@ -804,12 +846,18 @@ Cached:          2000000 kB
 
         // Muted state with volume > 0
         let change_mute = vol.set_state(Some(crate::audio::VolumeState::new(75, true)));
-        assert_eq!(change_mute, ModuleUpdate::Changed("VOL 75% [MUTE]".to_string()));
+        assert_eq!(
+            change_mute,
+            ModuleUpdate::Changed("VOL 75% [MUTE]".to_string())
+        );
         assert_eq!(vol.current_text(), "VOL 75% [MUTE]");
 
         // Muted state with volume == 0
         let change_mute_zero = vol.set_state(Some(crate::audio::VolumeState::new(0, true)));
-        assert_eq!(change_mute_zero, ModuleUpdate::Changed("VOL MUTE".to_string()));
+        assert_eq!(
+            change_mute_zero,
+            ModuleUpdate::Changed("VOL MUTE".to_string())
+        );
         assert_eq!(vol.current_text(), "VOL MUTE");
 
         // None state (audio offline/unavailable)

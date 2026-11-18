@@ -1,9 +1,7 @@
 use std::process::{Child, Command};
 use tilo::config::Config;
 use tilo::keybind::MOD_SUPER;
-use tilo::mouse::{
-    default_mouse_bindings, handle_button_press, MouseAction, MouseActionType,
-};
+use tilo::mouse::{MouseAction, MouseActionType, default_mouse_bindings, handle_button_press};
 use tilo::wm::WindowManager;
 use tilo::x11::X11Context;
 use x11rb::connection::Connection;
@@ -111,7 +109,8 @@ fn test_mouse_interaction_in_xephyr() {
     let ctx = X11Context::connect_to(Some(&xephyr.display)).expect("Failed to connect to Xephyr");
     ctx.become_wm().expect("Failed to become WM in Xephyr");
 
-    let mut wm = WindowManager::new_with_config(ctx, Config::default()).expect("Failed to initialize WindowManager");
+    let mut wm = WindowManager::new_with_config(ctx, Config::default())
+        .expect("Failed to initialize WindowManager");
 
     // 1. Create and manage a client window
     let client_win = wm.context.connection.generate_id().unwrap();
@@ -158,8 +157,14 @@ fn test_mouse_interaction_in_xephyr() {
     };
 
     wm.handle_button_press(&press_move).unwrap();
-    assert!(!wm.mouse_action.is_active(), "Tiled window must not start drag");
-    assert!(!wm.client_state.get_client(client_win).unwrap().floating, "Tiled window must remain tiled");
+    assert!(
+        !wm.mouse_action.is_active(),
+        "Tiled window must not start drag"
+    );
+    assert!(
+        !wm.client_state.get_client(client_win).unwrap().floating,
+        "Tiled window must remain tiled"
+    );
 
     // Make window floating: mouse drag is now enabled!
     wm.toggle_floating(client_win).unwrap();
@@ -193,7 +198,12 @@ fn test_mouse_interaction_in_xephyr() {
     };
 
     wm.handle_motion_notify(&motion_move).unwrap();
-    let geom = wm.client_state.get_client(client_win).unwrap().floating_geometry.unwrap();
+    let geom = wm
+        .client_state
+        .get_client(client_win)
+        .unwrap()
+        .floating_geometry
+        .unwrap();
     // Verify coordinates updated
     assert!(geom.x > 0);
     assert!(geom.y > 0);
@@ -216,7 +226,10 @@ fn test_mouse_interaction_in_xephyr() {
     };
 
     wm.handle_button_release(&release).unwrap();
-    assert!(!wm.mouse_action.is_active(), "MouseAction should reset to None on ButtonRelease");
+    assert!(
+        !wm.mouse_action.is_active(),
+        "MouseAction should reset to None on ButtonRelease"
+    );
 
     // 5. Simulate Mod + Right Click (Button 3) on window to initiate Resize
     let press_resize = ButtonPressEvent {
@@ -260,7 +273,12 @@ fn test_mouse_interaction_in_xephyr() {
     };
 
     wm.handle_motion_notify(&motion_resize).unwrap();
-    let geom_after = wm.client_state.get_client(client_win).unwrap().floating_geometry.unwrap();
+    let geom_after = wm
+        .client_state
+        .get_client(client_win)
+        .unwrap()
+        .floating_geometry
+        .unwrap();
     assert!(geom_after.width >= 400);
     assert!(geom_after.height >= 300);
 
@@ -279,7 +297,8 @@ fn test_click_to_focus_and_tiled_drag_in_xephyr() {
     let ctx = X11Context::connect_to(Some(&xephyr.display)).expect("Failed to connect to Xephyr");
     ctx.become_wm().expect("Failed to become WM in Xephyr");
 
-    let mut wm = WindowManager::new_with_config(ctx, Config::default()).expect("Failed to initialize WindowManager");
+    let mut wm = WindowManager::new_with_config(ctx, Config::default())
+        .expect("Failed to initialize WindowManager");
     let screen = wm.context.screen();
 
     let aux = CreateWindowAux::new()
@@ -287,34 +306,40 @@ fn test_click_to_focus_and_tiled_drag_in_xephyr() {
         .event_mask(EventMask::STRUCTURE_NOTIFY | EventMask::PROPERTY_CHANGE);
 
     let w1 = wm.context.connection.generate_id().unwrap();
-    wm.context.connection.create_window(
-        screen.root_depth,
-        w1,
-        wm.context.root_window,
-        50,
-        50,
-        300,
-        200,
-        1,
-        WindowClass::INPUT_OUTPUT,
-        screen.root_visual,
-        &aux,
-    ).unwrap();
+    wm.context
+        .connection
+        .create_window(
+            screen.root_depth,
+            w1,
+            wm.context.root_window,
+            50,
+            50,
+            300,
+            200,
+            1,
+            WindowClass::INPUT_OUTPUT,
+            screen.root_visual,
+            &aux,
+        )
+        .unwrap();
 
     let w2 = wm.context.connection.generate_id().unwrap();
-    wm.context.connection.create_window(
-        screen.root_depth,
-        w2,
-        wm.context.root_window,
-        400,
-        50,
-        300,
-        200,
-        1,
-        WindowClass::INPUT_OUTPUT,
-        screen.root_visual,
-        &aux,
-    ).unwrap();
+    wm.context
+        .connection
+        .create_window(
+            screen.root_depth,
+            w2,
+            wm.context.root_window,
+            400,
+            50,
+            300,
+            200,
+            1,
+            WindowClass::INPUT_OUTPUT,
+            screen.root_visual,
+            &aux,
+        )
+        .unwrap();
 
     wm.manage_window(w1).unwrap();
     wm.manage_window(w2).unwrap();
@@ -341,9 +366,19 @@ fn test_click_to_focus_and_tiled_drag_in_xephyr() {
     };
 
     wm.handle_button_press(&click_w2).unwrap();
-    assert_eq!(wm.client_state.focused_window(), Some(w2), "Clicking unfocused window must focus it");
-    assert!(!wm.client_state.get_client(w2).unwrap().floating, "Normal click must not float window");
-    assert!(!wm.mouse_action.is_active(), "Normal click must not trigger drag action");
+    assert_eq!(
+        wm.client_state.focused_window(),
+        Some(w2),
+        "Clicking unfocused window must focus it"
+    );
+    assert!(
+        !wm.client_state.get_client(w2).unwrap().floating,
+        "Normal click must not float window"
+    );
+    assert!(
+        !wm.mouse_action.is_active(),
+        "Normal click must not trigger drag action"
+    );
 
     // 3. Simulate Mod + Left Click on tiled window w2: MUST NOT drag, MUST NOT float
     let drag_w2 = ButtonPressEvent {
@@ -364,15 +399,24 @@ fn test_click_to_focus_and_tiled_drag_in_xephyr() {
 
     wm.handle_button_press(&drag_w2).unwrap();
     assert_eq!(wm.client_state.focused_window(), Some(w2));
-    assert!(!wm.mouse_action.is_active(), "Tiled window must NOT start mouse drag");
-    assert!(!wm.client_state.get_client(w2).unwrap().floating, "Tiled window must NOT become floating when dragged");
+    assert!(
+        !wm.mouse_action.is_active(),
+        "Tiled window must NOT start mouse drag"
+    );
+    assert!(
+        !wm.client_state.get_client(w2).unwrap().floating,
+        "Tiled window must NOT become floating when dragged"
+    );
 
     // 4. Toggle w2 to floating: now Mod + Left Click SHOULD start mouse drag
     wm.toggle_floating(w2).unwrap();
     assert!(wm.client_state.get_client(w2).unwrap().floating);
 
     wm.handle_button_press(&drag_w2).unwrap();
-    assert!(wm.mouse_action.is_active(), "Floating window MUST start mouse drag");
+    assert!(
+        wm.mouse_action.is_active(),
+        "Floating window MUST start mouse drag"
+    );
 
     // Motion
     let motion = MotionNotifyEvent {
@@ -427,29 +471,49 @@ fn test_cursor_initialization_and_application_in_xephyr() {
     let wm = WindowManager::new_with_config(ctx, Config::default()).expect("Create WM");
 
     // Verify cursors are created with valid X11 IDs
-    assert_ne!(wm.cursor_manager.normal, 0, "Normal pointer cursor must not be 0");
-    assert_ne!(wm.cursor_manager.move_cursor, 0, "Move cursor must not be 0");
-    assert_ne!(wm.cursor_manager.resize_cursor, 0, "Resize cursor must not be 0");
+    assert_ne!(
+        wm.cursor_manager.normal, 0,
+        "Normal pointer cursor must not be 0"
+    );
+    assert_ne!(
+        wm.cursor_manager.move_cursor, 0,
+        "Move cursor must not be 0"
+    );
+    assert_ne!(
+        wm.cursor_manager.resize_cursor, 0,
+        "Resize cursor must not be 0"
+    );
 
     // Verify applying cursor to a new window succeeds without error
     let test_win = wm.context.connection.generate_id().unwrap();
     let screen = &wm.context.connection.setup().roots[wm.context.screen_num];
-    wm.context.connection.create_window(
-        screen.root_depth,
-        test_win,
-        wm.context.root_window,
-        10,
-        10,
-        100,
-        100,
-        0,
-        WindowClass::INPUT_OUTPUT,
-        screen.root_visual,
-        &CreateWindowAux::new(),
-    ).unwrap();
+    wm.context
+        .connection
+        .create_window(
+            screen.root_depth,
+            test_win,
+            wm.context.root_window,
+            10,
+            10,
+            100,
+            100,
+            0,
+            WindowClass::INPUT_OUTPUT,
+            screen.root_visual,
+            &CreateWindowAux::new(),
+        )
+        .unwrap();
 
-    assert!(wm.cursor_manager.apply_window(&wm.context.connection, test_win).is_ok());
-    assert!(wm.cursor_manager.apply_root(&wm.context.connection, wm.context.root_window).is_ok());
+    assert!(
+        wm.cursor_manager
+            .apply_window(&wm.context.connection, test_win)
+            .is_ok()
+    );
+    assert!(
+        wm.cursor_manager
+            .apply_root(&wm.context.connection, wm.context.root_window)
+            .is_ok()
+    );
 }
 
 #[test]
@@ -470,31 +534,51 @@ fn test_tiled_window_mouse_drag_resize_in_xephyr() {
     let w1 = wm.context.connection.generate_id().unwrap();
     let w2 = wm.context.connection.generate_id().unwrap();
 
-    wm.context.connection.create_window(
-        root_depth,
-        w1,
-        wm.context.root_window,
-        0, 0, 200, 200, 0,
-        WindowClass::INPUT_OUTPUT,
-        root_visual,
-        &CreateWindowAux::new().event_mask(EventMask::STRUCTURE_NOTIFY),
-    ).unwrap();
+    wm.context
+        .connection
+        .create_window(
+            root_depth,
+            w1,
+            wm.context.root_window,
+            0,
+            0,
+            200,
+            200,
+            0,
+            WindowClass::INPUT_OUTPUT,
+            root_visual,
+            &CreateWindowAux::new().event_mask(EventMask::STRUCTURE_NOTIFY),
+        )
+        .unwrap();
 
-    wm.context.connection.create_window(
-        root_depth,
-        w2,
-        wm.context.root_window,
-        0, 0, 200, 200, 0,
-        WindowClass::INPUT_OUTPUT,
-        root_visual,
-        &CreateWindowAux::new().event_mask(EventMask::STRUCTURE_NOTIFY),
-    ).unwrap();
+    wm.context
+        .connection
+        .create_window(
+            root_depth,
+            w2,
+            wm.context.root_window,
+            0,
+            0,
+            200,
+            200,
+            0,
+            WindowClass::INPUT_OUTPUT,
+            root_visual,
+            &CreateWindowAux::new().event_mask(EventMask::STRUCTURE_NOTIFY),
+        )
+        .unwrap();
 
     wm.manage_window(w1).unwrap();
     wm.manage_window(w2).unwrap();
     wm.retile().unwrap();
 
-    let geom1_before = wm.context.connection.get_geometry(w1).unwrap().reply().unwrap();
+    let geom1_before = wm
+        .context
+        .connection
+        .get_geometry(w1)
+        .unwrap()
+        .reply()
+        .unwrap();
 
     // Initiate Mod + Right Click on w1
     let press = ButtonPressEvent {
@@ -553,11 +637,26 @@ fn test_tiled_window_mouse_drag_resize_in_xephyr() {
     assert!(!wm.mouse_action.is_active());
 
     // Window 1 should now be wider than its initial geometry
-    let geom1_after = wm.context.connection.get_geometry(w1).unwrap().reply().unwrap();
-    assert!(geom1_after.width > geom1_before.width, "Tiled window 1 width must have grown");
+    let geom1_after = wm
+        .context
+        .connection
+        .get_geometry(w1)
+        .unwrap()
+        .reply()
+        .unwrap();
+    assert!(
+        geom1_after.width > geom1_before.width,
+        "Tiled window 1 width must have grown"
+    );
 
     // Next: Initiate Mod + Right Click on w2 (the right window) and drag 80 pixels to the left
-    let geom2_before = wm.context.connection.get_geometry(w2).unwrap().reply().unwrap();
+    let geom2_before = wm
+        .context
+        .connection
+        .get_geometry(w2)
+        .unwrap()
+        .reply()
+        .unwrap();
     let press_w2 = ButtonPressEvent {
         response_type: 4,
         detail: 3,
@@ -613,25 +712,53 @@ fn test_tiled_window_mouse_drag_resize_in_xephyr() {
     assert!(!wm.mouse_action.is_active());
 
     // Window 2 should now have expanded to the left, so its width is greater than geom2_before
-    let geom2_after = wm.context.connection.get_geometry(w2).unwrap().reply().unwrap();
-    assert!(geom2_after.width > geom2_before.width, "Tiled window 2 width must have grown after leftward drag");
+    let geom2_after = wm
+        .context
+        .connection
+        .get_geometry(w2)
+        .unwrap()
+        .reply()
+        .unwrap();
+    assert!(
+        geom2_after.width > geom2_before.width,
+        "Tiled window 2 width must have grown after leftward drag"
+    );
 
     // Add window 3 to create a MasterStack with Master (w1) and Stack (w2 top, w3 bottom)
     let w3 = wm.context.connection.generate_id().unwrap();
-    wm.context.connection.create_window(
-        root_depth,
-        w3,
-        wm.context.root_window,
-        0, 0, 200, 200, 0,
-        WindowClass::INPUT_OUTPUT,
-        root_visual,
-        &CreateWindowAux::new().event_mask(EventMask::STRUCTURE_NOTIFY),
-    ).unwrap();
+    wm.context
+        .connection
+        .create_window(
+            root_depth,
+            w3,
+            wm.context.root_window,
+            0,
+            0,
+            200,
+            200,
+            0,
+            WindowClass::INPUT_OUTPUT,
+            root_visual,
+            &CreateWindowAux::new().event_mask(EventMask::STRUCTURE_NOTIFY),
+        )
+        .unwrap();
     wm.manage_window(w3).unwrap();
     wm.retile().unwrap();
 
-    let geom_w2_init = wm.context.connection.get_geometry(w2).unwrap().reply().unwrap();
-    let geom_w3_init = wm.context.connection.get_geometry(w3).unwrap().reply().unwrap();
+    let geom_w2_init = wm
+        .context
+        .connection
+        .get_geometry(w2)
+        .unwrap()
+        .reply()
+        .unwrap();
+    let geom_w3_init = wm
+        .context
+        .connection
+        .get_geometry(w3)
+        .unwrap()
+        .reply()
+        .unwrap();
 
     // Drag w2 down vertically (+60px)
     let press_v = ButtonPressEvent {
@@ -685,11 +812,29 @@ fn test_tiled_window_mouse_drag_resize_in_xephyr() {
     };
     wm.handle_button_release(&release_v).unwrap();
 
-    let geom_w2_post = wm.context.connection.get_geometry(w2).unwrap().reply().unwrap();
-    let geom_w3_post = wm.context.connection.get_geometry(w3).unwrap().reply().unwrap();
+    let geom_w2_post = wm
+        .context
+        .connection
+        .get_geometry(w2)
+        .unwrap()
+        .reply()
+        .unwrap();
+    let geom_w3_post = wm
+        .context
+        .connection
+        .get_geometry(w3)
+        .unwrap()
+        .reply()
+        .unwrap();
 
-    assert!(geom_w2_post.height > geom_w2_init.height, "Stack top window (w2) height must have increased");
-    assert!(geom_w3_post.height < geom_w3_init.height, "Stack bottom window (w3) height must have decreased");
+    assert!(
+        geom_w2_post.height > geom_w2_init.height,
+        "Stack top window (w2) height must have increased"
+    );
+    assert!(
+        geom_w3_post.height < geom_w3_init.height,
+        "Stack bottom window (w3) height must have decreased"
+    );
 }
 
 #[test]
@@ -710,32 +855,58 @@ fn test_tiled_boundary_split_click_resize_in_xephyr() {
     let w1 = wm.context.connection.generate_id().unwrap();
     let w2 = wm.context.connection.generate_id().unwrap();
 
-    wm.context.connection.create_window(
-        root_depth,
-        w1,
-        wm.context.root_window,
-        0, 0, 200, 200, 0,
-        WindowClass::INPUT_OUTPUT,
-        root_visual,
-        &CreateWindowAux::new().event_mask(EventMask::STRUCTURE_NOTIFY),
-    ).unwrap();
+    wm.context
+        .connection
+        .create_window(
+            root_depth,
+            w1,
+            wm.context.root_window,
+            0,
+            0,
+            200,
+            200,
+            0,
+            WindowClass::INPUT_OUTPUT,
+            root_visual,
+            &CreateWindowAux::new().event_mask(EventMask::STRUCTURE_NOTIFY),
+        )
+        .unwrap();
 
-    wm.context.connection.create_window(
-        root_depth,
-        w2,
-        wm.context.root_window,
-        0, 0, 200, 200, 0,
-        WindowClass::INPUT_OUTPUT,
-        root_visual,
-        &CreateWindowAux::new().event_mask(EventMask::STRUCTURE_NOTIFY),
-    ).unwrap();
+    wm.context
+        .connection
+        .create_window(
+            root_depth,
+            w2,
+            wm.context.root_window,
+            0,
+            0,
+            200,
+            200,
+            0,
+            WindowClass::INPUT_OUTPUT,
+            root_visual,
+            &CreateWindowAux::new().event_mask(EventMask::STRUCTURE_NOTIFY),
+        )
+        .unwrap();
 
     wm.manage_window(w1).unwrap();
     wm.manage_window(w2).unwrap();
     wm.retile().unwrap();
 
-    let geom1_before = wm.context.connection.get_geometry(w1).unwrap().reply().unwrap();
-    let geom2_before = wm.context.connection.get_geometry(w2).unwrap().reply().unwrap();
+    let geom1_before = wm
+        .context
+        .connection
+        .get_geometry(w1)
+        .unwrap()
+        .reply()
+        .unwrap();
+    let geom2_before = wm
+        .context
+        .connection
+        .get_geometry(w2)
+        .unwrap()
+        .reply()
+        .unwrap();
 
     // The boundary gap between w1 and w2 on the root window
     let split_boundary_x = ((geom1_before.x + geom1_before.width as i16) + geom2_before.x) / 2;
@@ -802,11 +973,29 @@ fn test_tiled_boundary_split_click_resize_in_xephyr() {
     assert!(!wm.mouse_action.is_active());
 
     // Window 1 should now be wider and Window 2 should be narrower
-    let geom1_after = wm.context.connection.get_geometry(w1).unwrap().reply().unwrap();
-    let geom2_after = wm.context.connection.get_geometry(w2).unwrap().reply().unwrap();
+    let geom1_after = wm
+        .context
+        .connection
+        .get_geometry(w1)
+        .unwrap()
+        .reply()
+        .unwrap();
+    let geom2_after = wm
+        .context
+        .connection
+        .get_geometry(w2)
+        .unwrap()
+        .reply()
+        .unwrap();
 
-    assert!(geom1_after.width > geom1_before.width, "Left window (w1) must grow when dragging boundary right");
-    assert!(geom2_after.width < geom2_before.width, "Right window (w2) must shrink when dragging boundary right");
+    assert!(
+        geom1_after.width > geom1_before.width,
+        "Left window (w1) must grow when dragging boundary right"
+    );
+    assert!(
+        geom2_after.width < geom2_before.width,
+        "Right window (w2) must shrink when dragging boundary right"
+    );
 }
 
 #[test]
@@ -823,32 +1012,49 @@ fn test_focus_on_hover_in_xephyr() {
     let mut wm = WindowManager::new_with_config(ctx, Config::default()).expect("Create WM");
 
     // Verify default config has focus_on_hover disabled (click-to-focus)
-    assert!(!wm.config.focus_on_hover, "focus_on_hover must be false by default");
+    assert!(
+        !wm.config.focus_on_hover,
+        "focus_on_hover must be false by default"
+    );
 
     let root_depth = wm.context.connection.setup().roots[wm.context.screen_num].root_depth;
     let root_visual = wm.context.connection.setup().roots[wm.context.screen_num].root_visual;
     let w1 = wm.context.connection.generate_id().unwrap();
     let w2 = wm.context.connection.generate_id().unwrap();
 
-    wm.context.connection.create_window(
-        root_depth,
-        w1,
-        wm.context.root_window,
-        0, 0, 200, 200, 0,
-        WindowClass::INPUT_OUTPUT,
-        root_visual,
-        &CreateWindowAux::new().event_mask(EventMask::STRUCTURE_NOTIFY),
-    ).unwrap();
+    wm.context
+        .connection
+        .create_window(
+            root_depth,
+            w1,
+            wm.context.root_window,
+            0,
+            0,
+            200,
+            200,
+            0,
+            WindowClass::INPUT_OUTPUT,
+            root_visual,
+            &CreateWindowAux::new().event_mask(EventMask::STRUCTURE_NOTIFY),
+        )
+        .unwrap();
 
-    wm.context.connection.create_window(
-        root_depth,
-        w2,
-        wm.context.root_window,
-        0, 0, 200, 200, 0,
-        WindowClass::INPUT_OUTPUT,
-        root_visual,
-        &CreateWindowAux::new().event_mask(EventMask::STRUCTURE_NOTIFY),
-    ).unwrap();
+    wm.context
+        .connection
+        .create_window(
+            root_depth,
+            w2,
+            wm.context.root_window,
+            0,
+            0,
+            200,
+            200,
+            0,
+            WindowClass::INPUT_OUTPUT,
+            root_visual,
+            &CreateWindowAux::new().event_mask(EventMask::STRUCTURE_NOTIFY),
+        )
+        .unwrap();
 
     wm.manage_window(w1).unwrap();
     wm.manage_window(w2).unwrap();
@@ -980,4 +1186,3 @@ fn test_focus_on_hover_in_xephyr() {
         "EnterNotify with NotifyDetail::INFERIOR must be ignored"
     );
 }
-

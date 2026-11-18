@@ -24,17 +24,22 @@ pub const fn monitor_workspace_id(mon_id: u32, tag: u32) -> WorkspaceId {
 #[inline]
 pub const fn workspace_to_tag(ws_id: WorkspaceId) -> u32 {
     let tag = ws_id % 10;
-    if tag == 0 {
-        1
-    } else {
-        tag
-    }
+    if tag == 0 { 1 } else { tag }
 }
 
 /// Extracts the owning monitor ID from an internal [`WorkspaceId`].
 #[inline]
 pub const fn workspace_to_monitor_id(ws_id: WorkspaceId) -> u32 {
     ws_id / 10
+}
+
+fn parse_workspace_num(name: &str) -> i32 {
+    let digits: String = name.chars().take_while(|c| c.is_ascii_digit()).collect();
+    if digits.is_empty() {
+        -1
+    } else {
+        digits.parse::<i32>().unwrap_or(-1)
+    }
 }
 
 /// Defines the state and layout of a single workspace.
@@ -44,6 +49,10 @@ pub struct Workspace {
     pub id: WorkspaceId,
     /// The name of the workspace, typically matching the display tag as a string, but configurable.
     pub name: String,
+    /// Parsed numeric index from prefix, or -1 if non-numeric.
+    pub num: i32,
+    /// Bound or preferred output monitor name, if assigned.
+    pub output: Option<String>,
     /// Ordered list of client windows currently managed in this workspace.
     pub clients: Vec<Window>,
     /// The currently focused window in this workspace, if any.
@@ -57,9 +66,12 @@ pub struct Workspace {
 impl Workspace {
     /// Creates a new workspace with the given ID and default name.
     pub fn new(id: WorkspaceId) -> Self {
+        let tag = workspace_to_tag(id);
         Self {
             id,
-            name: workspace_to_tag(id).to_string(),
+            name: tag.to_string(),
+            num: tag as i32,
+            output: None,
             clients: Vec::new(),
             focused_client: None,
             bsp_tree: crate::layout::BspTree::new(),
@@ -69,9 +81,13 @@ impl Workspace {
 
     /// Creates a new workspace with a custom name.
     pub fn with_name(id: WorkspaceId, name: impl Into<String>) -> Self {
+        let name_str = name.into();
+        let num = parse_workspace_num(&name_str);
         Self {
             id,
-            name: name.into(),
+            name: name_str,
+            num,
+            output: None,
             clients: Vec::new(),
             focused_client: None,
             bsp_tree: crate::layout::BspTree::new(),
@@ -115,9 +131,12 @@ impl Workspace {
 
     /// Creates a new workspace with a specific layout type.
     pub fn with_layout(id: WorkspaceId, layout: LayoutType) -> Self {
+        let tag = workspace_to_tag(id);
         Self {
             id,
-            name: id.to_string(),
+            name: tag.to_string(),
+            num: tag as i32,
+            output: None,
             clients: Vec::new(),
             focused_client: None,
             bsp_tree: crate::layout::BspTree::new(),
@@ -163,6 +182,8 @@ impl Default for Workspace {
         Self {
             id: 1,
             name: "1".to_string(),
+            num: 1,
+            output: None,
             clients: Vec::new(),
             focused_client: None,
             bsp_tree: crate::layout::BspTree::new(),
@@ -178,6 +199,8 @@ pub struct WorkspaceManager {
     pub workspaces: BTreeMap<WorkspaceId, Workspace>,
     /// Currently active workspace ID.
     pub current_workspace_id: WorkspaceId,
+    /// Previously active workspace ID for `back_and_forth` switching.
+    pub previous_workspace_id: Option<WorkspaceId>,
 }
 
 impl WorkspaceManager {
@@ -190,7 +213,42 @@ impl WorkspaceManager {
         Self {
             workspaces,
             current_workspace_id: 1,
+            previous_workspace_id: None,
         }
+    }
+
+    /// Finds a workspace by exact name.
+    pub fn find_by_name(&self, name: &str) -> Option<&Workspace> {
+        self.workspaces.values().find(|ws| ws.name == name)
+    }
+
+    /// Finds a workspace mutably by exact name.
+    pub fn find_by_name_mut(&mut self, name: &str) -> Option<&mut Workspace> {
+        self.workspaces.values_mut().find(|ws| ws.name == name)
+    }
+
+    /// Finds a workspace by numeric prefix.
+    pub fn find_by_number(&self, num: i32) -> Option<&Workspace> {
+        self.workspaces.values().find(|ws| ws.num == num)
+    }
+
+    /// Gets an existing workspace by name or creates a new dynamic workspace on demand.
+    pub fn get_or_create_by_name(&mut self, name: &str) -> &mut Workspace {
+        if let Some(id) = self.workspaces.values().find(|ws| ws.name == name).map(|ws| ws.id) {
+            return self.workspaces.get_mut(&id).unwrap();
+        }
+
+        // Check if name matches a single digit 1..=9
+        if let Ok(num) = name.parse::<u32>() {
+            if (1..=9).contains(&num) && self.workspaces.contains_key(&num) {
+                return self.workspaces.get_mut(&num).unwrap();
+            }
+        }
+
+        let max_id = self.workspaces.keys().max().copied().unwrap_or(0);
+        let new_id = (max_id + 1).max(10);
+        self.workspaces.insert(new_id, Workspace::with_name(new_id, name));
+        self.workspaces.get_mut(&new_id).unwrap()
     }
 
     /// Returns the currently active workspace.
@@ -258,7 +316,9 @@ impl WorkspaceManager {
 
     /// Gets an existing workspace or creates a new one with the given ID.
     pub fn get_or_create(&mut self, id: WorkspaceId) -> &mut Workspace {
-        self.workspaces.entry(id).or_insert_with(|| Workspace::new(id))
+        self.workspaces
+            .entry(id)
+            .or_insert_with(|| Workspace::new(id))
     }
 
     /// Adds a window to a specific workspace.
@@ -330,12 +390,34 @@ mod tests {
         let ws = Workspace::new(1);
         assert_eq!(ws.id, 1);
         assert_eq!(ws.name, "1");
+        assert_eq!(ws.num, 1);
         assert!(ws.is_empty());
         assert_eq!(ws.focused_client, None);
 
         let ws_custom = Workspace::with_name(2, "web");
         assert_eq!(ws_custom.id, 2);
         assert_eq!(ws_custom.name, "web");
+        assert_eq!(ws_custom.num, -1);
+
+        let ws_numbered = Workspace::with_name(3, "2:code");
+        assert_eq!(ws_numbered.id, 3);
+        assert_eq!(ws_numbered.name, "2:code");
+        assert_eq!(ws_numbered.num, 2);
+    }
+
+    #[test]
+    fn test_named_workspace_manager() {
+        let mut mgr = WorkspaceManager::new();
+        assert_eq!(mgr.find_by_name("1").map(|w| w.id), Some(1));
+        assert_eq!(mgr.find_by_name("nonexistent"), None);
+
+        let ws = mgr.get_or_create_by_name("chat");
+        assert_eq!(ws.name, "chat");
+        let chat_id = ws.id;
+
+        assert_eq!(mgr.find_by_name("chat").map(|w| w.id), Some(chat_id));
+        // Getting again returns the same workspace ID
+        assert_eq!(mgr.get_or_create_by_name("chat").id, chat_id);
     }
 
     #[test]
