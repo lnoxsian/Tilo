@@ -470,17 +470,69 @@ Running clients are **not** closed or moved during reload.
 
 ## Window Rules
 
-The rule engine matches windows before their first map and can assign workspace, floating, or fullscreen state.
+The rule engine matches windows before their first map and can assign workspace, floating, or fullscreen state. Rules support shell wildcard glob matching (`*` and `?`) on window properties.
 
-Match criteria:
-- `WM_CLASS` instance name (exact)
-- `WM_CLASS` class name (exact)
-- Window title (`WM_NAME` / `_NET_WM_NAME`, exact)
+### Directives
 
-Rules are evaluated in order; later rules override earlier ones for the same field.
+#### `assign`
+Assigns windows matching criteria to a specific workspace ID or workspace name.
 
-> [!NOTE]
-> The rule directive is not yet exposed in the user config file. Rule behavior is currently set internally for testing. A documented `rule` directive is planned for a future release.
+```
+assign [criteria] <workspace>
+```
+
+Examples:
+```
+# Assign Firefox to workspace 2
+assign [class="Firefox"] 2
+
+# Assign Discord to workspace 3
+assign [class="discord"] 3
+
+# Assign Slack to a named workspace
+assign [class="Slack"] chat
+
+# Assign Steam by window class with glob wildcard
+assign [class="Steam*"] 4
+```
+
+#### `for_window`
+Applies one or more actions (workspace assignment, floating mode, fullscreen mode) to matching windows.
+
+```
+for_window [criteria] <action>
+```
+
+Available actions:
+- `workspace <id|name>`: Assign to a workspace
+- `floating enable` / `floating disable`: Toggle floating state
+- `fullscreen enable` / `fullscreen disable`: Toggle fullscreen state
+
+Examples:
+```
+# Open Spotify on workspace 9 in floating mode
+for_window [class="Spotify"] workspace 9 floating enable
+
+# Open audio control utility floating
+for_window [class="Pavucontrol"] floating enable
+
+# Open media player fullscreen
+for_window [class="mpv"] fullscreen enable
+```
+
+### Match Criteria
+
+Criteria filters are enclosed in `[...]`:
+
+| Criteria Key | Description | Example |
+|---|---|---|
+| `class="<pattern>"` | Second part of `WM_CLASS` (glob) | `[class="Firefox"]` |
+| `instance="<pattern>"` | First part of `WM_CLASS` (glob) | `[instance="spotify"]` |
+| `title="<pattern>"` | Window title `WM_NAME` / `_NET_WM_NAME` (glob) | `[title="*Discord*"]` |
+| `window_role="<pattern>"` | `WM_WINDOW_ROLE` property (glob) | `[window_role="browser"]` |
+| `window_type="<pattern>"` | `_NET_WM_WINDOW_TYPE` property (glob) | `[window_type="dialog"]` |
+
+Rules are evaluated in order; later matching rules take precedence for overlapping properties. Window rules can also be hot-reloaded without restarting the window manager.
 
 ---
 

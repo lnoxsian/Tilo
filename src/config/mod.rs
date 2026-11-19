@@ -1845,6 +1845,16 @@ tab_wheel_switch true
 # autostart picom --daemon
 # autostart feh --bg-scale ~/wallpaper.jpg
 
+# --- Window Rules & Workspace Assignments (Optional) ---
+# Automatically assign specific applications to target workspaces, or spawn them floating / fullscreen.
+# Match criteria in [...] supports shell wildcards (* and ?) on class, instance, title, role, and type.
+# assign [class="Firefox"] 2
+# assign [class="discord"] 3
+# assign [class="Slack"] chat
+# for_window [class="Spotify"] workspace 9 floating enable
+# for_window [class="Pavucontrol"] floating enable
+# for_window [class="mpv"] fullscreen enable
+
 # --- Keybindings ---
 # Applications
 bind $mod+Return            spawn alacritty
@@ -2705,5 +2715,51 @@ bar_workspace_icon 4 
         let input_err = "focus_on_hover not_a_boolean\n";
         let err = parse(&tokenize(input_err).unwrap());
         assert!(matches!(err, Err(ConfigError::InvalidValue { .. })));
+    }
+
+    #[test]
+    fn test_parse_assign_and_for_window_rules() {
+        let input = r#"
+assign [class="Firefox"] 2
+assign [class="discord"] chat
+for_window [class="Pavucontrol"] floating enable
+for_window [class="Spotify"] workspace 9 floating enable
+for_window [title="VLC*"] fullscreen enable
+"#;
+        let cfg = parse(&tokenize(input).unwrap()).unwrap();
+        assert_eq!(cfg.window_rules.len(), 5);
+
+        // Rule 1: assign [class="Firefox"] 2
+        assert_eq!(cfg.window_rules[0].action.target_workspace, Some(2));
+        assert_eq!(cfg.window_rules[0].action.target_workspace_name, None);
+        if let crate::rules::RuleCondition::Criteria(ref crit) = cfg.window_rules[0].condition {
+            assert_eq!(crit.class.as_deref(), Some("Firefox"));
+        } else {
+            panic!("Expected Criteria condition");
+        }
+
+        // Rule 2: assign [class="discord"] chat
+        assert_eq!(cfg.window_rules[1].action.target_workspace, None);
+        assert_eq!(cfg.window_rules[1].action.target_workspace_name.as_deref(), Some("chat"));
+        if let crate::rules::RuleCondition::Criteria(ref crit) = cfg.window_rules[1].condition {
+            assert_eq!(crit.class.as_deref(), Some("discord"));
+        } else {
+            panic!("Expected Criteria condition");
+        }
+
+        // Rule 3: for_window [class="Pavucontrol"] floating enable
+        assert_eq!(cfg.window_rules[2].action.floating, Some(true));
+
+        // Rule 4: for_window [class="Spotify"] workspace 9 floating enable
+        assert_eq!(cfg.window_rules[3].action.target_workspace, Some(9));
+        assert_eq!(cfg.window_rules[3].action.floating, Some(true));
+
+        // Rule 5: for_window [title="VLC*"] fullscreen enable
+        assert_eq!(cfg.window_rules[4].action.fullscreen, Some(true));
+        if let crate::rules::RuleCondition::Criteria(ref crit) = cfg.window_rules[4].condition {
+            assert_eq!(crit.title.as_deref(), Some("VLC*"));
+        } else {
+            panic!("Expected Criteria condition");
+        }
     }
 }

@@ -66,18 +66,26 @@ The rule engine matches windows **before their first map** and assigns workspace
 
 Rules match against:
 
-| Property | Source |
-|---|---|
-| Instance name | First part of `WM_CLASS` |
-| Class name | Second part of `WM_CLASS` |
-| Window title | `WM_NAME` or `_NET_WM_NAME` |
-
-All matches are **exact string comparisons** (not regex or glob).
+| Property | Source | Support |
+|---|---|---|
+| `class` | Second part of `WM_CLASS` | Glob wildcards (`*`, `?`) |
+| `instance` | First part of `WM_CLASS` | Glob wildcards (`*`, `?`) |
+| `title` | `WM_NAME` or `_NET_WM_NAME` | Glob wildcards (`*`, `?`) |
+| `window_role` | `WM_WINDOW_ROLE` | Glob wildcards (`*`, `?`) |
+| `window_type` | `_NET_WM_WINDOW_TYPE` | Glob wildcards (`*`, `?`) |
 
 Rules are evaluated in order; later rules override earlier values for the same field. Multiple fields can be set by a single rule.
 
-> [!NOTE]
-> The `rule` directive is not yet exposed in the user configuration file. Rule support is present internally and is planned for a future release.
+Config syntax:
+```
+# Direct workspace assignment
+assign [class="Firefox"] 2
+assign [class="Slack"] chat
+
+# Action-based window rules
+for_window [class="Spotify"] workspace 9 floating enable
+for_window [class="Pavucontrol"] floating enable
+```
 
 ---
 
