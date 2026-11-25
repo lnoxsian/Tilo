@@ -17,6 +17,8 @@ pub use rules::*;
 pub use scratchpad::*;
 
 use std::collections::HashMap;
+use crate::layout::Rect;
+use crate::x11::icccm::WmSizeHints;
 use x11rb::protocol::xproto::Window;
 
 /// Represents a single tracked application window.
@@ -50,6 +52,10 @@ pub struct Client {
     pub title: Option<String>,
     /// Container marks assigned to this client.
     pub marks: Vec<String>,
+    /// ICCCM size hints parsed from `WM_NORMAL_HINTS`.
+    pub size_hints: Option<WmSizeHints>,
+    /// Authoritative tiled geometry assigned to this client by the layout engine.
+    pub tiled_geometry: Option<Rect>,
 }
 
 impl Client {
@@ -70,6 +76,8 @@ impl Client {
             urgent: false,
             title: None,
             marks: Vec::new(),
+            size_hints: None,
+            tiled_geometry: None,
         }
     }
 

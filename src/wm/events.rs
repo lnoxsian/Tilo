@@ -2,9 +2,10 @@
 
 use super::WindowManager;
 use crate::ewmh::NetWmStateAction;
-use crate::floating::calculate_default_floating_geometry;
+use crate::floating::{calculate_default_floating_geometry, clamp_floating_geometry, FloatingGeometry};
 use crate::focus::{Direction, set_window_border_color};
-use crate::icccm::{WmState, get_wm_hints, get_wm_normal_hints};
+use crate::fullscreen::fullscreen_configure_aux;
+use crate::icccm::{WmState, get_wm_hints, get_wm_normal_hints, send_synthetic_configure_notify};
 use crate::keybind::{Action, MOD_LOCK, MOD_SHIFT};
 use crate::layout::{LayoutType, Rect};
 use crate::x11::X11Error;
@@ -13,7 +14,7 @@ use x11rb::protocol::xproto::{
     Allow, AtomEnum, ButtonPressEvent, ButtonReleaseEvent, ClientMessageEvent, ConfigWindow,
     ConfigureRequestEvent, ConfigureWindowAux, ConnectionExt, EnterNotifyEvent, EventMask,
     GrabMode, KeyPressEvent, MotionNotifyEvent, NotifyDetail, NotifyMode, PropertyNotifyEvent,
-    Window,
+    StackMode, Window,
 };
 
 impl WindowManager {
@@ -130,43 +131,70 @@ impl WindowManager {
         &mut self,
         event: &ConfigureRequestEvent,
     ) -> Result<(), X11Error> {
-        let mut aux = ConfigureWindowAux::default();
-        if event.value_mask.contains(ConfigWindow::X) {
-            aux = aux.x(i32::from(event.x));
-        }
-        if event.value_mask.contains(ConfigWindow::Y) {
-            aux = aux.y(i32::from(event.y));
-        }
-        if event.value_mask.contains(ConfigWindow::WIDTH) {
-            aux = aux.width(u32::from(event.width));
-        }
-        if event.value_mask.contains(ConfigWindow::HEIGHT) {
-            aux = aux.height(u32::from(event.height));
-        }
-        if event.value_mask.contains(ConfigWindow::BORDER_WIDTH) {
-            aux = aux.border_width(u32::from(event.border_width));
-        }
-        if event.value_mask.contains(ConfigWindow::SIBLING) {
-            aux = aux.sibling(event.sibling);
-        }
-        if event.value_mask.contains(ConfigWindow::STACK_MODE) {
-            aux = aux.stack_mode(event.stack_mode);
+        // Unmanaged window: pass through requested geometry directly to X server
+        if !self.client_state.contains(event.window) {
+            let mut aux = ConfigureWindowAux::default();
+            if event.value_mask.contains(ConfigWindow::X) {
+                aux = aux.x(i32::from(event.x));
+            }
+            if event.value_mask.contains(ConfigWindow::Y) {
+                aux = aux.y(i32::from(event.y));
+            }
+            if event.value_mask.contains(ConfigWindow::WIDTH) {
+                aux = aux.width(u32::from(event.width));
+            }
+            if event.value_mask.contains(ConfigWindow::HEIGHT) {
+                aux = aux.height(u32::from(event.height));
+            }
+            if event.value_mask.contains(ConfigWindow::BORDER_WIDTH) {
+                aux = aux.border_width(u32::from(event.border_width));
+            }
+            if event.value_mask.contains(ConfigWindow::SIBLING) {
+                aux = aux.sibling(event.sibling);
+            }
+            if event.value_mask.contains(ConfigWindow::STACK_MODE) {
+                aux = aux.stack_mode(event.stack_mode);
+            }
+
+            if let Err(err) = self.context.connection.configure_window(event.window, &aux) {
+                eprintln!(
+                    "[WARN  tilo::wm] Failed to configure unmanaged window 0x{:x}: {}",
+                    event.window, err
+                );
+            }
+            return Ok(());
         }
 
-        if let Err(err) = self.context.connection.configure_window(event.window, &aux) {
-            eprintln!(
-                "[WARN  tilo::wm] Failed to configure window 0x{:x}: {}",
-                event.window, err
-            );
-        } else if let Some(client) = self.client_state.get_client_mut(event.window)
-            && client.floating
-        {
+        let (is_floating, is_fullscreen, target_mon_id) = {
+            let client = match self.client_state.get_client(event.window) {
+                Some(c) => c,
+                None => return Ok(()),
+            };
+            (client.is_floating(), client.is_fullscreen(), client.monitor)
+        };
+        let active_mon = self.monitor_manager.active_monitor();
+        let mon = self.monitor_manager.get_monitor(target_mon_id).unwrap_or(active_mon);
+
+        if is_fullscreen {
+            let aux = fullscreen_configure_aux(mon);
+            let _ = self.context.connection.configure_window(event.window, &aux);
+            let rect = Rect::new(mon.x, mon.y, mon.width as u32, mon.height as u32);
+            let _ = send_synthetic_configure_notify(&self.context.connection, event.window, rect, 0);
+            return Ok(());
+        }
+
+        if is_floating {
+            let client = self.client_state.get_client_mut(event.window).unwrap();
             let mut geom = client.floating_geometry.unwrap_or_else(|| {
-                calculate_default_floating_geometry(
-                    self.context.screen_width,
-                    self.context.screen_height,
-                )
+                let mut default_geom = calculate_default_floating_geometry(
+                    mon.width as u16,
+                    mon.height as u16,
+                );
+                default_geom.x += mon.x;
+                default_geom.y += mon.y;
+                default_geom
             });
+
             if event.value_mask.contains(ConfigWindow::X) {
                 geom.x = i32::from(event.x);
             }
@@ -179,8 +207,118 @@ impl WindowManager {
             if event.value_mask.contains(ConfigWindow::HEIGHT) {
                 geom.height = u32::from(event.height);
             }
+
+            if let Some(ref hints) = client.size_hints {
+                let (w, h) = hints.apply_hints(geom.width, geom.height);
+                geom.width = w;
+                geom.height = h;
+            }
+
+            geom = clamp_floating_geometry(geom, mon.width as u16, mon.height as u16);
             client.set_floating(geom);
+
+            let aux = ConfigureWindowAux::new()
+                .x(geom.x)
+                .y(geom.y)
+                .width(geom.width)
+                .height(geom.height)
+                .border_width(self.border_config.width)
+                .stack_mode(StackMode::ABOVE);
+            let _ = self.context.connection.configure_window(event.window, &aux);
+            let _ = send_synthetic_configure_notify(
+                &self.context.connection,
+                event.window,
+                geom.into(),
+                self.border_config.width,
+            );
+            return Ok(());
         }
+
+        // Managed tiled window:
+        let (tile_rect, size_hints) = {
+            let client = match self.client_state.get_client(event.window) {
+                Some(c) => c,
+                None => return Ok(()),
+            };
+            let rect = client.tiled_geometry.unwrap_or_else(|| {
+                self.context
+                    .connection
+                    .get_geometry(event.window)
+                    .ok()
+                    .and_then(|c| c.reply().ok())
+                    .map(|g| Rect::new(g.x as i32, g.y as i32, g.width as u32, g.height as u32))
+                    .unwrap_or_else(|| Rect::new(0, 0, 800, 600))
+            });
+            (rect, client.size_hints.clone())
+        };
+
+        let constraints_violated = if let Some(ref hints) = size_hints {
+            hints.is_fixed_size()
+                || hints.min_width.unwrap_or(0) > tile_rect.width
+                || hints.min_height.unwrap_or(0) > tile_rect.height
+        } else {
+            false
+        };
+
+        if constraints_violated {
+            // Constraints cannot fit in the assigned tile: fall back to floating
+            let hints = size_hints.as_ref();
+            let req_w = if event.value_mask.contains(ConfigWindow::WIDTH) {
+                u32::from(event.width)
+            } else {
+                hints.and_then(|h| h.min_width).unwrap_or(tile_rect.width)
+            };
+            let req_h = if event.value_mask.contains(ConfigWindow::HEIGHT) {
+                u32::from(event.height)
+            } else {
+                hints.and_then(|h| h.min_height).unwrap_or(tile_rect.height)
+            };
+            let mut geom = FloatingGeometry::new(tile_rect.x, tile_rect.y, req_w, req_h);
+            if let Some(h) = hints {
+                let (w, h_dim) = h.apply_hints(geom.width, geom.height);
+                geom.width = w;
+                geom.height = h_dim;
+            }
+            geom = clamp_floating_geometry(geom, mon.width as u16, mon.height as u16);
+
+            if let Some(c) = self.client_state.get_client_mut(event.window) {
+                c.set_floating(geom);
+            }
+
+            let aux = ConfigureWindowAux::new()
+                .x(geom.x)
+                .y(geom.y)
+                .width(geom.width)
+                .height(geom.height)
+                .border_width(self.border_config.width)
+                .stack_mode(StackMode::ABOVE);
+            let _ = self.context.connection.configure_window(event.window, &aux);
+
+            let _ = crate::ewmh::update_net_wm_state_above(
+                &self.context.connection,
+                event.window,
+                true,
+                &self.ewmh_atoms,
+            );
+
+            self.retile()?;
+
+            let _ = send_synthetic_configure_notify(
+                &self.context.connection,
+                event.window,
+                geom.into(),
+                self.border_config.width,
+            );
+            return Ok(());
+        }
+
+        // Keep WM's tile geometry authoritative and reply with synthetic ConfigureNotify
+        let _ = send_synthetic_configure_notify(
+            &self.context.connection,
+            event.window,
+            tile_rect,
+            self.border_config.width,
+        );
         Ok(())
     }
 
@@ -278,7 +416,93 @@ impl WindowManager {
                 let _ = self.render_statusbar();
             }
         } else if event.atom == AtomEnum::WM_NORMAL_HINTS.into() {
-            let _ = get_wm_normal_hints(&self.context.connection, event.window);
+            let hints = get_wm_normal_hints(&self.context.connection, event.window).unwrap_or(None);
+            let mut fallback_to_float = false;
+            let mut target_mon_id = 0;
+            let mut tile_rect_opt = None;
+
+            if let Some(client) = self.client_state.get_client_mut(event.window) {
+                client.size_hints = hints.clone();
+                target_mon_id = client.monitor;
+
+                if !client.is_floating() && !client.is_fullscreen() {
+                    let tile_rect = client.tiled_geometry.unwrap_or_else(|| {
+                        self.context
+                            .connection
+                            .get_geometry(event.window)
+                            .ok()
+                            .and_then(|c| c.reply().ok())
+                            .map(|g| Rect::new(g.x as i32, g.y as i32, g.width as u32, g.height as u32))
+                            .unwrap_or_else(|| Rect::new(0, 0, 800, 600))
+                    });
+                    tile_rect_opt = Some(tile_rect);
+
+                    if let Some(ref h) = hints {
+                        if h.is_fixed_size()
+                            || h.min_width.unwrap_or(0) > tile_rect.width
+                            || h.min_height.unwrap_or(0) > tile_rect.height
+                        {
+                            fallback_to_float = true;
+                        }
+                    }
+                }
+            }
+
+            if fallback_to_float {
+                let mon = self
+                    .monitor_manager
+                    .get_monitor(target_mon_id)
+                    .unwrap_or_else(|| self.monitor_manager.active_monitor());
+                let tile_rect = tile_rect_opt.unwrap_or_else(|| Rect::new(0, 0, 800, 600));
+
+                let mut geom = FloatingGeometry::new(
+                    tile_rect.x,
+                    tile_rect.y,
+                    hints
+                        .as_ref()
+                        .and_then(|h| h.min_width)
+                        .unwrap_or(tile_rect.width),
+                    hints
+                        .as_ref()
+                        .and_then(|h| h.min_height)
+                        .unwrap_or(tile_rect.height),
+                );
+                if let Some(ref h) = hints {
+                    let (w, h_dim) = h.apply_hints(geom.width, geom.height);
+                    geom.width = w;
+                    geom.height = h_dim;
+                }
+                geom = clamp_floating_geometry(geom, mon.width as u16, mon.height as u16);
+
+                if let Some(c) = self.client_state.get_client_mut(event.window) {
+                    c.set_floating(geom);
+                }
+
+                let aux = ConfigureWindowAux::new()
+                    .x(geom.x)
+                    .y(geom.y)
+                    .width(geom.width)
+                    .height(geom.height)
+                    .border_width(self.border_config.width)
+                    .stack_mode(StackMode::ABOVE);
+                let _ = self.context.connection.configure_window(event.window, &aux);
+
+                let _ = crate::ewmh::update_net_wm_state_above(
+                    &self.context.connection,
+                    event.window,
+                    true,
+                    &self.ewmh_atoms,
+                );
+
+                self.retile()?;
+
+                let _ = send_synthetic_configure_notify(
+                    &self.context.connection,
+                    event.window,
+                    geom.into(),
+                    self.border_config.width,
+                );
+            }
         } else if event.atom == AtomEnum::WM_NAME.into() || event.atom == self.atoms.net_wm_name {
             let title = self.get_window_title(event.window);
             let title_changed = if let Some(client) = self.client_state.get_client_mut(event.window)

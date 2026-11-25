@@ -7,11 +7,12 @@
 //! - `WM_HINTS` (urgency, input focus, initial state)
 
 use crate::atoms::Atoms;
+use crate::layout::Rect;
 use crate::x11::X11Error;
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::{
-    Atom, AtomEnum, ClientMessageData, ClientMessageEvent, ConnectionExt, EventMask, PropMode,
-    Window,
+    Atom, AtomEnum, ClientMessageData, ClientMessageEvent, ConfigureNotifyEvent, ConnectionExt,
+    EventMask, PropMode, Window, CONFIGURE_NOTIFY_EVENT,
 };
 use x11rb::wrapper::ConnectionExt as _;
 
@@ -95,8 +96,79 @@ pub struct WmSizeHints {
 }
 
 impl WmSizeHints {
+    /// Returns true if this window has fixed dimensions (min_size == max_size > 0).
+    pub fn is_fixed_size(&self) -> bool {
+        match (self.min_width, self.max_width, self.min_height, self.max_height) {
+            (Some(min_w), Some(max_w), Some(min_h), Some(max_h)) => {
+                min_w > 0 && min_h > 0 && min_w == max_w && min_h == max_h
+            }
+            _ => false,
+        }
+    }
+
     /// Clamps and snaps dimensions according to size hints.
     pub fn apply_hints(&self, mut width: u32, mut height: u32) -> (u32, u32) {
+        let base_w = self.base_width.unwrap_or(0);
+        let base_h = self.base_height.unwrap_or(0);
+
+        // Aspect ratio constraints: ICCCM 4.1.2.3
+        let (mut delta_w, mut delta_h) = if self.base_width.is_some() || self.base_height.is_some() {
+            (
+                width.saturating_sub(base_w).max(1),
+                height.saturating_sub(base_h).max(1),
+            )
+        } else {
+            (width.max(1), height.max(1))
+        };
+
+        if let Some((min_x, min_y)) = self.min_aspect
+            && min_x > 0
+            && min_y > 0
+        {
+            // delta_w / delta_h >= min_x / min_y => delta_w * min_y >= delta_h * min_x
+            if (delta_w as u64) * (min_y as u64) < (delta_h as u64) * (min_x as u64) {
+                // Too narrow: reduce height to satisfy minimum ratio
+                delta_h = ((delta_w as u64) * (min_y as u64) / (min_x as u64)) as u32;
+            }
+        }
+
+        if let Some((max_x, max_y)) = self.max_aspect
+            && max_x > 0
+            && max_y > 0
+        {
+            // delta_w / delta_h <= max_x / max_y => delta_w * max_y <= delta_h * max_x
+            if (delta_w as u64) * (max_y as u64) > (delta_h as u64) * (max_x as u64) {
+                // Too wide: reduce width to satisfy maximum ratio
+                delta_w = ((delta_h as u64) * (max_x as u64) / (max_y as u64)) as u32;
+            }
+        }
+
+        if self.base_width.is_some() || self.base_height.is_some() {
+            width = base_w + delta_w;
+            height = base_h + delta_h;
+        } else {
+            width = delta_w;
+            height = delta_h;
+        }
+
+        // Apply resize increments
+        let inc_base_w = self.base_width.or(self.min_width).unwrap_or(0);
+        if let Some(w_inc) = self.width_inc
+            && w_inc > 1
+            && width >= inc_base_w
+        {
+            width = inc_base_w + ((width - inc_base_w) / w_inc) * w_inc;
+        }
+
+        let inc_base_h = self.base_height.or(self.min_height).unwrap_or(0);
+        if let Some(h_inc) = self.height_inc
+            && h_inc > 1
+            && height >= inc_base_h
+        {
+            height = inc_base_h + ((height - inc_base_h) / h_inc) * h_inc;
+        }
+
+        // Clamp to min and max bounds
         if let Some(min_w) = self.min_width {
             width = width.max(min_w);
         }
@@ -112,20 +184,6 @@ impl WmSizeHints {
             && max_h > 0
         {
             height = height.min(max_h);
-        }
-
-        // Apply resize increments
-        if let (Some(w_inc), Some(base_w)) = (self.width_inc, self.base_width.or(self.min_width))
-            && w_inc > 1
-            && width >= base_w
-        {
-            width = base_w + ((width - base_w) / w_inc) * w_inc;
-        }
-        if let (Some(h_inc), Some(base_h)) = (self.height_inc, self.base_height.or(self.min_height))
-            && h_inc > 1
-            && height >= base_h
-        {
-            height = base_h + ((height - base_h) / h_inc) * h_inc;
         }
 
         (width, height)
@@ -281,6 +339,31 @@ pub fn send_wm_take_focus(
     Ok(())
 }
 
+/// Sends a synthetic `ConfigureNotify` event to a client window according to ICCCM 4.1.5.
+pub fn send_synthetic_configure_notify(
+    conn: &impl Connection,
+    window: Window,
+    rect: Rect,
+    border_width: u32,
+) -> Result<(), X11Error> {
+    let event = ConfigureNotifyEvent {
+        response_type: CONFIGURE_NOTIFY_EVENT,
+        sequence: 0,
+        event: window,
+        window,
+        above_sibling: x11rb::NONE,
+        x: rect.x as i16,
+        y: rect.y as i16,
+        width: rect.width.min(u16::MAX as u32) as u16,
+        height: rect.height.min(u16::MAX as u32) as u16,
+        border_width: border_width.min(u16::MAX as u32) as u16,
+        override_redirect: false,
+    };
+    conn.send_event(false, window, EventMask::STRUCTURE_NOTIFY, event)?;
+    conn.flush()?;
+    Ok(())
+}
+
 /// Updates the `WM_STATE` property on a client window.
 ///
 /// Follows ICCCM 4.1.3.1: format 32, type `WM_STATE`, containing `[state, icon_window]`.
@@ -417,5 +500,39 @@ mod tests {
         assert!(default_hints.input);
         assert_eq!(default_hints.initial_state, None);
         assert!(!default_hints.is_urgent);
+    }
+
+    #[test]
+    fn test_wm_size_hints_aspect_ratio_min_and_max() {
+        let mut hints = WmSizeHints::default();
+        // Aspect ratio 16:9 min
+        hints.min_aspect = Some((16, 9));
+        // 800x600 is 4:3 (12:9), too narrow for 16:9 -> height should be reduced to 450
+        let (w, h) = hints.apply_hints(800, 600);
+        assert_eq!(w, 800);
+        assert_eq!(h, 450);
+
+        // Aspect ratio 4:3 max
+        let mut hints_max = WmSizeHints::default();
+        hints_max.max_aspect = Some((4, 3));
+        // 800x400 is 2:1 (6:3), too wide for 4:3 -> width should be reduced to 533
+        let (w2, h2) = hints_max.apply_hints(800, 400);
+        assert_eq!(w2, 533);
+        assert_eq!(h2, 400);
+    }
+
+    #[test]
+    fn test_wm_size_hints_fixed_size() {
+        let mut hints = WmSizeHints::default();
+        assert!(!hints.is_fixed_size());
+
+        hints.min_width = Some(400);
+        hints.max_width = Some(400);
+        hints.min_height = Some(300);
+        hints.max_height = Some(300);
+        assert!(hints.is_fixed_size());
+
+        hints.max_width = Some(500);
+        assert!(!hints.is_fixed_size());
     }
 }

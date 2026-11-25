@@ -8,7 +8,7 @@ use crate::floating::{calculate_default_floating_geometry, clamp_floating_geomet
 use crate::focus::{set_window_border_color, set_window_border_width};
 use crate::fullscreen::{Geometry, fullscreen_configure_aux, restore_configure_aux};
 use crate::icccm::{
-    IcccmAtoms, WmState, get_wm_state, send_wm_delete as icccm_send_wm_delete,
+    IcccmAtoms, WmState, get_wm_normal_hints, get_wm_state, send_wm_delete as icccm_send_wm_delete,
     set_wm_state as icccm_set_wm_state,
 };
 use crate::rules::{RuleAction, WindowRule, apply_rules as apply_window_rules};
@@ -194,12 +194,29 @@ impl WindowManager {
         client.workspace = target_ws;
         client.monitor = target_mon_id;
 
-        if rule_action.floating == Some(true) {
+        let size_hints = get_wm_normal_hints(&self.context.connection, window).unwrap_or(None);
+        client.size_hints = size_hints.clone();
+
+        let is_fixed_size = size_hints.as_ref().map_or(false, |h| h.is_fixed_size());
+        let should_float = rule_action.floating == Some(true)
+            || (rule_action.floating.is_none() && is_fixed_size);
+
+        if should_float {
             let target_mon = self
                 .monitor_manager
                 .get_monitor(target_mon_id)
                 .unwrap_or(active_mon);
             let mut geom = calculate_default_floating_geometry(
+                target_mon.width as u16,
+                target_mon.height as u16,
+            );
+            if let Some(ref hints) = client.size_hints {
+                let (w, h) = hints.apply_hints(geom.width, geom.height);
+                geom.width = w;
+                geom.height = h;
+            }
+            geom = clamp_floating_geometry(
+                geom,
                 target_mon.width as u16,
                 target_mon.height as u16,
             );

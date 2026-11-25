@@ -365,6 +365,12 @@ impl WindowManager {
                 if !visible_tiled.is_empty() {
                     let pairs = self.get_workspace_window_geometries(mon_ws, &usable_rect);
 
+                    for &(w, r) in &pairs {
+                        if let Some(c) = self.client_state.get_client_mut(w) {
+                            c.tiled_geometry = Some(r);
+                        }
+                    }
+
                     let windows: Vec<Window> = pairs.iter().map(|(w, _)| *w).collect();
                     let geometries: Vec<Rect> = pairs.iter().map(|(_, r)| *r).collect();
                     apply_layout_with_border(
