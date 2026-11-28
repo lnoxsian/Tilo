@@ -683,3 +683,70 @@ fn test_parse_lock_action_keybinding() {
     assert_eq!(cfg.bindings.len(), 1);
     assert_eq!(cfg.bindings[0].action, Action::Lock);
 }
+
+#[test]
+fn test_parse_transparency_defaults_and_overrides() {
+    use tilo::config::TransparencyMode;
+
+    // 1. Default configuration is 1.0 (opaque) and Window mode for both bar and launcher
+    let default_cfg = Config::default();
+    assert_eq!(default_cfg.bar_opacity(), 1.0);
+    assert_eq!(default_cfg.launcher_opacity(), 1.0);
+    assert_eq!(default_cfg.bar_transparency_mode(), TransparencyMode::Window);
+    assert_eq!(
+        default_cfg.launcher_transparency_mode(),
+        TransparencyMode::Window
+    );
+
+    // 2. Separate opacity and mode overrides (including integer "1" and "0" and aliases)
+    let input = r#"
+bar_opacity 0.75
+bar_transparency_mode background
+launcher_opacity 0.9
+launcher_transparency_mode none
+"#;
+    let tokens = tokenize(input).unwrap();
+    let cfg = parse(&tokens).unwrap();
+    assert!((cfg.bar_opacity() - 0.75).abs() < f32::EPSILON);
+    assert_eq!(cfg.bar_transparency_mode(), TransparencyMode::Background);
+    assert!((cfg.launcher_opacity() - 0.9).abs() < f32::EPSILON);
+    assert_eq!(cfg.launcher_transparency_mode(), TransparencyMode::None);
+
+    // 3. Aliases & integer opacity bounds
+    let alias_input = r#"
+statusbar_opacity 1
+statusbar_transparency_mode window
+launcher_opacity 0
+launcher_transparency argb
+"#;
+    let alias_tokens = tokenize(alias_input).unwrap();
+    let alias_cfg = parse(&alias_tokens).unwrap();
+    assert_eq!(alias_cfg.bar_opacity(), 1.0);
+    assert_eq!(alias_cfg.bar_transparency_mode(), TransparencyMode::Window);
+    assert_eq!(alias_cfg.launcher_opacity(), 0.0);
+    assert_eq!(
+        alias_cfg.launcher_transparency_mode(),
+        TransparencyMode::Background
+    );
+}
+
+#[test]
+fn test_parse_invalid_transparency_values() {
+    let bad_opacity = tokenize("bar_opacity 1.5\n").unwrap();
+    assert!(matches!(
+        parse(&bad_opacity),
+        Err(ConfigError::InvalidValue { .. })
+    ));
+
+    let bad_launcher_opacity = tokenize("launcher_opacity -0.2\n").unwrap();
+    assert!(matches!(
+        parse(&bad_launcher_opacity),
+        Err(ConfigError::InvalidValue { .. })
+    ));
+
+    let bad_mode = tokenize("bar_transparency_mode fake_blur\n").unwrap();
+    assert!(matches!(
+        parse(&bad_mode),
+        Err(ConfigError::InvalidValue { .. })
+    ));
+}

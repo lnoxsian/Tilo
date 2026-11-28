@@ -174,6 +174,26 @@ impl Config {
     pub fn launcher_border_color(&self) -> u32 {
         self.theme.launcher_border.unwrap_or(self.theme.active_bg)
     }
+
+    /// Returns the configured opacity (`0.0..=1.0`, default `1.0`) for the statusbar.
+    pub fn bar_opacity(&self) -> f32 {
+        self.theme.bar_opacity
+    }
+
+    /// Returns the configured transparency mode for the statusbar.
+    pub fn bar_transparency_mode(&self) -> TransparencyMode {
+        self.theme.bar_transparency_mode
+    }
+
+    /// Returns the configured opacity (`0.0..=1.0`, default `1.0`) for the launcher.
+    pub fn launcher_opacity(&self) -> f32 {
+        self.theme.launcher_opacity
+    }
+
+    /// Returns the configured transparency mode for the launcher.
+    pub fn launcher_transparency_mode(&self) -> TransparencyMode {
+        self.theme.launcher_transparency_mode
+    }
 }
 
 impl Default for Config {
@@ -695,6 +715,30 @@ fn parse_line(
             }
             config.theme.bar_separator = Some(token_to_string(line[1]));
         }
+        "bar_opacity" | "statusbar_opacity" => {
+            if line.len() < 2 {
+                return Err(ConfigError::ParseError {
+                    line: line_number,
+                    message: format!(
+                        "Directive '{}' requires a numeric opacity between 0.0 and 1.0",
+                        directive
+                    ),
+                });
+            }
+            config.theme.bar_opacity = token_to_opacity(line[1], line_number, directive)?;
+        }
+        "bar_transparency_mode" | "statusbar_transparency_mode" | "bar_transparency" => {
+            if line.len() < 2 {
+                return Err(ConfigError::ParseError {
+                    line: line_number,
+                    message: format!(
+                        "Directive '{}' requires a mode ('window', 'background', or 'none')",
+                        directive
+                    ),
+                });
+            }
+            config.theme.bar_transparency_mode = token_to_transparency_mode(line[1], line_number)?;
+        }
 
         // --- Launcher Specific Overrides ---
         "launcher_bg" => {
@@ -811,6 +855,28 @@ fn parse_line(
                     });
                 }
             }
+        }
+        "launcher_opacity" => {
+            if line.len() < 2 {
+                return Err(ConfigError::ParseError {
+                    line: line_number,
+                    message: "Directive 'launcher_opacity' requires a numeric opacity between 0.0 and 1.0".to_string(),
+                });
+            }
+            config.theme.launcher_opacity = token_to_opacity(line[1], line_number, directive)?;
+        }
+        "launcher_transparency_mode" | "launcher_transparency" => {
+            if line.len() < 2 {
+                return Err(ConfigError::ParseError {
+                    line: line_number,
+                    message: format!(
+                        "Directive '{}' requires a mode ('window', 'background', or 'none')",
+                        directive
+                    ),
+                });
+            }
+            config.theme.launcher_transparency_mode =
+                token_to_transparency_mode(line[1], line_number)?;
         }
         "inner_gap" => {
             if line.len() < 2 {
@@ -1480,6 +1546,49 @@ fn token_to_bool(token: &Token, line: usize, _directive: &str) -> Result<bool, C
     }
 }
 
+fn token_to_opacity(token: &Token, line: usize, directive: &str) -> Result<f32, ConfigError> {
+    let val = match token {
+        Token::Float(f) => *f,
+        Token::Number(n) => *n as f32,
+        Token::Word(s) => s.parse::<f32>().map_err(|_| ConfigError::InvalidValue {
+            line,
+            value: s.clone(),
+        })?,
+        _ => {
+            return Err(ConfigError::ParseError {
+                line,
+                message: format!("Invalid {} value", directive),
+            });
+        }
+    };
+    if !(0.0..=1.0).contains(&val) || val.is_nan() {
+        return Err(ConfigError::InvalidValue {
+            line,
+            value: val.to_string(),
+        });
+    }
+    Ok(val)
+}
+
+fn token_to_transparency_mode(
+    token: &Token,
+    line: usize,
+) -> Result<TransparencyMode, ConfigError> {
+    let val = token_to_string(token).to_lowercase();
+    match val.as_str() {
+        "window" => Ok(TransparencyMode::Window),
+        "background" | "argb" => Ok(TransparencyMode::Background),
+        "none" | "off" | "opaque" => Ok(TransparencyMode::None),
+        _ => Err(ConfigError::InvalidValue {
+            line,
+            value: format!(
+                "Unknown transparency mode '{}'. Supported: 'window', 'background', 'none'",
+                val
+            ),
+        }),
+    }
+}
+
 fn parse_action(tokens: &[&Token], line: usize, config: &Config) -> Result<Action, ConfigError> {
     if tokens.is_empty() {
         return Err(ConfigError::ParseError {
@@ -1772,6 +1881,8 @@ border_urgent #ff0000
 # bar_border #7aa2f7
 # bar_font monospace 10
 # bar_separator " | "
+# bar_opacity 1.0                   # 0.0..1.0 (requires a compositor like picom when < 1.0)
+# bar_transparency_mode window      # Choices: window (_NET_WM_WINDOW_OPACITY) or background (32-bit ARGB) or none
 
 # Launcher overrides:
 # launcher_position spotlight       # Choices: spotlight (centered window) or dmenu (dwm-style top bar menu)
@@ -1783,6 +1894,8 @@ border_urgent #ff0000
 # launcher_urgent_fg #15161e
 # launcher_border #7aa2f7
 # launcher_font monospace 10
+# launcher_opacity 1.0              # 0.0..1.0 (requires a compositor like picom when < 1.0)
+# launcher_transparency_mode window # Choices: window (_NET_WM_WINDOW_OPACITY) or background (32-bit ARGB) or none
 
 # --- Status Bar & Workspace Behavior ---
 # Enable or disable the built-in status bar entirely (set to false to reclaim screen space).

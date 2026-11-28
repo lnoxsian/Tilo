@@ -121,6 +121,14 @@ pub struct Launcher {
     pub item_rects: Vec<(usize, Rect)>,
     /// Whether screen locking is enabled and presented in Exit mode options.
     pub show_lock: bool,
+    /// X11 depth of the launcher window and pixmap (24 or 32).
+    pub depth: u8,
+    /// Optional 32-bit ARGB colormap owned by the launcher window.
+    pub colormap: Option<u32>,
+    /// Configured compositor opacity (`0.0..=1.0`).
+    pub opacity: f32,
+    /// Configured compositor transparency mode.
+    pub transparency_mode: crate::config::TransparencyMode,
 }
 
 impl Launcher {
@@ -153,6 +161,10 @@ impl Launcher {
             filtered_cache_mode: LauncherMode::App,
             item_rects: Vec::new(),
             show_lock: false,
+            depth: 24,
+            colormap: None,
+            opacity: 1.0,
+            transparency_mode: crate::config::TransparencyMode::Window,
         }
     }
 
@@ -469,7 +481,16 @@ impl Launcher {
         let h = self.rect.height as u16;
 
         // 1. Fill entire launcher background
-        renderer.fill_rect(conn, renderer.pixmap, 0, 0, w, h, self.color_scheme.bg)?;
+        renderer.fill_rect_alpha(
+            conn,
+            renderer.pixmap,
+            0,
+            0,
+            w,
+            h,
+            self.color_scheme.bg,
+            renderer.bg_alpha,
+        )?;
 
         // 2. Draw border around the launcher overlay
         let border_color = self.border_color.unwrap_or(self.color_scheme.border);
@@ -659,7 +680,16 @@ impl Launcher {
         let h = self.rect.height as u16;
 
         // 1. Fill entire bar background (no border)
-        renderer.fill_rect(conn, renderer.pixmap, 0, 0, w, h, self.color_scheme.bg)?;
+        renderer.fill_rect_alpha(
+            conn,
+            renderer.pixmap,
+            0,
+            0,
+            w,
+            h,
+            self.color_scheme.bg,
+            renderer.bg_alpha,
+        )?;
 
         let baseline = renderer.vertical_center_baseline();
 
@@ -908,6 +938,9 @@ impl Launcher {
         if self.window_id != 0 {
             let _ = conn.unmap_window(self.window_id);
             let _ = conn.destroy_window(self.window_id);
+            if let Some(cmap) = self.colormap.take() {
+                let _ = conn.free_colormap(cmap);
+            }
             conn.flush()?;
             self.window_id = 0;
             self.visible = false;
@@ -1225,9 +1258,27 @@ pub fn create_launcher_window(
     rect: Rect,
     _background_color: u32,
 ) -> Result<u32, StatusbarError> {
+    let surface = crate::x11::WindowTransparencySurface {
+        depth: screen.root_depth,
+        visual_id: screen.root_visual,
+        colormap: None,
+        use_window_opacity: false,
+        bg_alpha: 255,
+    };
+    create_launcher_window_with_surface(conn, screen, rect, &surface, 1.0)
+}
+
+/// Creates an unmapped floating overlay window for the launcher using resolved visual & opacity settings.
+pub fn create_launcher_window_with_surface(
+    conn: &impl Connection,
+    screen: &Screen,
+    rect: Rect,
+    surface: &crate::x11::WindowTransparencySurface,
+    opacity: f32,
+) -> Result<u32, StatusbarError> {
     let window_id = conn.generate_id()?;
 
-    let aux = CreateWindowAux::new()
+    let mut aux = CreateWindowAux::new()
         .override_redirect(1) // Avoid WM window management interception
         .background_pixmap(x11rb::NONE)
         .event_mask(
@@ -1236,9 +1287,12 @@ pub fn create_launcher_window(
                 | EventMask::KEY_PRESS
                 | EventMask::BUTTON_PRESS,
         );
+    if let Some(cmap) = surface.colormap {
+        aux = aux.border_pixel(0).colormap(cmap);
+    }
 
     conn.create_window(
-        screen.root_depth,
+        surface.depth,
         window_id,
         screen.root,
         rect.x as i16,
@@ -1246,10 +1300,14 @@ pub fn create_launcher_window(
         rect.width as u16,
         rect.height as u16,
         0,
-        WindowClass::COPY_FROM_PARENT,
-        screen.root_visual,
+        WindowClass::INPUT_OUTPUT,
+        surface.visual_id,
         &aux,
     )?;
+
+    if surface.use_window_opacity {
+        crate::x11::set_window_opacity(conn, window_id, opacity)?;
+    }
 
     conn.flush()?;
     Ok(window_id)

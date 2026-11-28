@@ -269,6 +269,8 @@ impl WindowManager {
                 let mut l = crate::launcher::Launcher::new();
                 l.color_scheme = config.launcher_color_scheme();
                 l.border_color = Some(config.launcher_border_color());
+                l.opacity = config.launcher_opacity();
+                l.transparency_mode = config.launcher_transparency_mode();
                 Some(l)
             },
             scratchpad: crate::scratchpad::Scratchpad::default(),
@@ -385,9 +387,12 @@ impl WindowManager {
             launcher.position = self.config.launcher_position;
             launcher.color_scheme = self.config.launcher_color_scheme();
             launcher.border_color = Some(self.config.launcher_border_color());
+            launcher.opacity = self.config.launcher_opacity();
+            launcher.transparency_mode = self.config.launcher_transparency_mode();
             launcher.show_lock = self.config.lock_command.is_some();
             launcher.invalidate_cache();
             if launcher.visible && launcher.window_id != 0 {
+                let prev_window_id = launcher.window_id;
                 let active_mon = self.monitor_manager.active_monitor().clone();
                 let (width, height, x, y) = match self.config.launcher_position {
                     crate::launcher::LauncherPosition::Spotlight => {
@@ -411,39 +416,30 @@ impl WindowManager {
                         (width, height, x, y)
                     }
                 };
-                launcher.rect =
-                    crate::layout::Rect::new(x as i32, y as i32, width as u32, height as u32);
-                let _ = self.context.connection.configure_window(
-                    launcher.window_id,
-                    &x11rb::protocol::xproto::ConfigureWindowAux::new()
-                        .x(x as i32)
-                        .y(y as i32)
-                        .width(width as u32)
-                        .height(height as u32),
-                );
+                let rect = crate::layout::Rect::new(x as i32, y as i32, width as u32, height as u32);
+                launcher.rect = rect;
                 let font_name = self.config.launcher_font();
                 let screen = &self.context.connection.setup().roots[self.context.screen_num];
-                if launcher.renderer.is_none() || font_name != old_launcher_font {
-                    if let Ok(new_renderer) = crate::render::Renderer::new(
-                        &self.context.connection,
+                let _ = Self::sync_launcher_window(
+                    &self.context.connection,
+                    screen,
+                    &self.cursor_manager,
+                    launcher,
+                    rect,
+                    font_name,
+                    font_name != old_launcher_font,
+                );
+                if launcher.window_id != prev_window_id && launcher.window_id != 0 {
+                    let _ = self.context.connection.map_window(launcher.window_id);
+                    let _ = self.context.connection.configure_window(
                         launcher.window_id,
-                        width,
-                        height,
-                        screen.root_depth,
-                        font_name,
-                    ) {
-                        if let Some(old_renderer) = launcher.renderer.take() {
-                            let _ = old_renderer.destroy(&self.context.connection);
-                        }
-                        launcher.attach_renderer(new_renderer);
-                    }
-                } else if let Some(ref mut renderer) = launcher.renderer {
-                    let _ = renderer.resize(
-                        &self.context.connection,
+                        &x11rb::protocol::xproto::ConfigureWindowAux::new()
+                            .stack_mode(x11rb::protocol::xproto::StackMode::ABOVE),
+                    );
+                    let _ = self.context.connection.set_input_focus(
+                        x11rb::protocol::xproto::InputFocus::POINTER_ROOT,
                         launcher.window_id,
-                        width,
-                        height,
-                        screen.root_depth,
+                        x11rb::CURRENT_TIME,
                     );
                 }
                 let _ = launcher.render(&self.context.connection);

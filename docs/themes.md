@@ -59,6 +59,8 @@ bar_urgent_fg #ffffff
 bar_inactive_fg #3b3b52
 bar_border #7aa2f7
 bar_font "JetBrainsMono Nerd Font 10"
+bar_opacity 0.90                  # 0.0..1.0 (default: 1.0; requires compositor e.g. picom)
+bar_transparency_mode window      # window | background | none (default: window)
 ```
 
 ### Launcher
@@ -75,7 +77,15 @@ launcher_urgent_fg #ffffff
 launcher_inactive_fg #555566
 launcher_border #7aa2f7
 launcher_font "monospace 11"
+launcher_opacity 0.85             # 0.0..1.0 (default: 1.0; requires compositor e.g. picom)
+launcher_transparency_mode background
 ```
+
+> [!NOTE]
+> Compositor-based transparency (`bar_opacity`, `launcher_opacity` `< 1.0`) requires an X11 compositor such as `picom` or `compton`. Without a compositor running, both windows render opaquely.
+> - `window` mode (default) sets `_NET_WM_WINDOW_OPACITY`, fading the entire window (background and text) and supporting both `fontdue` and `core:` fonts.
+> - `background` mode uses a 32-bit ARGB visual (`fontdue` mode) so only the background is translucent while text, borders, and active pills remain 100% opaque.
+> - `none` disables transparency regardless of opacity.
 
 Omitting any override causes it to inherit from the global palette.
 
@@ -232,6 +242,9 @@ Several directives accept multiple names for compatibility:
 | `bar_bg` | `statusbar_bg` |
 | `bar_fg` | `statusbar_fg`, `bar_font_color`, `statusbar_font_color` |
 | `bar_font` | `statusbar_font` |
+| `bar_opacity` | `statusbar_opacity` |
+| `bar_transparency_mode` | `statusbar_transparency_mode`, `bar_transparency` |
 | `launcher_active_bg` | `launcher_selected_bg` |
 | `launcher_active_fg` | `launcher_selected_fg` |
 | `launcher_border` | `launcher_border_color` |
+| `launcher_transparency_mode` | `launcher_transparency` |

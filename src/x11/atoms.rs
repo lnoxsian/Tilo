@@ -19,6 +19,8 @@ pub struct Atoms {
     pub net_wm_name: Atom,
     /// `UTF8_STRING` atom for text encoding.
     pub utf8_string: Atom,
+    /// `_NET_WM_WINDOW_OPACITY` atom for compositor window opacity.
+    pub net_wm_window_opacity: Atom,
 }
 
 impl Atoms {
@@ -30,6 +32,7 @@ impl Atoms {
         let wm_state = conn.intern_atom(false, b"WM_STATE")?;
         let net_wm_name = conn.intern_atom(false, b"_NET_WM_NAME")?;
         let utf8_string = conn.intern_atom(false, b"UTF8_STRING")?;
+        let net_wm_window_opacity = conn.intern_atom(false, b"_NET_WM_WINDOW_OPACITY")?;
 
         Ok(Self {
             wm_protocols: wm_protocols.reply()?.atom,
@@ -38,6 +41,7 @@ impl Atoms {
             wm_state: wm_state.reply()?.atom,
             net_wm_name: net_wm_name.reply()?.atom,
             utf8_string: utf8_string.reply()?.atom,
+            net_wm_window_opacity: net_wm_window_opacity.reply()?.atom,
         })
     }
 }

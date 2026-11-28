@@ -7,9 +7,21 @@
 
 use crate::bar::ColorScheme;
 
+/// Compositor-based transparency mode for UI windows (statusbar and launcher).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum TransparencyMode {
+    /// Sets `_NET_WM_WINDOW_OPACITY` so the compositor fades the entire window (background + text).
+    #[default]
+    Window,
+    /// Uses a 32-bit ARGB visual with premultiplied alpha so only the background is translucent.
+    Background,
+    /// Disables transparency regardless of the configured opacity value.
+    None,
+}
+
 /// Comprehensive theme configuration allowing global color palette definitions
 /// and granular per-component overrides for window decorations, statusbar, and launcher.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ThemeConfig {
     // --- Global Palette ---
     /// Global default background color (0xRRGGBB).
@@ -54,6 +66,10 @@ pub struct ThemeConfig {
     pub bar_font: Option<String>,
     /// Specific separator between statusbar modules (default: " | ").
     pub bar_separator: Option<String>,
+    /// Opacity for the statusbar when a compositor is running (`0.0..=1.0`, default: `1.0`).
+    pub bar_opacity: f32,
+    /// Transparency mode for the statusbar (`window`, `background`, or `none`).
+    pub bar_transparency_mode: TransparencyMode,
 
     // --- Launcher Overrides (None = inherit from global palette) ---
     /// Specific background color for the application launcher overlay.
@@ -74,6 +90,10 @@ pub struct ThemeConfig {
     pub launcher_border: Option<u32>,
     /// Specific font specification for the launcher.
     pub launcher_font: Option<String>,
+    /// Opacity for the application launcher when a compositor is running (`0.0..=1.0`, default: `1.0`).
+    pub launcher_opacity: f32,
+    /// Transparency mode for the application launcher (`window`, `background`, or `none`).
+    pub launcher_transparency_mode: TransparencyMode,
 }
 
 impl Default for ThemeConfig {
@@ -100,6 +120,8 @@ impl Default for ThemeConfig {
             bar_border: None,
             bar_font: None,
             bar_separator: None,
+            bar_opacity: 1.0,
+            bar_transparency_mode: TransparencyMode::Window,
 
             launcher_bg: None,
             launcher_fg: None,
@@ -110,6 +132,8 @@ impl Default for ThemeConfig {
             launcher_inactive_fg: None,
             launcher_border: None,
             launcher_font: None,
+            launcher_opacity: 1.0,
+            launcher_transparency_mode: TransparencyMode::Window,
         }
     }
 }

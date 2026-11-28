@@ -11,6 +11,70 @@ use x11rb::protocol::xproto::{
 };
 
 impl WindowManager {
+    fn create_statusbar_for_rect(
+        &self,
+        rect: Rect,
+        bar_modules: &[crate::bar::modules::BarModuleType],
+        ws_tag: u32,
+        occupied: &[u32],
+        label: &str,
+    ) -> Result<Statusbar, StatusbarError> {
+        let screen = &self.context.connection.setup().roots[self.context.screen_num];
+        let bar_colors = self.config.bar_color_scheme();
+        let font_name = self.config.bar_font();
+        let bar_opacity = self.config.bar_opacity();
+        let bar_mode = self.config.bar_transparency_mode();
+        let is_core = crate::render::is_core_font_spec(font_name);
+        let surface = crate::x11::WindowTransparencySurface::resolve(
+            &self.context.connection,
+            screen,
+            bar_opacity,
+            bar_mode,
+            is_core,
+        )?;
+
+        let win_id = crate::bar::create_statusbar_window_with_surface(
+            &self.context.connection,
+            screen,
+            rect,
+            &surface,
+            bar_opacity,
+        )?;
+        let _ = self
+            .cursor_manager
+            .apply_window(&self.context.connection, win_id);
+        let mut bar = Statusbar::with_modules(win_id, rect, bar_modules, bar_colors);
+        bar.depth = surface.depth;
+        bar.colormap = surface.colormap;
+        bar.opacity = bar_opacity;
+        bar.transparency_mode = bar_mode;
+        bar.separator = self.config.bar_separator().to_string();
+        bar.set_workspace_tags(&self.config.workspace_tags);
+        bar.set_workspace(ws_tag, occupied);
+
+        match crate::render::Renderer::new(
+            &self.context.connection,
+            win_id,
+            rect.width as u16,
+            rect.height as u16,
+            surface.depth,
+            font_name,
+        ) {
+            Ok(mut renderer) => {
+                renderer.set_bg_alpha(surface.bg_alpha);
+                bar.attach_renderer(renderer);
+            }
+            Err(err) => {
+                eprintln!(
+                    "[WARN  tilo::wm] Failed to initialize {} statusbar renderer: {}",
+                    label, err
+                );
+            }
+        }
+        let _ = bar.update_all();
+        Ok(bar)
+    }
+
     pub fn enable_statusbar(&mut self, height: u32) -> Result<u32, StatusbarError> {
         if let Some(old_bar) = self.statusbar.take() {
             let _ = old_bar.destroy(&self.context.connection);
@@ -18,10 +82,6 @@ impl WindowManager {
         for old_sec in self.secondary_statusbars.drain(..) {
             let _ = old_sec.destroy(&self.context.connection);
         }
-
-        let screen = &self.context.connection.setup().roots[self.context.screen_num];
-        let bar_colors = self.config.bar_color_scheme();
-        let font_name = self.config.bar_font();
 
         // 1. Primary monitor: full statusbar with all configured modules
         let primary_mon = self
@@ -43,43 +103,16 @@ impl WindowManager {
             )
         };
         let prim_rect = Rect::new(prim_x, prim_y, prim_w, height);
-        let win_id = crate::bar::create_statusbar_window_with_color(
-            &self.context.connection,
-            screen,
-            prim_rect,
-            bar_colors.bg,
-        )?;
-        let _ = self
-            .cursor_manager
-            .apply_window(&self.context.connection, win_id);
-        let mut bar =
-            Statusbar::with_modules(win_id, prim_rect, &self.config.bar_modules, bar_colors);
-        bar.separator = self.config.bar_separator().to_string();
-        bar.set_workspace_tags(&self.config.workspace_tags);
         let prim_tag = crate::workspace::workspace_to_tag(prim_ws);
         let occupied_prim = self.monitor_occupied_tags(prim_id);
-        bar.set_workspace(prim_tag, &occupied_prim);
-
-        // Initialize and attach double-buffered renderer
-        match crate::render::Renderer::new(
-            &self.context.connection,
-            win_id,
-            prim_rect.width as u16,
-            prim_rect.height as u16,
-            screen.root_depth,
-            font_name,
-        ) {
-            Ok(renderer) => {
-                bar.attach_renderer(renderer);
-            }
-            Err(err) => {
-                eprintln!(
-                    "[WARN  tilo::wm] Failed to initialize primary statusbar renderer: {}",
-                    err
-                );
-            }
-        }
-        let _ = bar.update_all();
+        let bar = self.create_statusbar_for_rect(
+            prim_rect,
+            &self.config.bar_modules,
+            prim_tag,
+            &occupied_prim,
+            "primary",
+        )?;
+        let win_id = bar.window_id;
         self.statusbar = Some(bar);
 
         // 2. Secondary monitors: statusbars with all features minus hardware metrics
@@ -104,9 +137,6 @@ impl WindowManager {
         mon: &crate::monitor::Monitor,
         height: u32,
     ) -> Result<Statusbar, StatusbarError> {
-        let screen = &self.context.connection.setup().roots[self.context.screen_num];
-        let bar_colors = self.config.bar_color_scheme();
-        let font_name = self.config.bar_font();
         let sec_modules: Vec<crate::bar::modules::BarModuleType> = self
             .config
             .bar_modules
@@ -116,33 +146,9 @@ impl WindowManager {
             .collect();
 
         let sec_rect = Rect::new(mon.x, mon.y, mon.width, height);
-        let sec_win = crate::bar::create_statusbar_window_with_color(
-            &self.context.connection,
-            screen,
-            sec_rect,
-            bar_colors.bg,
-        )?;
-        let _ = self
-            .cursor_manager
-            .apply_window(&self.context.connection, sec_win);
-        let mut sec_bar = Statusbar::with_modules(sec_win, sec_rect, &sec_modules, bar_colors);
-        sec_bar.separator = self.config.bar_separator().to_string();
-        sec_bar.set_workspace_tags(&self.config.workspace_tags);
         let sec_tag = crate::workspace::workspace_to_tag(mon.workspace);
         let occupied_sec = self.monitor_occupied_tags(mon.id);
-        sec_bar.set_workspace(sec_tag, &occupied_sec);
-        if let Ok(renderer) = crate::render::Renderer::new(
-            &self.context.connection,
-            sec_win,
-            sec_rect.width as u16,
-            sec_rect.height as u16,
-            screen.root_depth,
-            font_name,
-        ) {
-            sec_bar.attach_renderer(renderer);
-        }
-        let _ = sec_bar.update_all();
-        Ok(sec_bar)
+        self.create_statusbar_for_rect(sec_rect, &sec_modules, sec_tag, &occupied_sec, "secondary")
     }
 
     /// Disables and destroys all built-in statusbars, releasing reserved screen space.
@@ -367,67 +373,32 @@ impl WindowManager {
         let screen = &self.context.connection.setup().roots[self.context.screen_num];
         let font_name = self.config.launcher_font();
         let launcher_colors = self.config.launcher_color_scheme();
+        let launcher_border = self.config.launcher_border_color();
+        let launcher_opacity = self.config.launcher_opacity();
+        let launcher_mode = self.config.launcher_transparency_mode();
+        let show_lock = self.config.lock_command.is_some();
 
         let launcher = self
             .launcher
             .get_or_insert_with(crate::launcher::Launcher::new);
         launcher.position = self.config.launcher_position;
         launcher.color_scheme = launcher_colors;
-        launcher.border_color = Some(self.config.launcher_border_color());
-        launcher.show_lock = self.config.lock_command.is_some();
+        launcher.border_color = Some(launcher_border);
+        launcher.opacity = launcher_opacity;
+        launcher.transparency_mode = launcher_mode;
+        launcher.show_lock = show_lock;
         launcher.refresh_if_needed();
         launcher.rect = rect;
 
-        if launcher.window_id == 0 {
-            let win_id = crate::launcher::create_launcher_window(
-                &self.context.connection,
-                screen,
-                rect,
-                launcher.color_scheme.bg,
-            )?;
-            launcher.window_id = win_id;
-            let _ = self
-                .cursor_manager
-                .apply_window(&self.context.connection, win_id);
-
-            match crate::render::Renderer::new(
-                &self.context.connection,
-                win_id,
-                width,
-                height,
-                screen.root_depth,
-                font_name,
-            ) {
-                Ok(renderer) => {
-                    launcher.attach_renderer(renderer);
-                }
-                Err(err) => {
-                    eprintln!(
-                        "[WARN  tilo::wm] Failed to initialize launcher renderer: {}",
-                        err
-                    );
-                }
-            }
-        } else {
-            // Reposition and resize window if active monitor or mode changed
-            let _ = self.context.connection.configure_window(
-                launcher.window_id,
-                &x11rb::protocol::xproto::ConfigureWindowAux::new()
-                    .x(x as i32)
-                    .y(y as i32)
-                    .width(width as u32)
-                    .height(height as u32),
-            );
-            if let Some(ref mut renderer) = launcher.renderer {
-                let _ = renderer.resize(
-                    &self.context.connection,
-                    launcher.window_id,
-                    width,
-                    height,
-                    screen.root_depth,
-                );
-            }
-        }
+        Self::sync_launcher_window(
+            &self.context.connection,
+            screen,
+            &self.cursor_manager,
+            launcher,
+            rect,
+            font_name,
+            false,
+        )?;
 
         // Map and raise
         self.context.connection.map_window(launcher.window_id)?;
@@ -471,6 +442,111 @@ impl WindowManager {
 
         let _ = launcher.render(&self.context.connection);
         self.context.flush()?;
+        Ok(())
+    }
+
+    /// Ensures the launcher's X11 window, visual depth, opacity property, and renderer match its configuration.
+    pub(crate) fn sync_launcher_window(
+        conn: &impl Connection,
+        screen: &x11rb::protocol::xproto::Screen,
+        cursor_manager: &crate::x11::CursorManager,
+        launcher: &mut crate::launcher::Launcher,
+        rect: Rect,
+        font_name: &str,
+        force_recreate_renderer: bool,
+    ) -> Result<(), StatusbarError> {
+        let width = rect.width as u16;
+        let height = rect.height as u16;
+        let is_core = crate::render::is_core_font_spec(font_name);
+        let (desired_depth, use_window_opacity, bg_alpha) =
+            crate::x11::WindowTransparencySurface::plan(
+                screen,
+                launcher.opacity,
+                launcher.transparency_mode,
+                is_core,
+            );
+
+        if launcher.window_id != 0 && launcher.depth != desired_depth {
+            let was_visible = launcher.visible;
+            let _ = launcher.destroy(conn);
+            launcher.visible = was_visible;
+        }
+
+        if launcher.window_id == 0 {
+            let surface = crate::x11::WindowTransparencySurface::resolve(
+                conn,
+                screen,
+                launcher.opacity,
+                launcher.transparency_mode,
+                is_core,
+            )?;
+            let win_id = crate::launcher::create_launcher_window_with_surface(
+                conn,
+                screen,
+                rect,
+                &surface,
+                launcher.opacity,
+            )?;
+            launcher.window_id = win_id;
+            launcher.depth = surface.depth;
+            launcher.colormap = surface.colormap;
+            let _ = cursor_manager.apply_window(conn, win_id);
+
+            match crate::render::Renderer::new(
+                conn,
+                win_id,
+                width,
+                height,
+                surface.depth,
+                font_name,
+            ) {
+                Ok(mut renderer) => {
+                    renderer.set_bg_alpha(surface.bg_alpha);
+                    launcher.attach_renderer(renderer);
+                }
+                Err(err) => {
+                    eprintln!(
+                        "[WARN  tilo::wm] Failed to initialize launcher renderer: {}",
+                        err
+                    );
+                }
+            }
+        } else {
+            let _ = conn.configure_window(
+                launcher.window_id,
+                &ConfigureWindowAux::new()
+                    .x(rect.x)
+                    .y(rect.y)
+                    .width(rect.width)
+                    .height(rect.height),
+            );
+            let prop_opacity = if use_window_opacity {
+                launcher.opacity
+            } else {
+                1.0
+            };
+            let _ = crate::x11::set_window_opacity(conn, launcher.window_id, prop_opacity);
+
+            if launcher.renderer.is_none() || force_recreate_renderer {
+                if let Ok(mut new_renderer) = crate::render::Renderer::new(
+                    conn,
+                    launcher.window_id,
+                    width,
+                    height,
+                    launcher.depth,
+                    font_name,
+                ) {
+                    new_renderer.set_bg_alpha(bg_alpha);
+                    if let Some(old_renderer) = launcher.renderer.take() {
+                        let _ = old_renderer.destroy(conn);
+                    }
+                    launcher.attach_renderer(new_renderer);
+                }
+            } else if let Some(ref mut renderer) = launcher.renderer {
+                renderer.set_bg_alpha(bg_alpha);
+                let _ = renderer.resize(conn, launcher.window_id, width, height, launcher.depth);
+            }
+        }
         Ok(())
     }
 

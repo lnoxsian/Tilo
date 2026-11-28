@@ -75,6 +75,8 @@ pub struct Renderer {
     pub pixmap: u32,
     /// Visual depth in bits per pixel.
     pub depth: u8,
+    /// Background alpha (`0..=255`, default `255`) used when `depth == 32`.
+    pub bg_alpha: u8,
     /// Width of the rendering target / pixmap in pixels.
     pub width: u16,
     /// Height of the rendering target / pixmap in pixels.
@@ -248,6 +250,7 @@ impl Renderer {
             font_id,
             pixmap,
             depth,
+            bg_alpha: 255,
             width,
             height,
             font_ascent: core_ascent,
@@ -258,6 +261,67 @@ impl Renderer {
             framebuffer,
             text_width_cache: RefCell::new(HashMap::new()),
         })
+    }
+
+    /// Updates the background alpha (`0..=255`) used by 32-bit ARGB background fills.
+    pub fn set_bg_alpha(&mut self, alpha: u8) {
+        self.bg_alpha = alpha;
+    }
+
+    /// Encodes a `0x00RRGGBB` color with `alpha` as premultiplied `0xAARRGGBB`.
+    #[inline]
+    pub fn premultiply_argb(rgb: u32, alpha: u8) -> u32 {
+        if alpha == 255 {
+            return 0xff00_0000 | (rgb & 0x00ff_ffff);
+        }
+        if alpha == 0 {
+            return 0;
+        }
+        let a = alpha as u32;
+        let div255 = |v: u32| (v + 1 + (v >> 8)) >> 8;
+        let r = div255(((rgb >> 16) & 0xff) * a);
+        let g = div255(((rgb >> 8) & 0xff) * a);
+        let b = div255((rgb & 0xff) * a);
+        (a << 24) | (r << 16) | (g << 8) | b
+    }
+
+    #[inline]
+    fn encode_pixel(&self, rgb: u32, alpha: u8) -> u32 {
+        if self.depth == 32 {
+            Self::premultiply_argb(rgb, alpha)
+        } else {
+            rgb
+        }
+    }
+
+    #[inline]
+    fn blend_glyph_pixel(
+        dst: u32,
+        src_r: u32,
+        src_g: u32,
+        src_b: u32,
+        coverage: u32,
+        is_argb32: bool,
+    ) -> u32 {
+        if coverage == 255 {
+            let rgb = (src_r << 16) | (src_g << 8) | src_b;
+            return if is_argb32 { 0xff00_0000 | rgb } else { rgb };
+        }
+        let div255 = |v: u32| (v + 1 + (v >> 8)) >> 8;
+        let dst_r = (dst >> 16) & 0xff;
+        let dst_g = (dst >> 8) & 0xff;
+        let dst_b = dst & 0xff;
+        let inv_a = 255 - coverage;
+        let out_r = div255(src_r * coverage + dst_r * inv_a);
+        let out_g = div255(src_g * coverage + dst_g * inv_a);
+        let out_b = div255(src_b * coverage + dst_b * inv_a);
+        if is_argb32 {
+            let dst_a = (dst >> 24) & 0xff;
+            let out_a = coverage + div255(dst_a * inv_a);
+            (out_a << 24) | (out_r << 16) | (out_g << 8) | out_b
+        } else {
+            (out_r << 16) | (out_g << 8) | out_b
+        }
     }
 
     /// Fills a solid rectangle in the software framebuffer using fast SIMD slice filling.
@@ -306,14 +370,13 @@ impl Renderer {
             return;
         }
 
+        let is_argb32 = self.depth == 32;
         let src_r = (color >> 16) & 0xff;
         let src_g = (color >> 8) & 0xff;
         let src_b = color & 0xff;
 
         let mut pen_x = x as i32;
         let pen_y = y as i32;
-
-        let div255 = |v: u32| (v + 1 + (v >> 8)) >> 8;
 
         for ch in text.chars() {
             fe.with_glyph(ch, |metrics, bitmap| {
@@ -345,19 +408,14 @@ impl Renderer {
                                 if coverage == 0 {
                                     continue;
                                 }
-                                if coverage == 255 {
-                                    row_slice[c] = color;
-                                } else {
-                                    let dst = row_slice[c];
-                                    let dst_r = (dst >> 16) & 0xff;
-                                    let dst_g = (dst >> 8) & 0xff;
-                                    let dst_b = dst & 0xff;
-                                    let inv_a = 255 - coverage;
-                                    let out_r = div255(src_r * coverage + dst_r * inv_a);
-                                    let out_g = div255(src_g * coverage + dst_g * inv_a);
-                                    let out_b = div255(src_b * coverage + dst_b * inv_a);
-                                    row_slice[c] = (out_r << 16) | (out_g << 8) | out_b;
-                                }
+                                row_slice[c] = Self::blend_glyph_pixel(
+                                    row_slice[c],
+                                    src_r,
+                                    src_g,
+                                    src_b,
+                                    coverage,
+                                    is_argb32,
+                                );
                             }
                         } else {
                             // Clipped edge path
@@ -371,19 +429,14 @@ impl Renderer {
                                     continue;
                                 }
                                 let idx = row_offset + screen_x as usize;
-                                if coverage == 255 {
-                                    fb[idx] = color;
-                                } else {
-                                    let dst = fb[idx];
-                                    let dst_r = (dst >> 16) & 0xff;
-                                    let dst_g = (dst >> 8) & 0xff;
-                                    let dst_b = dst & 0xff;
-                                    let inv_a = 255 - coverage;
-                                    let out_r = div255(src_r * coverage + dst_r * inv_a);
-                                    let out_g = div255(src_g * coverage + dst_g * inv_a);
-                                    let out_b = div255(src_b * coverage + dst_b * inv_a);
-                                    fb[idx] = (out_r << 16) | (out_g << 8) | out_b;
-                                }
+                                fb[idx] = Self::blend_glyph_pixel(
+                                    fb[idx],
+                                    src_r,
+                                    src_g,
+                                    src_b,
+                                    coverage,
+                                    is_argb32,
+                                );
                             }
                         }
                     }
@@ -443,7 +496,7 @@ impl Renderer {
         Ok(())
     }
 
-    /// Fills a solid rectangular region with the specified color.
+    /// Fills a solid rectangular region with the specified color (opaque in 32-bit ARGB mode).
     #[allow(clippy::too_many_arguments)]
     pub fn fill_rect(
         &self,
@@ -455,10 +508,33 @@ impl Renderer {
         height: u16,
         color: u32,
     ) -> Result<(), StatusbarError> {
+        self.fill_rect_alpha(conn, drawable, x, y, width, height, color, 255)
+    }
+
+    /// Fills a rectangular region with the specified color and alpha (`0..=255`).
+    #[allow(clippy::too_many_arguments)]
+    pub fn fill_rect_alpha(
+        &self,
+        conn: &impl Connection,
+        drawable: u32,
+        x: i16,
+        y: i16,
+        width: u16,
+        height: u16,
+        color: u32,
+        alpha: u8,
+    ) -> Result<(), StatusbarError> {
         if !self.is_core
             && let Some(ref fb_cell) = self.framebuffer
         {
-            self.fill_rect_software(&mut fb_cell.borrow_mut(), x, y, width, height, color);
+            self.fill_rect_software(
+                &mut fb_cell.borrow_mut(),
+                x,
+                y,
+                width,
+                height,
+                self.encode_pixel(color, alpha),
+            );
             return Ok(());
         }
 
@@ -786,15 +862,14 @@ impl Renderer {
         color_scheme: &ColorScheme,
         separator: &str,
     ) -> Result<crate::bar::StatusbarHitRects, StatusbarError> {
+        let do_fill_rect_alpha =
+            |x: i16, y: i16, w: u16, h: u16, col: u32, alpha: u8| -> Result<(), StatusbarError> {
+                self.fill_rect_alpha(conn, self.pixmap, x, y, w, h, col, alpha)
+            };
+
         let do_fill_rect =
             |x: i16, y: i16, w: u16, h: u16, col: u32| -> Result<(), StatusbarError> {
-                if !self.is_core
-                    && let Some(ref fb_cell) = self.framebuffer
-                {
-                    self.fill_rect_software(&mut fb_cell.borrow_mut(), x, y, w, h, col);
-                    return Ok(());
-                }
-                self.fill_rect(conn, self.pixmap, x, y, w, h, col)
+                do_fill_rect_alpha(x, y, w, h, col, 255)
             };
 
         let do_draw_text = |x: i16, y: i16, text: &str, col: u32| -> Result<(), StatusbarError> {
@@ -810,7 +885,7 @@ impl Renderer {
         };
 
         // 1. Clear background of pixmap
-        do_fill_rect(0, 0, self.width, self.height, color_scheme.bg)?;
+        do_fill_rect_alpha(0, 0, self.width, self.height, color_scheme.bg, self.bg_alpha)?;
 
         let baseline = self.vertical_center_baseline();
         let mut cur_x = 8i16;
@@ -1000,6 +1075,7 @@ mod tests {
             width: 1000,
             height: 24,
             depth: 24,
+            bg_alpha: 255,
             font_ascent: ascent,
             font_descent: descent,
             char_width,
@@ -1020,6 +1096,7 @@ mod tests {
             width: 1000,
             height: 24,
             depth: 24,
+            bg_alpha: 255,
             font_ascent: 12,
             font_descent: 4,
             char_width: 8,
@@ -1152,5 +1229,28 @@ mod tests {
         for s in all_symbols {
             assert_eq!(format_layout_symbol(s).chars().count(), 3);
         }
+    }
+
+    #[test]
+    fn test_premultiply_argb_and_blend_glyph_pixel() {
+        assert_eq!(Renderer::premultiply_argb(0x00ff_8000, 255), 0xffff_8000);
+        assert_eq!(Renderer::premultiply_argb(0x00ff_8000, 0), 0x0000_0000);
+
+        let half = Renderer::premultiply_argb(0x00ff_0080, 128);
+        assert_eq!((half >> 24) & 0xff, 128);
+        assert_eq!((half >> 16) & 0xff, 128);
+        assert_eq!((half >> 8) & 0xff, 0);
+        assert_eq!(half & 0xff, 64);
+
+        // Full coverage glyph over translucent background must become opaque (alpha = 255)
+        let full_cov = Renderer::blend_glyph_pixel(half, 0xff, 0xff, 0xff, 255, true);
+        assert_eq!(full_cov, 0xffff_ffff);
+
+        // Partial coverage over translucent dst yields premultiplied Porter-Duff SRC_OVER
+        let partial = Renderer::blend_glyph_pixel(0x8000_0000, 0xff, 0x00, 0x00, 128, true);
+        let out_a = (partial >> 24) & 0xff;
+        let out_r = (partial >> 16) & 0xff;
+        assert!(out_a > 128 && out_a < 255);
+        assert_eq!(out_r, 128);
     }
 }

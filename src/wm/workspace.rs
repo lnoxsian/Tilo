@@ -1005,7 +1005,8 @@ impl WindowManager {
             let new_bar_rect = Rect::new(bar_x, bar_y, bar_w, bar_height);
             let screen = &self.context.connection.setup().roots[self.context.screen_num];
             let root_depth = screen.root_depth;
-            let _ = bar.resize(&self.context.connection, new_bar_rect, root_depth);
+            let bar_depth = if bar.depth > 0 { bar.depth } else { root_depth };
+            let _ = bar.resize(&self.context.connection, new_bar_rect, bar_depth);
 
             let sec_monitors: Vec<_> = self
                 .monitor_manager
@@ -1022,7 +1023,12 @@ impl WindowManager {
                     .zip(sec_monitors.iter())
                 {
                     let sec_rect = Rect::new(mon.x, mon.y, mon.width, bar_height);
-                    let _ = sec_bar.resize(&self.context.connection, sec_rect, root_depth);
+                    let sec_depth = if sec_bar.depth > 0 {
+                        sec_bar.depth
+                    } else {
+                        root_depth
+                    };
+                    let _ = sec_bar.resize(&self.context.connection, sec_rect, sec_depth);
                 }
             } else {
                 for old_sec in self.secondary_statusbars.drain(..) {

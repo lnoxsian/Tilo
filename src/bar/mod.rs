@@ -142,6 +142,14 @@ pub struct Statusbar {
     pub workspace_rects: Vec<(u32, Rect)>,
     /// Hash of last rendered frame state to eliminate redundant rendering passes and socket writes.
     pub last_render_sig: Option<u64>,
+    /// X11 depth of the statusbar window and pixmap (24 or 32).
+    pub depth: u8,
+    /// Optional 32-bit ARGB colormap owned by the statusbar window.
+    pub colormap: Option<u32>,
+    /// Configured compositor opacity (`0.0..=1.0`).
+    pub opacity: f32,
+    /// Configured compositor transparency mode.
+    pub transparency_mode: crate::config::TransparencyMode,
 }
 
 impl Statusbar {
@@ -174,6 +182,10 @@ impl Statusbar {
             tab_rects: Vec::new(),
             workspace_rects,
             last_render_sig: None,
+            depth: 24,
+            colormap: None,
+            opacity: 1.0,
+            transparency_mode: crate::config::TransparencyMode::Window,
         }
     }
 
@@ -402,6 +414,7 @@ impl Statusbar {
 
     /// Attaches an initialized [`crate::render::Renderer`] to this statusbar.
     pub fn attach_renderer(&mut self, renderer: crate::render::Renderer) {
+        self.depth = renderer.depth;
         self.renderer = Some(renderer);
         self.last_render_sig = None;
     }
@@ -450,6 +463,9 @@ impl Statusbar {
             self.color_scheme.urgent_fg.hash(&mut hasher);
             self.color_scheme.inactive_fg.hash(&mut hasher);
             self.separator.hash(&mut hasher);
+            self.opacity.to_bits().hash(&mut hasher);
+            self.transparency_mode.hash(&mut hasher);
+            r.bg_alpha.hash(&mut hasher);
             let sig = hasher.finish();
 
             if self.last_render_sig == Some(sig) {
@@ -512,14 +528,15 @@ impl Statusbar {
         // 2. Update EWMH strut reservation for the new geometry
         let _ = set_statusbar_struts(conn, self.window_id, new_rect);
 
-        // 3. Resize the off-screen pixmap in the renderer
+        // 3. Resize the off-screen pixmap in the renderer (preserving 32-bit depth if ARGB)
+        let target_depth = if self.depth > 0 { self.depth } else { root_depth };
         if let Some(ref mut renderer) = self.renderer {
             renderer.resize(
                 conn,
                 self.window_id,
                 new_rect.width as u16,
                 new_rect.height as u16,
-                root_depth,
+                target_depth,
             )?;
         }
 
@@ -531,6 +548,9 @@ impl Statusbar {
     pub fn destroy<C: Connection>(&self, conn: &C) -> Result<(), X11Error> {
         conn.unmap_window(self.window_id)?;
         conn.destroy_window(self.window_id)?;
+        if let Some(cmap) = self.colormap {
+            let _ = conn.free_colormap(cmap);
+        }
         conn.flush()?;
         Ok(())
     }
@@ -612,9 +632,27 @@ pub fn create_statusbar_window_with_color(
     rect: Rect,
     _background_color: u32,
 ) -> Result<u32, StatusbarError> {
+    let surface = crate::x11::WindowTransparencySurface {
+        depth: screen.root_depth,
+        visual_id: screen.root_visual,
+        colormap: None,
+        use_window_opacity: false,
+        bg_alpha: 255,
+    };
+    create_statusbar_window_with_surface(conn, screen, rect, &surface, 1.0)
+}
+
+/// Creates and maps the statusbar window using the resolved visual and opacity settings.
+pub fn create_statusbar_window_with_surface(
+    conn: &impl Connection,
+    screen: &Screen,
+    rect: Rect,
+    surface: &crate::x11::WindowTransparencySurface,
+    opacity: f32,
+) -> Result<u32, StatusbarError> {
     let window_id = conn.generate_id()?;
 
-    let aux = CreateWindowAux::new()
+    let mut aux = CreateWindowAux::new()
         .override_redirect(1) // Avoid WM window management interception
         .background_pixmap(x11rb::NONE)
         .event_mask(
@@ -623,9 +661,12 @@ pub fn create_statusbar_window_with_color(
                 | EventMask::BUTTON_PRESS
                 | EventMask::BUTTON_RELEASE,
         );
+    if let Some(cmap) = surface.colormap {
+        aux = aux.border_pixel(0).colormap(cmap);
+    }
 
     conn.create_window(
-        screen.root_depth,
+        surface.depth,
         window_id,
         screen.root,
         rect.x as i16,
@@ -634,7 +675,7 @@ pub fn create_statusbar_window_with_color(
         rect.height as u16,
         0,
         WindowClass::INPUT_OUTPUT,
-        screen.root_visual,
+        surface.visual_id,
         &aux,
     )?;
 
@@ -658,7 +699,12 @@ pub fn create_statusbar_window_with_color(
     // 2. Set _NET_WM_STRUT and _NET_WM_STRUT_PARTIAL
     set_statusbar_struts(conn, window_id, rect)?;
 
-    // 3. Map window
+    // 3. Apply compositor window opacity if configured for Window mode
+    if surface.use_window_opacity {
+        crate::x11::set_window_opacity(conn, window_id, opacity)?;
+    }
+
+    // 4. Map window
     conn.map_window(window_id)?;
     conn.flush()?;
 

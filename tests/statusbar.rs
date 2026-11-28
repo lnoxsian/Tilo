@@ -824,3 +824,79 @@ fn test_statusbar_custom_workspace_tags() {
     assert!(text.contains("󰊴"));
     assert!(!text.contains("[1]"));
 }
+
+#[test]
+fn test_statusbar_compositor_opacity_and_modes() {
+    if !Command::new("which")
+        .arg("Xephyr")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+    {
+        return;
+    }
+
+    if let Some(server) = XephyrServer::start(179) {
+        let wm_ctx =
+            X11Context::connect_to(Some(&server.display)).expect("WM context connect failed");
+        assert!(wm_ctx.become_wm().is_ok());
+
+        let mut cfg = tilo::config::Config::default();
+        cfg.theme.bar_opacity = 1.0;
+        let mut wm = WindowManager::new_with_config(wm_ctx, cfg).expect("WM init failed");
+        let bar_win = wm.enable_statusbar(24).expect("enable_statusbar failed");
+
+        let opacity_atom = wm
+            .context
+            .connection
+            .intern_atom(false, b"_NET_WM_WINDOW_OPACITY")
+            .unwrap()
+            .reply()
+            .unwrap()
+            .atom;
+
+        // 1. Default opacity 1.0 should have no _NET_WM_WINDOW_OPACITY property
+        let prop_default = wm
+            .context
+            .connection
+            .get_property(false, bar_win, opacity_atom, AtomEnum::CARDINAL, 0, 1)
+            .unwrap()
+            .reply()
+            .unwrap();
+        assert!(prop_default.value.is_empty());
+
+        // 2. Window mode with 0.75 opacity sets _NET_WM_WINDOW_OPACITY
+        let mut cfg_win = tilo::config::Config::default();
+        cfg_win.theme.bar_opacity = 0.75;
+        cfg_win.theme.bar_transparency_mode = tilo::config::TransparencyMode::Window;
+        wm.apply_config(cfg_win).expect("apply_config failed");
+
+        let bar = wm.statusbar.as_ref().unwrap();
+        let prop_win = wm
+            .context
+            .connection
+            .get_property(
+                false,
+                bar.window_id,
+                opacity_atom,
+                AtomEnum::CARDINAL,
+                0,
+                1,
+            )
+            .unwrap()
+            .reply()
+            .unwrap();
+        assert_eq!(prop_win.value32().unwrap().count(), 1);
+
+        // 3. Background mode sets 32-bit ARGB depth when supported (or falls back cleanly)
+        let mut cfg_bg = tilo::config::Config::default();
+        cfg_bg.theme.bar_opacity = 0.5;
+        cfg_bg.theme.bar_transparency_mode = tilo::config::TransparencyMode::Background;
+        wm.apply_config(cfg_bg).expect("apply_config failed");
+        let bar_bg = wm.statusbar.as_ref().unwrap();
+        assert!(bar_bg.depth == 32 || bar_bg.depth == 24);
+        if bar_bg.depth == 32 {
+            assert_eq!(bar_bg.renderer.as_ref().unwrap().bg_alpha, 128);
+        }
+    }
+}

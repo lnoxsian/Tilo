@@ -566,3 +566,81 @@ fn test_launcher_position_spotlight_vs_dmenu() {
         wm.close_launcher().expect("close_launcher should succeed");
     }
 }
+
+#[test]
+fn test_launcher_compositor_opacity_and_modes() {
+    if !Command::new("which")
+        .arg("Xephyr")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+    {
+        return;
+    }
+
+    if let Some(server) = XephyrServer::start(180) {
+        let wm_ctx =
+            X11Context::connect_to(Some(&server.display)).expect("WM context connect failed");
+        assert!(wm_ctx.become_wm().is_ok());
+
+        let mut cfg = tilo::config::Config::default();
+        cfg.theme.launcher_opacity = 0.8;
+        cfg.theme.launcher_transparency_mode = tilo::config::TransparencyMode::Window;
+        let mut wm = WindowManager::new_with_config(wm_ctx, cfg).expect("WM init failed");
+
+        wm.open_launcher().expect("open_launcher failed");
+        let opacity_atom = wm
+            .context
+            .connection
+            .intern_atom(false, b"_NET_WM_WINDOW_OPACITY")
+            .unwrap()
+            .reply()
+            .unwrap()
+            .atom;
+        let win_id = wm.launcher.as_ref().unwrap().window_id;
+        let prop = wm
+            .context
+            .connection
+            .get_property(
+                false,
+                win_id,
+                opacity_atom,
+                x11rb::protocol::xproto::AtomEnum::CARDINAL,
+                0,
+                1,
+            )
+            .unwrap()
+            .reply()
+            .unwrap();
+        assert_eq!(prop.value32().unwrap().count(), 1);
+
+        // Reloading back to 1.0 removes _NET_WM_WINDOW_OPACITY while launcher is visible
+        let mut cfg_opaque = tilo::config::Config::default();
+        cfg_opaque.theme.launcher_opacity = 1.0;
+        wm.apply_config(cfg_opaque).expect("apply_config failed");
+        let prop_after = wm
+            .context
+            .connection
+            .get_property(
+                false,
+                wm.launcher.as_ref().unwrap().window_id,
+                opacity_atom,
+                x11rb::protocol::xproto::AtomEnum::CARDINAL,
+                0,
+                1,
+            )
+            .unwrap()
+            .reply()
+            .unwrap();
+        assert!(prop_after.value.is_empty());
+
+        // Switching to background mode updates depth/bg_alpha without crashing
+        let mut cfg_bg = tilo::config::Config::default();
+        cfg_bg.theme.launcher_opacity = 0.6;
+        cfg_bg.theme.launcher_transparency_mode = tilo::config::TransparencyMode::Background;
+        wm.apply_config(cfg_bg).expect("apply_config failed");
+        let l_bg = wm.launcher.as_ref().unwrap();
+        assert!(l_bg.depth == 32 || l_bg.depth == 24);
+        wm.close_launcher().expect("close_launcher failed");
+    }
+}

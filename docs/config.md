@@ -143,11 +143,15 @@ border_urgent #ff0000
 bar_bg #16161e
 bar_fg #c0caf5
 bar_font "monospace 10"
+bar_opacity 1.0                   # 0.0..1.0 (default: 1.0, requires compositor like picom)
+bar_transparency_mode window      # window | background | none
 
 # Launcher overrides (prefix: launcher_)
 launcher_bg #1a1b26
 launcher_fg #c0caf5
 launcher_font "monospace 11"
+launcher_opacity 1.0              # 0.0..1.0 (default: 1.0, requires compositor like picom)
+launcher_transparency_mode window # window | background | none
 ```
 
 ---

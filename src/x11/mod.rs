@@ -19,9 +19,11 @@ use x11rb::connection::Connection;
 use x11rb::errors::{ConnectError, ConnectionError, ReplyError, ReplyOrIdError};
 use x11rb::protocol::ErrorKind;
 use x11rb::protocol::xproto::{
-    ChangeWindowAttributesAux, Colormap, ConnectionExt, EventMask, Screen, Visualid, Window,
+    AtomEnum, ChangeWindowAttributesAux, Colormap, ColormapAlloc, ConnectionExt, EventMask,
+    PropMode, Screen, VisualClass, Visualid, Window,
 };
 use x11rb::rust_connection::RustConnection;
+use x11rb::wrapper::ConnectionExt as _;
 
 /// Represents errors that can occur during X11 initialization and operation.
 #[derive(Debug, Error)]
@@ -197,6 +199,136 @@ impl X11Context {
             }
             Err(err) => Err(X11Error::from(err)),
         }
+    }
+}
+
+/// Finds a 32-bit `TrueColor` ARGB visual supported by `screen`, if available.
+pub fn find_argb_visual(screen: &Screen) -> Option<(u8, Visualid)> {
+    for depth_info in &screen.allowed_depths {
+        if depth_info.depth == 32 {
+            for visual in &depth_info.visuals {
+                if visual.class == VisualClass::TRUE_COLOR {
+                    return Some((32, visual.visual_id));
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Creates an unallocated X11 colormap for a non-default visual (such as 32-bit ARGB).
+pub fn create_argb_colormap(
+    conn: &impl Connection,
+    root: Window,
+    visual: Visualid,
+) -> Result<Colormap, X11Error> {
+    let cmap = conn.generate_id()?;
+    conn.create_colormap(ColormapAlloc::NONE, cmap, root, visual)?;
+    Ok(cmap)
+}
+
+/// Sets or clears `_NET_WM_WINDOW_OPACITY` (`CARDINAL`) on an X11 window for compositors.
+///
+/// When `opacity >= 1.0`, the property is removed so the window remains completely opaque.
+pub fn set_window_opacity(
+    conn: &impl Connection,
+    window: Window,
+    opacity: f32,
+) -> Result<(), X11Error> {
+    let atom = conn
+        .intern_atom(false, b"_NET_WM_WINDOW_OPACITY")?
+        .reply()?
+        .atom;
+    let clamped = opacity.clamp(0.0, 1.0);
+    if clamped >= 1.0 {
+        conn.delete_property(window, atom)?;
+    } else {
+        let cardinal = (clamped as f64 * u32::MAX as f64).round() as u32;
+        conn.change_property32(PropMode::REPLACE, window, atom, AtomEnum::CARDINAL, &[cardinal])?;
+    }
+    Ok(())
+}
+
+/// Resolved X11 visual, colormap, and alpha settings for a compositor-transparent UI window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WindowTransparencySurface {
+    /// Window and off-screen pixmap depth (24 or 32).
+    pub depth: u8,
+    /// Visual ID used when creating the window.
+    pub visual_id: Visualid,
+    /// Optional colormap created for a 32-bit ARGB visual (must be freed on destroy).
+    pub colormap: Option<Colormap>,
+    /// Whether `_NET_WM_WINDOW_OPACITY` should be applied (`Window` mode or fallback).
+    pub use_window_opacity: bool,
+    /// Background alpha (`0..=255`) for 32-bit ARGB software rendering.
+    pub bg_alpha: u8,
+}
+
+impl WindowTransparencySurface {
+    /// Computes `(depth, use_window_opacity, bg_alpha)` without allocating any X11 colormap.
+    pub fn plan(
+        screen: &Screen,
+        opacity: f32,
+        mode: crate::config::TransparencyMode,
+        is_core_font: bool,
+    ) -> (u8, bool, u8) {
+        let clamped = opacity.clamp(0.0, 1.0);
+        if mode == crate::config::TransparencyMode::None || clamped >= 1.0 {
+            return (screen.root_depth, false, 255);
+        }
+
+        if mode == crate::config::TransparencyMode::Background
+            && !is_core_font
+            && let Some((depth, _)) = find_argb_visual(screen)
+        {
+            let bg_alpha = (clamped * 255.0).round() as u8;
+            return (depth, false, bg_alpha);
+        }
+
+        (screen.root_depth, true, 255)
+    }
+
+    /// Resolves the visual and opacity strategy for a UI overlay window.
+    pub fn resolve(
+        conn: &impl Connection,
+        screen: &Screen,
+        opacity: f32,
+        mode: crate::config::TransparencyMode,
+        is_core_font: bool,
+    ) -> Result<Self, X11Error> {
+        let clamped = opacity.clamp(0.0, 1.0);
+        if mode == crate::config::TransparencyMode::None || clamped >= 1.0 {
+            return Ok(Self {
+                depth: screen.root_depth,
+                visual_id: screen.root_visual,
+                colormap: None,
+                use_window_opacity: false,
+                bg_alpha: 255,
+            });
+        }
+
+        if mode == crate::config::TransparencyMode::Background
+            && !is_core_font
+            && let Some((depth, visual_id)) = find_argb_visual(screen)
+        {
+            let cmap = create_argb_colormap(conn, screen.root, visual_id)?;
+            let bg_alpha = (clamped * 255.0).round() as u8;
+            return Ok(Self {
+                depth,
+                visual_id,
+                colormap: Some(cmap),
+                use_window_opacity: false,
+                bg_alpha,
+            });
+        }
+
+        Ok(Self {
+            depth: screen.root_depth,
+            visual_id: screen.root_visual,
+            colormap: None,
+            use_window_opacity: true,
+            bg_alpha: 255,
+        })
     }
 }
 
